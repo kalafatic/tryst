@@ -1,0 +1,10 @@
+Manifest-Version: 1.0
+Bundle-ManifestVersion: 2
+Bundle-Name: TRYST Domain
+Bundle-SymbolicName: eu.kalafatic.tryst.domain
+Bundle-Version: 0.1.0.qualifier
+Bundle-RequiredExecutionEnvironment: JavaSE-21
+Require-Bundle: eu.kalafatic.tryst.core;bundle-version="0.1.0"
+Export-Package: eu.kalafatic.tryst.domain.model,
+ eu.kalafatic.tryst.domain.service
+Automatic-Module-Name: eu.kalafatic.tryst.domain

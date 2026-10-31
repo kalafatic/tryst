@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>eu.kalafatic.tryst</groupId>
+    <artifactId>eu.kalafatic.tryst.parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <packaging>pom</packaging>
+    <name>TRYST - Parent</name>
+    <description>Parent POM for TRYST Standalone Eclipse RCP Application</description>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <maven.compiler.release>21</maven.compiler.release>
+        <tycho.version>4.0.8</tycho.version>
+        <eclipse-repo.url>https://download.eclipse.org/releases/2024-03</eclipse-repo.url>
+    </properties>
+
+    <modules>
+        <module>plugins/eu.kalafatic.tryst.core</module>
+        <module>plugins/eu.kalafatic.tryst.domain</module>
+        <module>plugins/eu.kalafatic.tryst.application</module>
+        <module>plugins/eu.kalafatic.tryst.ui</module>
+        <module>features/eu.kalafatic.tryst.feature</module>
+        <module>product/eu.kalafatic.tryst.product</module>
+        <module>tests/eu.kalafatic.tryst.tests</module>
+    </modules>
+
+    <repositories>
+        <repository>
+            <id>eclipse-2024-03</id>
+            <layout>p2</layout>
+            <url>${eclipse-repo.url}</url>
+        </repository>
+    </repositories>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.eclipse.tycho</groupId>
+                <artifactId>tycho-maven-plugin</artifactId>
+                <version>${tycho.version}</version>
+                <extensions>true</extensions>
+            </plugin>
+            <plugin>
+                <groupId>org.eclipse.tycho</groupId>
+                <artifactId>target-platform-configuration</artifactId>
+                <version>${tycho.version}</version>
+                <configuration>
+                    <executionEnvironment>JavaSE-21</executionEnvironment>
+                    <environments>
+                        <environment>
+                            <os>linux</os>
+                            <ws>gtk</ws>
+                            <arch>x86_64</arch>
+                        </environment>
+                    </environments>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

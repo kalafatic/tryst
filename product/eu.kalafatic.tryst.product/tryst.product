@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?pde version="3.5"?>
+
+<product name="TRYST – AI Development Environment" uid="eu.kalafatic.tryst.product.id" id="eu.kalafatic.tryst.application.product" application="eu.kalafatic.tryst.application.application" version="0.1.0.qualifier" type="features" includeLaunchers="true" autoMountHierarchy="true">
+
+   <configIni use="default">
+   </configIni>
+
+   <launcherArgs>
+      <programArgs>-consoleLog
+      </programArgs>
+      <vmArgs>-Dorg.eclipse.swt.graphics.Resource.reportNonDisposed=true
+      </vmArgs>
+      <vmArgsMac>-XstartOnFirstThread -Dorg.eclipse.swt.internal.carbon.smallFonts
+      </vmArgsMac>
+   </launcherArgs>
+
+   <windowImages/>
+
+   <launcher name="tryst">
+      <win useIco="false">
+         <bmp/>
+      </win>
+   </launcher>
+
+   <vm>
+   </vm>
+
+   <plugins>
+   </plugins>
+
+   <features>
+      <feature id="eu.kalafatic.tryst.feature"/>
+      <feature id="org.eclipse.rcp"/>
+      <feature id="org.eclipse.equinox.p2.core.feature"/>
+      <feature id="org.eclipse.e4.rcp"/>
+   </features>
+
+   <configurations>
+      <plugin id="org.apache.felix.scr" autoStart="true" startLevel="2" />
+      <plugin id="org.eclipse.core.runtime" autoStart="true" startLevel="4" />
+      <plugin id="org.eclipse.equinox.common" autoStart="true" startLevel="2" />
+      <plugin id="org.eclipse.equinox.event" autoStart="true" startLevel="2" />
+      <plugin id="org.eclipse.equinox.simpleconfigurator" autoStart="true" startLevel="1" />
+      <plugin id="eu.kalafatic.tryst.application" autoStart="true" startLevel="4" />
+      <plugin id="eu.kalafatic.tryst.ui" autoStart="true" startLevel="4" />
+   </configurations>
+
+   <preferencesInfo>
+      <targetPlatform>JavaSE-21</targetPlatform>
+   </preferencesInfo>
+
+   <cssInfo>
+   </cssInfo>
+
+</product>

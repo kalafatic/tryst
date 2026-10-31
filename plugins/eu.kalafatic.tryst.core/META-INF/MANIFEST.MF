@@ -1,0 +1,8 @@
+Manifest-Version: 1.0
+Bundle-ManifestVersion: 2
+Bundle-Name: TRYST Core
+Bundle-SymbolicName: eu.kalafatic.tryst.core
+Bundle-Version: 0.1.0.qualifier
+Bundle-RequiredExecutionEnvironment: JavaSE-21
+Export-Package: eu.kalafatic.tryst.core
+Automatic-Module-Name: eu.kalafatic.tryst.core

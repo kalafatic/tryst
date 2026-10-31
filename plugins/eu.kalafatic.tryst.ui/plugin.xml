@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?eclipse version="3.4"?>
+<plugin>
+   <extension
+         point="org.eclipse.ui.perspectives">
+      <perspective
+            class="eu.kalafatic.tryst.ui.perspective.TrystMainPerspective"
+            id="eu.kalafatic.tryst.ui.perspective.main"
+            name="TRYST Main Perspective">
+      </perspective>
+   </extension>
+   <extension
+         point="org.eclipse.ui.views">
+      <category
+            id="eu.kalafatic.tryst.ui.category"
+            name="TRYST">
+      </category>
+      <view
+            category="eu.kalafatic.tryst.ui.category"
+            class="eu.kalafatic.tryst.ui.view.ProjectExplorerView"
+            id="eu.kalafatic.tryst.ui.view.projectExplorer"
+            name="Project Explorer"
+            restorable="true">
+      </view>
+      <view
+            category="eu.kalafatic.tryst.ui.category"
+            class="eu.kalafatic.tryst.ui.view.MainWorkspaceView"
+            id="eu.kalafatic.tryst.ui.view.mainWorkspace"
+            name="Main Workspace"
+            restorable="true">
+      </view>
+      <view
+            category="eu.kalafatic.tryst.ui.category"
+            class="eu.kalafatic.tryst.ui.view.ConsoleOutputView"
+            id="eu.kalafatic.tryst.ui.view.consoleOutput"
+            name="Console / Output / Status"
+            restorable="true">
+      </view>
+   </extension>
+</plugin>

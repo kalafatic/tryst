@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feature
+      id="eu.kalafatic.tryst.feature"
+      label="TRYST Feature"
+      version="0.1.0.qualifier"
+      provider-name="eu.kalafatic">
+
+   <description>
+      TRYST - AI Development Environment Feature
+   </description>
+
+   <copyright>
+      Copyright (c) 2026 eu.kalafatic
+   </copyright>
+
+   <license url="">
+      Apache-2.0
+   </license>
+
+   <plugin
+         id="eu.kalafatic.tryst.core"
+         download-size="0"
+         install-size="0"
+         version="0.0.0"
+         unpack="false"/>
+
+   <plugin
+         id="eu.kalafatic.tryst.domain"
+         download-size="0"
+         install-size="0"
+         version="0.0.0"
+         unpack="false"/>
+
+   <plugin
+         id="eu.kalafatic.tryst.application"
+         download-size="0"
+         install-size="0"
+         version="0.0.0"
+         unpack="false"/>
+
+   <plugin
+         id="eu.kalafatic.tryst.ui"
+         download-size="0"
+         install-size="0"
+         version="0.0.0"
+         unpack="false"/>
+
+</feature>

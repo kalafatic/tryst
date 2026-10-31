@@ -1,0 +1,15 @@
+Manifest-Version: 1.0
+Bundle-ManifestVersion: 2
+Bundle-Name: TRYST Application
+Bundle-SymbolicName: eu.kalafatic.tryst.application;singleton:=true
+Bundle-Version: 0.1.0.qualifier
+Bundle-Activator: eu.kalafatic.tryst.application.TrystApplicationPlugin
+Bundle-RequiredExecutionEnvironment: JavaSE-21
+Require-Bundle: org.eclipse.core.runtime,
+ org.eclipse.ui,
+ org.eclipse.equinox.app,
+ eu.kalafatic.tryst.core;bundle-version="0.1.0",
+ eu.kalafatic.tryst.domain;bundle-version="0.1.0",
+ eu.kalafatic.tryst.ui;bundle-version="0.1.0"
+Export-Package: eu.kalafatic.tryst.application
+Automatic-Module-Name: eu.kalafatic.tryst.application
