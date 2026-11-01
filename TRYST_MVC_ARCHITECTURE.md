@@ -5,7 +5,7 @@
 TRYST enforces a strict Model-View-Controller (MVC) architectural separation:
 1. **Model** contains entities, domain logic, and state. Models never depend on SWT, JFace, or Controllers.
 2. **View** contains SWT/JFace presentation logic and viewers. Views never execute business logic directly or invoke domain mutation rules.
-3. **Controller** coordinates user actions from views, invokes domain services, and updates views. Controllers do not directly create or couple to SWT widgets.
+3. **Controller** coordinates user actions from views, invokes domain/application services, and dispatches updates to views. Controllers do not directly create or couple to SWT widgets.
 
 ## Communication Pattern
 
@@ -19,17 +19,24 @@ TRYST enforces a strict Model-View-Controller (MVC) architectural separation:
   CONTROLLER
     |   [Coordinates business action]
     v
-  APPLICATION / DOMAIN SERVICE (WorkspaceService)
-    |   [Mutates entity state]
+  APPLICATION / DOMAIN SERVICE (WorkspaceService / AsyncExecutionService)
+    |   [Mutates entity state / runs async task]
     v
   MODEL (Workspace, Project, AgentTask)
     |
     v   [State change notification]
   LISTENER / CALLBACK (WorkspaceChangeListener / ViewCallback)
     |
-    v   [Async UI thread dispatch]
+    v   [Async UI thread dispatch Display.asyncExec]
   VIEW UPDATE
 ```
+
+## OSGi Decoupling
+
+In PROMPT 02/20, `WorkspaceService` ownership was moved out of `TrystUiPlugin` into the application layer's `ApplicationLifecycleCoordinator`.
+- `WorkspaceService` is registered in the OSGi Service Registry during the `CORE_SERVICE_INITIALIZATION` lifecycle stage.
+- Views retrieve `WorkspaceService` via `TrystUiPlugin`'s dynamic `ServiceTracker<WorkspaceService, WorkspaceService>`, preserving loose coupling and clean OSGi lifecycle.
+- Long-running asynchronous operations are executed off the UI thread via `AsyncExecutionService`, updating UI widgets strictly on the SWT thread using `Display.asyncExec()`.
 
 ## Implemented MVC Components
 
@@ -40,9 +47,10 @@ TRYST enforces a strict Model-View-Controller (MVC) architectural separation:
 - `ConsoleMessage`: Immutable record for system, info, warning, and error messages.
 - `ExecutionStatus`: Lifecycle enumeration.
 
-### Services (`eu.kalafatic.tryst.domain.service`)
+### Services (`eu.kalafatic.tryst.domain.service` & `eu.kalafatic.tryst.core.concurrent`)
 - `WorkspaceService`: Manages workspace state, project registrations, task creations, and broadcast events.
 - `WorkspaceChangeListener`: Observer interface for domain model state notifications.
+- `AsyncExecutionService`: Managed daemon worker execution off the SWT thread.
 
 ### Controllers (`eu.kalafatic.tryst.ui.controller`)
 - `ProjectExplorerController`:
