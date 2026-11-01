@@ -8,10 +8,29 @@ import eu.kalafatic.tryst.core.lifecycle.ApplicationLifecycleEvent;
 import eu.kalafatic.tryst.core.lifecycle.ApplicationLifecycleListener;
 import eu.kalafatic.tryst.core.lifecycle.ApplicationLifecycleStage;
 import eu.kalafatic.tryst.core.log.TrystLog;
+import eu.kalafatic.tryst.domain.repository.AgentRepository;
+import eu.kalafatic.tryst.domain.repository.ConversationMessageRepository;
+import eu.kalafatic.tryst.domain.repository.ExecutionResultRepository;
+import eu.kalafatic.tryst.domain.repository.ProjectRepository;
+import eu.kalafatic.tryst.domain.repository.SessionRepository;
+import eu.kalafatic.tryst.domain.repository.TaskRepository;
+import eu.kalafatic.tryst.domain.repository.UnitOfWork;
+import eu.kalafatic.tryst.domain.repository.WorkspaceRepository;
 import eu.kalafatic.tryst.domain.service.WorkspaceService;
+import eu.kalafatic.tryst.infrastructure.persistence.SchemaMigrationService;
+import eu.kalafatic.tryst.infrastructure.persistence.SqliteBackupService;
+import eu.kalafatic.tryst.infrastructure.persistence.SqliteDatabaseManager;
+import eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteAgentRepository;
+import eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteConversationMessageRepository;
+import eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteExecutionResultRepository;
+import eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteProjectRepository;
+import eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteSessionRepository;
+import eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteTaskRepository;
+import eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteWorkspaceRepository;
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.ServiceRegistration;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -34,6 +53,19 @@ public class ApplicationLifecycleCoordinator {
 
     // Registered core services and their OSGi registrations
     private ApplicationConfiguration configuration;
+    private SqliteDatabaseManager databaseManager;
+    private SchemaMigrationService migrationService;
+    private SqliteBackupService backupService;
+
+    // Repositories
+    private ProjectRepository projectRepository;
+    private TaskRepository taskRepository;
+    private WorkspaceRepository workspaceRepository;
+    private SessionRepository sessionRepository;
+    private ConversationMessageRepository conversationMessageRepository;
+    private ExecutionResultRepository executionResultRepository;
+    private AgentRepository agentRepository;
+
     private WorkspaceService workspaceService;
     private AsyncExecutionService asyncExecutionService;
     private final List<ServiceRegistration<?>> serviceRegistrations = new ArrayList<>();
@@ -100,17 +132,49 @@ public class ApplicationLifecycleCoordinator {
             this.configuration = ApplicationConfiguration.createDefault();
         }
 
-        // Initialize core application & domain services
-        this.workspaceService = new WorkspaceService(configuration.defaultWorkspaceDirectory());
+        // 1. Resolve authoritative database location
+        Path dbPath = configuration.configurationDirectory().resolve("tryst.db");
+
+        // 2. Initialize Database Manager & apply migrations
+        this.databaseManager = new SqliteDatabaseManager(dbPath);
+        this.databaseManager.initialize();
+
+        this.migrationService = new SchemaMigrationService(databaseManager);
+        this.migrationService.migrate();
+
+        this.backupService = new SqliteBackupService(databaseManager);
+
+        // 3. Initialize Repositories
+        this.projectRepository = new SqliteProjectRepository(databaseManager);
+        this.taskRepository = new SqliteTaskRepository(databaseManager);
+        this.workspaceRepository = new SqliteWorkspaceRepository(databaseManager, projectRepository, taskRepository);
+        this.sessionRepository = new SqliteSessionRepository(databaseManager);
+        this.conversationMessageRepository = new SqliteConversationMessageRepository(databaseManager);
+        this.executionResultRepository = new SqliteExecutionResultRepository(databaseManager);
+        this.agentRepository = new SqliteAgentRepository(databaseManager);
+
+        // 4. Initialize Core domain & async services
+        this.workspaceService = new WorkspaceService(configuration.defaultWorkspaceDirectory(),
+                workspaceRepository, projectRepository, taskRepository);
         this.asyncExecutionService = new ManagedAsyncExecutionService();
 
-        // Register into standard OSGi Service Registry if BundleContext is available
+        // 5. Register into standard OSGi Service Registry if BundleContext is available
         if (bundleContext != null) {
             registerService(ApplicationConfiguration.class, this.configuration);
+            registerService(UnitOfWork.class, this.databaseManager);
+            registerService(SqliteDatabaseManager.class, this.databaseManager);
+            registerService(SqliteBackupService.class, this.backupService);
+            registerService(ProjectRepository.class, this.projectRepository);
+            registerService(TaskRepository.class, this.taskRepository);
+            registerService(WorkspaceRepository.class, this.workspaceRepository);
+            registerService(SessionRepository.class, this.sessionRepository);
+            registerService(ConversationMessageRepository.class, this.conversationMessageRepository);
+            registerService(ExecutionResultRepository.class, this.executionResultRepository);
+            registerService(AgentRepository.class, this.agentRepository);
             registerService(WorkspaceService.class, this.workspaceService);
             registerService(AsyncExecutionService.class, this.asyncExecutionService);
             TrystLog.info(ApplicationLifecycleCoordinator.class,
-                    "Core OSGi services registered in BundleContext: ApplicationConfiguration, WorkspaceService, AsyncExecutionService");
+                    "Core and Persistence OSGi services registered successfully.");
         } else {
             TrystLog.warn(ApplicationLifecycleCoordinator.class,
                     "BundleContext unavailable; services initialized in standalone/test mode.");
@@ -141,7 +205,7 @@ public class ApplicationLifecycleCoordinator {
     private void onServiceDisposal() {
         TrystLog.info(ApplicationLifecycleCoordinator.class, "Disposing core application services...");
 
-        // Unregister OSGi services in reverse order
+        // 1. Unregister OSGi services in reverse order
         for (int i = serviceRegistrations.size() - 1; i >= 0; i--) {
             try {
                 serviceRegistrations.get(i).unregister();
@@ -151,7 +215,7 @@ public class ApplicationLifecycleCoordinator {
         }
         serviceRegistrations.clear();
 
-        // Controlled disposal of thread pool / async execution service
+        // 2. Controlled disposal of thread pool / async execution service
         if (asyncExecutionService != null) {
             try {
                 asyncExecutionService.shutdown();
@@ -161,8 +225,28 @@ public class ApplicationLifecycleCoordinator {
             asyncExecutionService = null;
         }
 
+        // 3. Close SQLite Database Manager cleanly
+        if (databaseManager != null) {
+            try {
+                databaseManager.close();
+            } catch (Exception e) {
+                TrystLog.error(ApplicationLifecycleCoordinator.class, "Error closing SqliteDatabaseManager", e);
+            }
+            databaseManager = null;
+        }
+
+        this.projectRepository = null;
+        this.taskRepository = null;
+        this.workspaceRepository = null;
+        this.sessionRepository = null;
+        this.conversationMessageRepository = null;
+        this.executionResultRepository = null;
+        this.agentRepository = null;
+        this.backupService = null;
+        this.migrationService = null;
         this.workspaceService = null;
         this.configuration = null;
+
         TrystLog.info(ApplicationLifecycleCoordinator.class, "Service disposal complete.");
     }
 
@@ -205,6 +289,42 @@ public class ApplicationLifecycleCoordinator {
 
     public AsyncExecutionService getAsyncExecutionService() {
         return asyncExecutionService;
+    }
+
+    public SqliteDatabaseManager getDatabaseManager() {
+        return databaseManager;
+    }
+
+    public ProjectRepository getProjectRepository() {
+        return projectRepository;
+    }
+
+    public TaskRepository getTaskRepository() {
+        return taskRepository;
+    }
+
+    public WorkspaceRepository getWorkspaceRepository() {
+        return workspaceRepository;
+    }
+
+    public SessionRepository getSessionRepository() {
+        return sessionRepository;
+    }
+
+    public ConversationMessageRepository getConversationMessageRepository() {
+        return conversationMessageRepository;
+    }
+
+    public ExecutionResultRepository getExecutionResultRepository() {
+        return executionResultRepository;
+    }
+
+    public AgentRepository getAgentRepository() {
+        return agentRepository;
+    }
+
+    public SqliteBackupService getBackupService() {
+        return backupService;
     }
 
     public List<ServiceRegistration<?>> getServiceRegistrations() {
