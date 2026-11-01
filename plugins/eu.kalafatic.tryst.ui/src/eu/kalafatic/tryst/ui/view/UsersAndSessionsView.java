@@ -1,0 +1,130 @@
+package eu.kalafatic.tryst.ui.view;
+
+import eu.kalafatic.tryst.domain.model.User;
+import eu.kalafatic.tryst.domain.model.UserSession;
+import eu.kalafatic.tryst.domain.repository.UserRepository;
+import eu.kalafatic.tryst.domain.repository.UserSessionRepository;
+import eu.kalafatic.tryst.ui.TrystUiPlugin;
+import org.eclipse.jface.viewers.*;
+import org.eclipse.swt.SWT;
+import org.eclipse.swt.layout.GridData;
+import org.eclipse.swt.layout.GridLayout;
+import org.eclipse.swt.widgets.*;
+import org.eclipse.ui.part.ViewPart;
+
+import java.util.Collections;
+import java.util.List;
+
+/**
+ * Native SWT/JFace View for User and Session Administration.
+ */
+public class UsersAndSessionsView extends ViewPart {
+
+    public static final String ID = "eu.kalafatic.tryst.ui.view.usersAndSessions";
+
+    private TableViewer userViewer;
+    private TableViewer sessionViewer;
+
+    @Override
+    public void createPartControl(Composite parent) {
+        parent.setLayout(new GridLayout(1, false));
+
+        Label lblUsers = new Label(parent, SWT.NONE);
+        lblUsers.setText("Active Users & Roles (RBAC):");
+
+        userViewer = new TableViewer(parent, SWT.BORDER | SWT.FULL_SELECTION);
+        Table userTable = userViewer.getTable();
+        userTable.setHeaderVisible(true);
+        userTable.setLinesVisible(true);
+        userTable.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
+
+        createColumn(userViewer, "Username", 120);
+        createColumn(userViewer, "Role", 100);
+        createColumn(userViewer, "Active", 70);
+        createColumn(userViewer, "Locked", 70);
+
+        userViewer.setContentProvider(ArrayContentProvider.getInstance());
+        userViewer.setLabelProvider(new ITableLabelProvider() {
+            @Override public org.eclipse.swt.graphics.Image getColumnImage(Object element, int columnIndex) { return null; }
+            @Override public String getColumnText(Object element, int columnIndex) {
+                if (element instanceof User u) {
+                    return switch (columnIndex) {
+                        case 0 -> u.getUsername();
+                        case 1 -> u.getRole().name();
+                        case 2 -> String.valueOf(u.isActive());
+                        case 3 -> String.valueOf(u.isLocked());
+                        default -> "";
+                    };
+                }
+                return "";
+            }
+            @Override public void addListener(ILabelProviderListener listener) {}
+            @Override public void dispose() {}
+            @Override public boolean isLabelProperty(Object element, String property) { return false; }
+            @Override public void removeListener(ILabelProviderListener listener) {}
+        });
+
+        Label lblSessions = new Label(parent, SWT.NONE);
+        lblSessions.setText("Active Sessions:");
+
+        sessionViewer = new TableViewer(parent, SWT.BORDER | SWT.FULL_SELECTION);
+        Table sessionTable = sessionViewer.getTable();
+        sessionTable.setHeaderVisible(true);
+        sessionTable.setLinesVisible(true);
+        sessionTable.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
+
+        createColumn(sessionViewer, "User ID", 120);
+        createColumn(sessionViewer, "Client IP", 120);
+        createColumn(sessionViewer, "Expires At", 160);
+        createColumn(sessionViewer, "Revoked", 80);
+
+        sessionViewer.setContentProvider(ArrayContentProvider.getInstance());
+        sessionViewer.setLabelProvider(new ITableLabelProvider() {
+            @Override public org.eclipse.swt.graphics.Image getColumnImage(Object element, int columnIndex) { return null; }
+            @Override public String getColumnText(Object element, int columnIndex) {
+                if (element instanceof UserSession s) {
+                    return switch (columnIndex) {
+                        case 0 -> s.getUserId().substring(0, Math.min(8, s.getUserId().length()));
+                        case 1 -> s.getClientIp();
+                        case 2 -> s.getExpiresAt().toString();
+                        case 3 -> String.valueOf(s.isRevoked());
+                        default -> "";
+                    };
+                }
+                return "";
+            }
+            @Override public void addListener(ILabelProviderListener listener) {}
+            @Override public void dispose() {}
+            @Override public boolean isLabelProperty(Object element, String property) { return false; }
+            @Override public void removeListener(ILabelProviderListener listener) {}
+        });
+
+        Button btnRefresh = new Button(parent, SWT.PUSH);
+        btnRefresh.setText("Refresh Users & Sessions");
+        btnRefresh.addListener(SWT.Selection, e -> refreshData());
+
+        refreshData();
+    }
+
+    private void createColumn(TableViewer viewer, String title, int width) {
+        TableViewerColumn col = new TableViewerColumn(viewer, SWT.NONE);
+        col.getColumn().setText(title);
+        col.getColumn().setWidth(width);
+    }
+
+    private void refreshData() {
+        UserRepository uRepo = TrystUiPlugin.getDefault().getUserRepository();
+        if (uRepo != null) {
+            userViewer.setInput(uRepo.findAll());
+        }
+        UserSessionRepository sRepo = TrystUiPlugin.getDefault().getUserSessionRepository();
+        if (sRepo != null) {
+            sessionViewer.setInput(sRepo.findAllActive());
+        }
+    }
+
+    @Override
+    public void setFocus() {
+        if (userViewer != null) userViewer.getControl().setFocus();
+    }
+}

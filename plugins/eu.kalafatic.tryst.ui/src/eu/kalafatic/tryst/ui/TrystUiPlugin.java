@@ -33,6 +33,15 @@ public class TrystUiPlugin extends AbstractUIPlugin {
     private ServiceTracker<EventBus, EventBus> eventBusTracker;
     private ServiceTracker<GitService, GitService> gitTracker;
 
+    // Phase 4 Service Trackers
+    private ServiceTracker<eu.kalafatic.tryst.domain.service.ServerMonitoringService, eu.kalafatic.tryst.domain.service.ServerMonitoringService> monitoringTracker;
+    private ServiceTracker<eu.kalafatic.tryst.domain.service.TelemetryService, eu.kalafatic.tryst.domain.service.TelemetryService> telemetryTracker;
+    private ServiceTracker<eu.kalafatic.tryst.domain.service.ProcessExecutionManager, eu.kalafatic.tryst.domain.service.ProcessExecutionManager> processTracker;
+    private ServiceTracker<eu.kalafatic.tryst.domain.repository.UserRepository, eu.kalafatic.tryst.domain.repository.UserRepository> userRepoTracker;
+    private ServiceTracker<eu.kalafatic.tryst.domain.repository.UserSessionRepository, eu.kalafatic.tryst.domain.repository.UserSessionRepository> sessionRepoTracker;
+    private ServiceTracker<eu.kalafatic.tryst.domain.repository.AuditEventRepository, eu.kalafatic.tryst.domain.repository.AuditEventRepository> auditRepoTracker;
+    private ServiceTracker<eu.kalafatic.tryst.infrastructure.persistence.SqliteDatabaseManager, eu.kalafatic.tryst.infrastructure.persistence.SqliteDatabaseManager> dbTracker;
+
     private WorkspaceService fallbackWorkspaceService;
 
     @Override
@@ -62,6 +71,27 @@ public class TrystUiPlugin extends AbstractUIPlugin {
         this.gitTracker = new ServiceTracker<>(context, GitService.class, null);
         this.gitTracker.open();
 
+        this.monitoringTracker = new ServiceTracker<>(context, eu.kalafatic.tryst.domain.service.ServerMonitoringService.class, null);
+        this.monitoringTracker.open();
+
+        this.telemetryTracker = new ServiceTracker<>(context, eu.kalafatic.tryst.domain.service.TelemetryService.class, null);
+        this.telemetryTracker.open();
+
+        this.processTracker = new ServiceTracker<>(context, eu.kalafatic.tryst.domain.service.ProcessExecutionManager.class, null);
+        this.processTracker.open();
+
+        this.userRepoTracker = new ServiceTracker<>(context, eu.kalafatic.tryst.domain.repository.UserRepository.class, null);
+        this.userRepoTracker.open();
+
+        this.sessionRepoTracker = new ServiceTracker<>(context, eu.kalafatic.tryst.domain.repository.UserSessionRepository.class, null);
+        this.sessionRepoTracker.open();
+
+        this.auditRepoTracker = new ServiceTracker<>(context, eu.kalafatic.tryst.domain.repository.AuditEventRepository.class, null);
+        this.auditRepoTracker.open();
+
+        this.dbTracker = new ServiceTracker<>(context, eu.kalafatic.tryst.infrastructure.persistence.SqliteDatabaseManager.class, null);
+        this.dbTracker.open();
+
         TrystLog.info(TrystUiPlugin.class, "TrystUiPlugin activated with OSGi ServiceTrackers.");
     }
 
@@ -74,6 +104,14 @@ public class TrystUiPlugin extends AbstractUIPlugin {
         if (aiTracker != null) { aiTracker.close(); aiTracker = null; }
         if (eventBusTracker != null) { eventBusTracker.close(); eventBusTracker = null; }
         if (gitTracker != null) { gitTracker.close(); gitTracker = null; }
+
+        if (monitoringTracker != null) { monitoringTracker.close(); monitoringTracker = null; }
+        if (telemetryTracker != null) { telemetryTracker.close(); telemetryTracker = null; }
+        if (processTracker != null) { processTracker.close(); processTracker = null; }
+        if (userRepoTracker != null) { userRepoTracker.close(); userRepoTracker = null; }
+        if (sessionRepoTracker != null) { sessionRepoTracker.close(); sessionRepoTracker = null; }
+        if (auditRepoTracker != null) { auditRepoTracker.close(); auditRepoTracker = null; }
+        if (dbTracker != null) { dbTracker.close(); dbTracker = null; }
 
         this.fallbackWorkspaceService = null;
         this.bundleContext = null;
@@ -125,5 +163,33 @@ public class TrystUiPlugin extends AbstractUIPlugin {
 
     public GitService getGitService() {
         return gitTracker != null ? gitTracker.getService() : null;
+    }
+
+    public eu.kalafatic.tryst.domain.service.ServerMonitoringService getServerMonitoringService() {
+        return monitoringTracker != null ? monitoringTracker.getService() : null;
+    }
+
+    public eu.kalafatic.tryst.domain.service.TelemetryService getTelemetryService() {
+        return telemetryTracker != null ? telemetryTracker.getService() : null;
+    }
+
+    public eu.kalafatic.tryst.domain.service.ProcessExecutionManager getProcessExecutionManager() {
+        return processTracker != null ? processTracker.getService() : null;
+    }
+
+    public eu.kalafatic.tryst.domain.repository.UserRepository getUserRepository() {
+        return userRepoTracker != null ? userRepoTracker.getService() : null;
+    }
+
+    public eu.kalafatic.tryst.domain.repository.UserSessionRepository getUserSessionRepository() {
+        return sessionRepoTracker != null ? sessionRepoTracker.getService() : null;
+    }
+
+    public eu.kalafatic.tryst.domain.repository.AuditEventRepository getAuditEventRepository() {
+        return auditRepoTracker != null ? auditRepoTracker.getService() : null;
+    }
+
+    public eu.kalafatic.tryst.infrastructure.persistence.SqliteDatabaseManager getDatabaseManager() {
+        return dbTracker != null ? dbTracker.getService() : null;
     }
 }
