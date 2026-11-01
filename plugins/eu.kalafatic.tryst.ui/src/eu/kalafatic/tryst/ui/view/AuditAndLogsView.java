@@ -1,8 +1,9 @@
 package eu.kalafatic.tryst.ui.view;
 
+import eu.kalafatic.tryst.core.log.TrystLog;
 import eu.kalafatic.tryst.domain.model.AuditEvent;
 import eu.kalafatic.tryst.domain.repository.AuditEventRepository;
-import eu.kalafatic.tryst.ui.TrystUiPlugin;
+import eu.kalafatic.tryst.ui.TrystUiServices;
 import org.eclipse.jface.viewers.*;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.layout.GridData;
@@ -10,18 +11,26 @@ import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.*;
 import org.eclipse.ui.part.ViewPart;
 
+import java.util.Collections;
+
 /**
  * Native SWT/JFace View for Persistent Audit Events & Logs.
+ * Resolves AuditEventRepository directly via authoritative OSGi service infrastructure.
  */
 public class AuditAndLogsView extends ViewPart {
 
     public static final String ID = "eu.kalafatic.tryst.ui.view.auditAndLogs";
 
     private TableViewer viewer;
+    private Label statusLabel;
 
     @Override
     public void createPartControl(Composite parent) {
         parent.setLayout(new GridLayout(1, false));
+
+        statusLabel = new Label(parent, SWT.NONE);
+        statusLabel.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        statusLabel.setText("");
 
         viewer = new TableViewer(parent, SWT.BORDER | SWT.FULL_SELECTION);
         Table table = viewer.getTable();
@@ -60,7 +69,7 @@ public class AuditAndLogsView extends ViewPart {
         });
 
         Button btnRefresh = new Button(parent, SWT.PUSH);
-        btnRefresh.setText("Refresh Audit History");
+        btnRefresh.setText("Refresh Audit Logs");
         btnRefresh.addListener(SWT.Selection, e -> refreshData());
 
         refreshData();
@@ -73,14 +82,28 @@ public class AuditAndLogsView extends ViewPart {
     }
 
     private void refreshData() {
-        AuditEventRepository audit = TrystUiPlugin.getDefault().getAuditEventRepository();
-        if (audit != null) {
-            viewer.setInput(audit.findRecent(50));
+        AuditEventRepository audit = TrystUiServices.getAuditEventRepository();
+        if (audit == null) {
+            String msg = "AuditEventRepository is not currently available in OSGi registry.";
+            statusLabel.setText(msg);
+            TrystLog.warn(AuditAndLogsView.class, msg);
+            viewer.setInput(Collections.emptyList());
+            return;
         }
+
+        statusLabel.setText("");
+        viewer.setInput(audit.findRecent(50));
     }
 
     @Override
     public void setFocus() {
-        if (viewer != null) viewer.getControl().setFocus();
+        if (viewer != null && !viewer.getControl().isDisposed()) {
+            viewer.getControl().setFocus();
+        }
+    }
+
+    @Override
+    public void dispose() {
+        super.dispose();
     }
 }

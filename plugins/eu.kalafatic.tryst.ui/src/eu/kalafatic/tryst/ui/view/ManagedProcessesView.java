@@ -1,8 +1,9 @@
 package eu.kalafatic.tryst.ui.view;
 
+import eu.kalafatic.tryst.core.log.TrystLog;
 import eu.kalafatic.tryst.domain.model.ManagedProcessRecord;
 import eu.kalafatic.tryst.domain.service.ProcessExecutionManager;
-import eu.kalafatic.tryst.ui.TrystUiPlugin;
+import eu.kalafatic.tryst.ui.TrystUiServices;
 import org.eclipse.jface.viewers.*;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.layout.GridData;
@@ -10,18 +11,26 @@ import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.*;
 import org.eclipse.ui.part.ViewPart;
 
+import java.util.Collections;
+
 /**
  * Native SWT/JFace View for Managed Operating System Processes.
+ * Resolves ProcessExecutionManager directly via authoritative OSGi service infrastructure.
  */
 public class ManagedProcessesView extends ViewPart {
 
     public static final String ID = "eu.kalafatic.tryst.ui.view.processes";
 
     private TableViewer viewer;
+    private Label statusLabel;
 
     @Override
     public void createPartControl(Composite parent) {
         parent.setLayout(new GridLayout(1, false));
+
+        statusLabel = new Label(parent, SWT.NONE);
+        statusLabel.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        statusLabel.setText("");
 
         viewer = new TableViewer(parent, SWT.BORDER | SWT.FULL_SELECTION);
         Table table = viewer.getTable();
@@ -71,14 +80,28 @@ public class ManagedProcessesView extends ViewPart {
     }
 
     private void refreshData() {
-        ProcessExecutionManager procMgr = TrystUiPlugin.getDefault().getProcessExecutionManager();
-        if (procMgr != null) {
-            viewer.setInput(procMgr.getManagedProcesses());
+        ProcessExecutionManager procMgr = TrystUiServices.getProcessExecutionManager();
+        if (procMgr == null) {
+            String msg = "ProcessExecutionManager is not currently available in OSGi registry.";
+            statusLabel.setText(msg);
+            TrystLog.warn(ManagedProcessesView.class, msg);
+            viewer.setInput(Collections.emptyList());
+            return;
         }
+
+        statusLabel.setText("");
+        viewer.setInput(procMgr.getManagedProcesses());
     }
 
     @Override
     public void setFocus() {
-        if (viewer != null) viewer.getControl().setFocus();
+        if (viewer != null && !viewer.getControl().isDisposed()) {
+            viewer.getControl().setFocus();
+        }
+    }
+
+    @Override
+    public void dispose() {
+        super.dispose();
     }
 }

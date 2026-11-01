@@ -2,7 +2,7 @@ package eu.kalafatic.tryst.ui.view;
 
 import eu.kalafatic.tryst.domain.model.Project;
 import eu.kalafatic.tryst.domain.service.WorkspaceService;
-import eu.kalafatic.tryst.ui.TrystUiPlugin;
+import eu.kalafatic.tryst.ui.TrystUiServices;
 import org.eclipse.jface.viewers.*;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.layout.GridData;
@@ -69,7 +69,7 @@ public class ProjectsAndGitView extends ViewPart {
     }
 
     private void refreshData() {
-        WorkspaceService ws = TrystUiPlugin.getDefault().getWorkspaceService();
+        WorkspaceService ws = TrystUiServices.getWorkspaceService();
         if (ws != null && ws.getCurrentWorkspace() != null) {
             projectViewer.setInput(ws.getCurrentWorkspace().getProjects());
         }

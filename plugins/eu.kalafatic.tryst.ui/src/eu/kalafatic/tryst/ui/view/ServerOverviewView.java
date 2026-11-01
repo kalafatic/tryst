@@ -1,7 +1,8 @@
 package eu.kalafatic.tryst.ui.view;
 
+import eu.kalafatic.tryst.core.log.TrystLog;
 import eu.kalafatic.tryst.domain.service.ServerMonitoringService;
-import eu.kalafatic.tryst.ui.TrystUiPlugin;
+import eu.kalafatic.tryst.ui.TrystUiServices;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
@@ -10,6 +11,7 @@ import org.eclipse.ui.part.ViewPart;
 
 /**
  * Native SWT/JFace View displaying live host and JVM metrics.
+ * Resolves ServerMonitoringService directly via authoritative OSGi service infrastructure.
  */
 public class ServerOverviewView extends ViewPart {
 
@@ -20,10 +22,15 @@ public class ServerOverviewView extends ViewPart {
     private Label lblHeapUsed;
     private Label lblThreads;
     private Label lblUptime;
+    private Label lblStatus;
 
     @Override
     public void createPartControl(Composite parent) {
         parent.setLayout(new GridLayout(2, false));
+
+        lblStatus = new Label(parent, SWT.NONE);
+        lblStatus.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
+        lblStatus.setText("");
 
         createLabel(parent, "System CPU Load:");
         lblSystemCpu = createValueLabel(parent);
@@ -63,15 +70,26 @@ public class ServerOverviewView extends ViewPart {
     }
 
     private void refreshMetrics() {
-        ServerMonitoringService mon = TrystUiPlugin.getDefault().getServerMonitoringService();
-        if (mon != null) {
-            ServerMonitoringService.SystemMetrics m = mon.collectMetrics();
-            lblSystemCpu.setText(String.format("%.1f %%", m.systemCpuLoad()));
-            lblProcessCpu.setText(String.format("%.1f %%", m.processCpuLoad()));
-            lblHeapUsed.setText(String.format("%d MB / %d MB", m.heapUsedBytes() / (1024 * 1024), m.heapMaxBytes() / (1024 * 1024)));
-            lblThreads.setText(String.format("%d (daemon: %d)", m.threadCount(), m.daemonThreadCount()));
-            lblUptime.setText((m.jvmUptimeMs() / 1000) + " s");
+        ServerMonitoringService mon = TrystUiServices.getServerMonitoringService();
+        if (mon == null) {
+            String msg = "ServerMonitoringService is not currently available in OSGi registry.";
+            lblStatus.setText(msg);
+            TrystLog.warn(ServerOverviewView.class, msg);
+            lblSystemCpu.setText("-");
+            lblProcessCpu.setText("-");
+            lblHeapUsed.setText("-");
+            lblThreads.setText("-");
+            lblUptime.setText("-");
+            return;
         }
+
+        lblStatus.setText("");
+        ServerMonitoringService.SystemMetrics m = mon.collectMetrics();
+        lblSystemCpu.setText(String.format("%.1f %%", m.systemCpuLoad()));
+        lblProcessCpu.setText(String.format("%.1f %%", m.processCpuLoad()));
+        lblHeapUsed.setText(String.format("%d MB / %d MB", m.heapUsedBytes() / (1024 * 1024), m.heapMaxBytes() / (1024 * 1024)));
+        lblThreads.setText(String.format("%d (daemon: %d)", m.threadCount(), m.daemonThreadCount()));
+        lblUptime.setText((m.jvmUptimeMs() / 1000) + " s");
     }
 
     @Override
@@ -79,5 +97,10 @@ public class ServerOverviewView extends ViewPart {
         if (lblSystemCpu != null && !lblSystemCpu.isDisposed()) {
             lblSystemCpu.setFocus();
         }
+    }
+
+    @Override
+    public void dispose() {
+        super.dispose();
     }
 }

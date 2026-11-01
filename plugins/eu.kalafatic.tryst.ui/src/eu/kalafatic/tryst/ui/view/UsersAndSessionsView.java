@@ -1,10 +1,11 @@
 package eu.kalafatic.tryst.ui.view;
 
+import eu.kalafatic.tryst.core.log.TrystLog;
 import eu.kalafatic.tryst.domain.model.User;
 import eu.kalafatic.tryst.domain.model.UserSession;
 import eu.kalafatic.tryst.domain.repository.UserRepository;
 import eu.kalafatic.tryst.domain.repository.UserSessionRepository;
-import eu.kalafatic.tryst.ui.TrystUiPlugin;
+import eu.kalafatic.tryst.ui.TrystUiServices;
 import org.eclipse.jface.viewers.*;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.layout.GridData;
@@ -13,10 +14,10 @@ import org.eclipse.swt.widgets.*;
 import org.eclipse.ui.part.ViewPart;
 
 import java.util.Collections;
-import java.util.List;
 
 /**
  * Native SWT/JFace View for User and Session Administration.
+ * Resolves repositories directly via authoritative OSGi service infrastructure.
  */
 public class UsersAndSessionsView extends ViewPart {
 
@@ -24,10 +25,15 @@ public class UsersAndSessionsView extends ViewPart {
 
     private TableViewer userViewer;
     private TableViewer sessionViewer;
+    private Label statusLabel;
 
     @Override
     public void createPartControl(Composite parent) {
         parent.setLayout(new GridLayout(1, false));
+
+        statusLabel = new Label(parent, SWT.NONE);
+        statusLabel.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        statusLabel.setText("");
 
         Label lblUsers = new Label(parent, SWT.NONE);
         lblUsers.setText("Active Users & Roles (RBAC):");
@@ -113,18 +119,32 @@ public class UsersAndSessionsView extends ViewPart {
     }
 
     private void refreshData() {
-        UserRepository uRepo = TrystUiPlugin.getDefault().getUserRepository();
-        if (uRepo != null) {
-            userViewer.setInput(uRepo.findAll());
+        UserRepository uRepo = TrystUiServices.getUserRepository();
+        UserSessionRepository sRepo = TrystUiServices.getUserSessionRepository();
+
+        if (uRepo == null || sRepo == null) {
+            String msg = "Security repositories are not currently available in OSGi registry.";
+            statusLabel.setText(msg);
+            TrystLog.warn(UsersAndSessionsView.class, msg);
+            if (uRepo == null) userViewer.setInput(Collections.emptyList());
+            if (sRepo == null) sessionViewer.setInput(Collections.emptyList());
+            return;
         }
-        UserSessionRepository sRepo = TrystUiPlugin.getDefault().getUserSessionRepository();
-        if (sRepo != null) {
-            sessionViewer.setInput(sRepo.findAllActive());
-        }
+
+        statusLabel.setText("");
+        userViewer.setInput(uRepo.findAll());
+        sessionViewer.setInput(sRepo.findAllActive());
     }
 
     @Override
     public void setFocus() {
-        if (userViewer != null) userViewer.getControl().setFocus();
+        if (userViewer != null && !userViewer.getControl().isDisposed()) {
+            userViewer.getControl().setFocus();
+        }
+    }
+
+    @Override
+    public void dispose() {
+        super.dispose();
     }
 }

@@ -1,7 +1,7 @@
 package eu.kalafatic.tryst.ui.view;
 
 import eu.kalafatic.tryst.domain.model.ConsoleMessage;
-import eu.kalafatic.tryst.ui.TrystUiPlugin;
+import eu.kalafatic.tryst.ui.TrystUiServices;
 import eu.kalafatic.tryst.ui.controller.ConsoleOutputController;
 import org.eclipse.jface.action.Action;
 import org.eclipse.jface.action.IToolBarManager;
@@ -34,7 +34,7 @@ public class ConsoleOutputView extends ViewPart {
         textWidget = new StyledText(parent, SWT.BORDER | SWT.MULTI | SWT.V_SCROLL | SWT.H_SCROLL | SWT.READ_ONLY);
         textWidget.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
 
-        this.controller = new ConsoleOutputController(TrystUiPlugin.getDefault().getWorkspaceService());
+        this.controller = new ConsoleOutputController(TrystUiServices.getWorkspaceService());
         this.controller.setViewCallback(this::appendMessage);
 
         for (ConsoleMessage msg : controller.getMessages()) {

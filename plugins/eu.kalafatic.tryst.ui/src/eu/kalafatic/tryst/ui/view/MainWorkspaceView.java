@@ -3,7 +3,7 @@ package eu.kalafatic.tryst.ui.view;
 import eu.kalafatic.tryst.domain.model.AgentTask;
 import eu.kalafatic.tryst.domain.model.Project;
 import eu.kalafatic.tryst.domain.model.Session;
-import eu.kalafatic.tryst.ui.TrystUiPlugin;
+import eu.kalafatic.tryst.ui.TrystUiServices;
 import eu.kalafatic.tryst.ui.controller.WorkspaceController;
 import org.eclipse.jface.action.Action;
 import org.eclipse.jface.action.IToolBarManager;
@@ -32,6 +32,7 @@ import java.util.Optional;
 /**
  * Enhanced central workspace view presenting active project, sessions,
  * autonomous task runner, and real-time streaming output.
+ * Resolves application services directly via authoritative OSGi service infrastructure.
  */
 public class MainWorkspaceView extends ViewPart {
 
@@ -106,15 +107,14 @@ public class MainWorkspaceView extends ViewPart {
 
         sash.setWeights(45, 55);
 
-        // Controller initialization
-        TrystUiPlugin plugin = TrystUiPlugin.getDefault();
+        // Controller initialization via authoritative OSGi services
         this.controller = new WorkspaceController(
-                plugin.getWorkspaceService(),
-                plugin.getSessionTaskOrchestrator(),
-                plugin.getAutonomousDevelopmentService(),
-                plugin.getAiInferenceService(),
-                plugin.getAsyncExecutionService(),
-                plugin.getEventBus()
+                TrystUiServices.getWorkspaceService(),
+                TrystUiServices.getSessionTaskOrchestrator(),
+                TrystUiServices.getAutonomousDevelopmentService(),
+                TrystUiServices.getAiInferenceService(),
+                TrystUiServices.getAsyncExecutionService(),
+                TrystUiServices.getEventBus()
         );
 
         this.controller.setViewCallback(() -> {

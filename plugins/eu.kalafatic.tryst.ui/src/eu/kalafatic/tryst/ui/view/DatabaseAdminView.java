@@ -1,7 +1,7 @@
 package eu.kalafatic.tryst.ui.view;
 
 import eu.kalafatic.tryst.infrastructure.persistence.SqliteDatabaseManager;
-import eu.kalafatic.tryst.ui.TrystUiPlugin;
+import eu.kalafatic.tryst.ui.TrystUiServices;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
@@ -56,7 +56,7 @@ public class DatabaseAdminView extends ViewPart {
     }
 
     private void refreshData() {
-        SqliteDatabaseManager db = TrystUiPlugin.getDefault().getDatabaseManager();
+        SqliteDatabaseManager db = TrystUiServices.getDatabaseManager();
         if (db != null && db.getDatabasePath() != null) {
             lblPath.setText(db.getDatabasePath().toString());
             try {

@@ -116,6 +116,7 @@ public class TrystUiPlugin extends AbstractUIPlugin {
         this.fallbackWorkspaceService = null;
         this.bundleContext = null;
         plugin = null;
+        TrystUiServices.dispose();
         super.stop(context);
     }
 
