@@ -1,0 +1,18 @@
+Manifest-Version: 1.0
+Bundle-ManifestVersion: 2
+Bundle-Name: TRYST Infrastructure
+Bundle-SymbolicName: eu.kalafatic.tryst.infrastructure
+Bundle-Version: 0.1.0.qualifier
+Bundle-RequiredExecutionEnvironment: JavaSE-21
+Bundle-ClassPath: .,
+ lib/sqlite-jdbc.jar
+Require-Bundle: org.eclipse.osgi,
+ org.eclipse.equinox.common,
+ org.eclipse.core.runtime,
+ slf4j.api;bundle-version="2.0.12",
+ eu.kalafatic.tryst.core;bundle-version="0.1.0",
+ eu.kalafatic.tryst.domain;bundle-version="0.1.0"
+Export-Package: eu.kalafatic.tryst.infrastructure.persistence,
+ eu.kalafatic.tryst.infrastructure.persistence.repository,
+ org.sqlite
+Automatic-Module-Name: eu.kalafatic.tryst.infrastructure

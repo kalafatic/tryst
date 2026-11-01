@@ -11,6 +11,8 @@ import java.util.UUID;
 public class AgentTask {
 
     private final String id;
+    private final String projectId;
+    private final String sessionId;
     private final String title;
     private final String description;
     private ExecutionStatus status;
@@ -18,11 +20,17 @@ public class AgentTask {
     private Instant completedAt;
 
     public AgentTask(String title, String description) {
-        this(UUID.randomUUID().toString(), title, description, ExecutionStatus.IDLE, Instant.now(), null);
+        this(UUID.randomUUID().toString(), null, null, title, description, ExecutionStatus.IDLE, Instant.now(), null);
     }
 
     public AgentTask(String id, String title, String description, ExecutionStatus status, Instant createdAt, Instant completedAt) {
+        this(id, null, null, title, description, status, createdAt, completedAt);
+    }
+
+    public AgentTask(String id, String projectId, String sessionId, String title, String description, ExecutionStatus status, Instant createdAt, Instant completedAt) {
         this.id = Objects.requireNonNull(id, "id must not be null");
+        this.projectId = projectId;
+        this.sessionId = sessionId;
         this.title = Objects.requireNonNull(title, "title must not be null");
         this.description = description != null ? description : "";
         this.status = Objects.requireNonNull(status, "status must not be null");
@@ -32,6 +40,14 @@ public class AgentTask {
 
     public String getId() {
         return id;
+    }
+
+    public String getProjectId() {
+        return projectId;
+    }
+
+    public String getSessionId() {
+        return sessionId;
     }
 
     public String getTitle() {
@@ -101,6 +117,8 @@ public class AgentTask {
     public String toString() {
         return "AgentTask{" +
                 "id='" + id + '\'' +
+                ", projectId='" + projectId + '\'' +
+                ", sessionId='" + sessionId + '\'' +
                 ", title='" + title + '\'' +
                 ", status=" + status +
                 '}';

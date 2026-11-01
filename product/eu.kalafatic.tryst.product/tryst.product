@@ -42,6 +42,7 @@
       <plugin id="org.eclipse.equinox.common" autoStart="true" startLevel="2" />
       <plugin id="org.eclipse.equinox.event" autoStart="true" startLevel="2" />
       <plugin id="org.eclipse.equinox.simpleconfigurator" autoStart="true" startLevel="1" />
+      <plugin id="eu.kalafatic.tryst.infrastructure" autoStart="true" startLevel="3" />
       <plugin id="eu.kalafatic.tryst.application" autoStart="true" startLevel="4" />
       <plugin id="eu.kalafatic.tryst.ui" autoStart="true" startLevel="4" />
    </configurations>

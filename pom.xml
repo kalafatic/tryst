@@ -21,6 +21,7 @@
     <modules>
         <module>plugins/eu.kalafatic.tryst.core</module>
         <module>plugins/eu.kalafatic.tryst.domain</module>
+        <module>plugins/eu.kalafatic.tryst.infrastructure</module>
         <module>plugins/eu.kalafatic.tryst.application</module>
         <module>plugins/eu.kalafatic.tryst.ui</module>
         <module>features/eu.kalafatic.tryst.feature</module>
