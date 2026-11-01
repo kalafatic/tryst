@@ -17,5 +17,7 @@ public interface SessionRepository {
 
     List<Session> findRecoverableSessions();
 
+    List<Session> findAll();
+
     boolean delete(String id);
 }

@@ -1,87 +1,49 @@
-# TRYST Architecture
+# TRYST – AI Development Environment Architecture
 
 ## Overview
-TRYST is an AI-powered autonomous software development environment desktop application inspired by Google Jules, built as a standalone Eclipse Rich Client Platform (RCP) application. It is developed entirely in Java 21 using standard Eclipse OSGi, Workbench, SWT, and JFace frameworks, built with Maven and Tycho.
+TRYST is an AI-powered autonomous software development environment desktop application inspired by Google Jules, built as an independent Eclipse Rich Client Platform (RCP) application. It enforces strict Model-View-Controller (MVC) architecture, pure Java 21 standard capabilities, OSGi service modularity, and integration with local Ollama inference models.
 
-TRYST is completely independent of EVO.
+## Completed Platform Foundation Architecture
 
-## Logical Architectural Layers
+### 1. Centralized Configuration Management (`eu.kalafatic.tryst.core.config`)
+- **`ApplicationConfiguration`**: Strongly-validated record holding core paths (`userHome`, `configDirectory`, `workspaceDirectory`), AI configuration (Ollama endpoint, default model, timeouts), and execution limits (iteration caps, context/output tokens, retry limits, sandbox mode).
+- **`ConfigurationService`**: Manages loading, validation, disk persistence (`tryst.properties`), and live update notifications to registered listeners.
 
-```
-TRYST APPLICATION
-│
-├── DOMAIN (eu.kalafatic.tryst.domain)
-│   ├── Model (Project, Workspace, AgentTask, ConsoleMessage, ExecutionStatus)
-│   └── Domain Services (WorkspaceService, WorkspaceChangeListener)
-│
-├── APPLICATION (eu.kalafatic.tryst.application)
-│   ├── Application Services (ApplicationLifecycleCoordinator)
-│   ├── Configuration & Concurrency (eu.kalafatic.tryst.core)
-│   └── Workbench Advisors (WorkbenchAdvisor, WindowAdvisor, ActionBarAdvisor)
-│
-├── INFRASTRUCTURE (Future - prompt 03+)
-│   ├── Persistence
-│   ├── AI Runtime (Ollama)
-│   └── External Integrations
-│
-└── PRESENTATION (eu.kalafatic.tryst.ui)
-    ├── Views (ProjectExplorerView, MainWorkspaceView, ConsoleOutputView)
-    └── Controllers (ProjectExplorerController, WorkspaceController, ConsoleOutputController)
-```
+### 2. Typed Application Event Bus (`eu.kalafatic.tryst.core.event`)
+- **`TrystTypedEvent`**: Root interface for typed immutable events with unique `eventId`, `timestamp`, and optional `correlationId`.
+- **`EventBus`**: Thread-safe publisher-subscriber engine offering exception isolation and type-safe routing.
+- Standard events include: `ConfigurationChangedEvent`, `SessionEvent`, `TaskStateChangedEvent`, `AgentExecutionEvent`, `ToolExecutionEvent`, and `BuildAndTestEvent`.
 
-## OSGi Plugin Architecture & Dependency Graph
+### 3. Real Ollama & AI Infrastructure (`eu.kalafatic.tryst.infrastructure.ai`, `eu.kalafatic.tryst.domain.ai`)
+- **`OllamaClient`**: Real HTTP client implemented with Java 21 `java.net.http.HttpClient` (no third-party web frameworks). Supports connection checks (`/api/tags`), model listing and inspection, chat generation (`/api/chat`), and line-delimited streaming.
+- **`AiContextManager`**: Constructs prompt messages under token budget constraints, embedding workspace context, active project structure, and rolling conversation history.
 
-```
-               [ eu.kalafatic.tryst.core ]
-                       ^       ^
-                      /         \
-                     /           \
-  [ eu.kalafatic.tryst.domain ]   \
-             ^                     \
-             |                      \
-  [ eu.kalafatic.tryst.application ] \
-             ^                        \
-             |                         \
-    [ eu.kalafatic.tryst.ui ] <---------+
-```
+### 4. Agent Architecture, Sessions & Task Orchestration (`eu.kalafatic.tryst.domain.service`)
+- **`SessionTaskOrchestrator`**: Manages persistent `Session` and `AgentTask` lifecycles.
+- **Agent Execution Loop**: Drives autonomous task resolution: receives request -> gathers context -> invokes AI inference -> detects and executes tools -> persists results -> evaluates status.
+- Task status transitions (`IDLE` -> `RUNNING` -> `COMPLETED` / `FAILED` / `CANCELLED`) are enforced and persisted into SQLite.
 
-Note: Notice that `eu.kalafatic.tryst.application` does not depend on `eu.kalafatic.tryst.ui`. The application bundle hosts the entry point and lifecycle coordination, registering domain and application services into the OSGi Service Registry. `eu.kalafatic.tryst.ui` depends on `domain` and `core`, discovering services cleanly via OSGi `ServiceTracker`.
+### 5. Tool Foundation & Workspace Security (`eu.kalafatic.tryst.domain.tool`, `eu.kalafatic.tryst.domain.security`)
+- **`Tool` & `ToolRegistry`**: Unified interface for tool discovery, validation, and execution.
+- Tools included:
+  - `read_file`, `write_file`, `list_directory`, `create_directory`
+  - `git_diff`
+- **`PermissionManager`**: Enforces strict path traversal defenses ensuring file operations stay inside the authorized workspace root, with comprehensive audit logging.
 
-### Bundle Responsibilities
+### 6. Git, Build & Test Engine (`eu.kalafatic.tryst.infrastructure.vcs`, `eu.kalafatic.tryst.infrastructure.build`)
+- **`GitService`**: Non-destructive Git operations including status, diff, staged diff, branch listing, branch creation, staging, and commit.
+- **`BuildAndTestService`**: Isolated process execution of Maven (`compile`, `test`) capturing exit code, logs, duration, and error output without blocking the workbench.
 
-1. **`eu.kalafatic.tryst.core`**:
-   - Fundamental application abstractions, contracts, and error hierarchy (`TrystException`, `TrystDomainException`, `TrystApplicationException`, `TrystInfrastructureException`).
-   - Immutable lifecycle model (`ApplicationLifecycleEvent`, `ApplicationLifecycleStage`).
-   - Managed background concurrency (`AsyncExecutionService`, `ManagedAsyncExecutionService`).
-   - Authoritative configuration baseline (`ApplicationConfiguration`).
-   - Platform unified diagnostic logging helper (`TrystLog`).
-   - Zero UI or Workbench dependencies.
+### 7. Code Review & Autonomous Development (`eu.kalafatic.tryst.domain.review`, `eu.kalafatic.tryst.domain.service`)
+- **`CodeReviewService`**: Analyzes diffs and build/test logs for hardcoded secrets, unsafe calls (`System.exit`), empty catch blocks, and test failures, providing structured findings (`ReviewReport`).
+- **`AutonomousDevelopmentService`**: Coordinates the entire workflow loop from user request to reviewed, verified code changes.
 
-2. **`eu.kalafatic.tryst.domain`**:
-   - Core domain models: `Workspace`, `Project`, `AgentTask`, `ConsoleMessage`, `ExecutionStatus`.
-   - Domain lifecycle state transitions and rules (task execution validation, project activation).
-   - Domain services: `WorkspaceService` managing active workspace state and event dispatching (`WorkspaceChangeListener`).
-   - Zero UI, SWT, or Workbench dependencies.
+### 8. Workbench User Interface (`eu.kalafatic.tryst.ui`)
+- **`MainWorkspaceView`**: Workspace context, session switcher, new session/task actions, single-click autonomous task execution, real-time streaming output, and cancellation.
+- **`WorkspaceController`**: Coordinates presentation actions with `WorkspaceService`, `SessionTaskOrchestrator`, `AutonomousDevelopmentService`, and `AsyncExecutionService`.
+- **`ConsoleOutputView`**: Live system, build, and event logging.
+- **`ProjectExplorerView`**: Workspace project tree navigation.
 
-3. **`eu.kalafatic.tryst.application`**:
-   - Eclipse application entry point (`TrystApplication` implementing `IApplication`).
-   - Lifecycle coordination: `ApplicationLifecycleCoordinator` driving deterministic startup, service registration, and disposal.
-   - Workbench lifecycle advisors (`ApplicationWorkbenchAdvisor`, `ApplicationWorkbenchWindowAdvisor`, `ApplicationActionBarAdvisor`).
-   - Equinox application and product extensions (`eu.kalafatic.tryst.application.application`, `eu.kalafatic.tryst.application.product`).
-   - Application window title: "TRYST – AI Development Environment".
-
-4. **`eu.kalafatic.tryst.ui`**:
-   - User interface components and workbench contributions.
-   - Perspective definition (`TrystMainPerspective`).
-   - Views (`ProjectExplorerView`, `MainWorkspaceView`, `ConsoleOutputView`).
-   - Focused controllers (`ProjectExplorerController`, `WorkspaceController`, `ConsoleOutputController`).
-   - UI plugin activator (`TrystUiPlugin`) consuming registered OSGi services.
-
-5. **`eu.kalafatic.tryst.feature`**:
-   - Feature definition grouping TRYST plugins with required RCP runtime dependencies.
-
-6. **`eu.kalafatic.tryst.product`**:
-   - Materialization of the standalone desktop product (`tryst.product`) via Tycho `tycho-p2-director-plugin`.
-
-7. **`eu.kalafatic.tryst.tests`**:
-   - Unit and integration tests using JUnit 5 verifying domain models, lifecycle coordination, OSGi service registration, concurrency, error handling, and MVC decoupling.
+### 9. Application Lifecycle (`eu.kalafatic.tryst.application.lifecycle`)
+- `ApplicationLifecycleCoordinator` deterministically coordinates stages: `APPLICATION_START` -> `PLATFORM_INITIALIZATION` -> `CONFIGURATION_INITIALIZATION` -> `CORE_SERVICE_INITIALIZATION` -> `APPLICATION_READY` -> `WORKBENCH_RUNNING` -> `APPLICATION_SHUTDOWN` -> `SERVICE_DISPOSAL` -> `APPLICATION_TERMINATED`.
+- Services are registered into the native OSGi service registry and resolved by UI via `ServiceTracker`.

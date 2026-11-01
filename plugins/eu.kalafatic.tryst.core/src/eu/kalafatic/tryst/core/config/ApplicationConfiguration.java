@@ -6,17 +6,34 @@ import java.nio.file.Path;
 import java.util.Objects;
 
 /**
- * Baseline authoritative application configuration with validation and safe defaults.
+ * Baseline authoritative application configuration with validation, safe defaults,
+ * and support for AI provider settings, timeouts, limits, and retry policies.
  */
 public record ApplicationConfiguration(
         String applicationName,
         String version,
         Path userHomeDirectory,
         Path configurationDirectory,
-        Path defaultWorkspaceDirectory
+        Path defaultWorkspaceDirectory,
+        String ollamaEndpoint,
+        String defaultModel,
+        int requestTimeoutSeconds,
+        int maxIterations,
+        int maxContextTokens,
+        int maxOutputTokens,
+        int maxRetryAttempts,
+        boolean secureSandboxEnabled
 ) {
     public static final String DEFAULT_APP_NAME = "TRYST – AI Development Environment";
     public static final String DEFAULT_VERSION = "0.1.0";
+    public static final String DEFAULT_OLLAMA_ENDPOINT = "http://localhost:11434";
+    public static final String DEFAULT_MODEL = "codellama";
+    public static final int DEFAULT_REQUEST_TIMEOUT_SECONDS = 60;
+    public static final int DEFAULT_MAX_ITERATIONS = 5;
+    public static final int DEFAULT_MAX_CONTEXT_TOKENS = 4096;
+    public static final int DEFAULT_MAX_OUTPUT_TOKENS = 2048;
+    public static final int DEFAULT_MAX_RETRY_ATTEMPTS = 3;
+    public static final boolean DEFAULT_SECURE_SANDBOX = true;
 
     public ApplicationConfiguration {
         Objects.requireNonNull(applicationName, "applicationName must not be null");
@@ -24,10 +41,57 @@ public record ApplicationConfiguration(
         Objects.requireNonNull(userHomeDirectory, "userHomeDirectory must not be null");
         Objects.requireNonNull(configurationDirectory, "configurationDirectory must not be null");
         Objects.requireNonNull(defaultWorkspaceDirectory, "defaultWorkspaceDirectory must not be null");
+        Objects.requireNonNull(ollamaEndpoint, "ollamaEndpoint must not be null");
+        Objects.requireNonNull(defaultModel, "defaultModel must not be null");
 
         if (applicationName.isBlank()) {
             throw new TrystApplicationException("applicationName must not be blank");
         }
+        if (ollamaEndpoint.isBlank() || (!ollamaEndpoint.startsWith("http://") && !ollamaEndpoint.startsWith("https://"))) {
+            throw new TrystApplicationException("ollamaEndpoint must be a valid HTTP/HTTPS URL");
+        }
+        if (defaultModel.isBlank()) {
+            throw new TrystApplicationException("defaultModel must not be blank");
+        }
+        if (requestTimeoutSeconds <= 0) {
+            throw new TrystApplicationException("requestTimeoutSeconds must be greater than zero");
+        }
+        if (maxIterations <= 0) {
+            throw new TrystApplicationException("maxIterations must be greater than zero");
+        }
+        if (maxContextTokens <= 0) {
+            throw new TrystApplicationException("maxContextTokens must be greater than zero");
+        }
+        if (maxOutputTokens <= 0) {
+            throw new TrystApplicationException("maxOutputTokens must be greater than zero");
+        }
+        if (maxRetryAttempts < 0) {
+            throw new TrystApplicationException("maxRetryAttempts must not be negative");
+        }
+    }
+
+    public ApplicationConfiguration(
+            String applicationName,
+            String version,
+            Path userHomeDirectory,
+            Path configurationDirectory,
+            Path defaultWorkspaceDirectory
+    ) {
+        this(
+                applicationName,
+                version,
+                userHomeDirectory,
+                configurationDirectory,
+                defaultWorkspaceDirectory,
+                DEFAULT_OLLAMA_ENDPOINT,
+                DEFAULT_MODEL,
+                DEFAULT_REQUEST_TIMEOUT_SECONDS,
+                DEFAULT_MAX_ITERATIONS,
+                DEFAULT_MAX_CONTEXT_TOKENS,
+                DEFAULT_MAX_OUTPUT_TOKENS,
+                DEFAULT_MAX_RETRY_ATTEMPTS,
+                DEFAULT_SECURE_SANDBOX
+        );
     }
 
     public static ApplicationConfiguration createDefault() {
@@ -41,7 +105,39 @@ public record ApplicationConfiguration(
                 DEFAULT_VERSION,
                 home,
                 configDir,
-                defaultWsDir
+                defaultWsDir,
+                DEFAULT_OLLAMA_ENDPOINT,
+                DEFAULT_MODEL,
+                DEFAULT_REQUEST_TIMEOUT_SECONDS,
+                DEFAULT_MAX_ITERATIONS,
+                DEFAULT_MAX_CONTEXT_TOKENS,
+                DEFAULT_MAX_OUTPUT_TOKENS,
+                DEFAULT_MAX_RETRY_ATTEMPTS,
+                DEFAULT_SECURE_SANDBOX
+        );
+    }
+
+    public ApplicationConfiguration withOllamaEndpoint(String newEndpoint) {
+        return new ApplicationConfiguration(
+                applicationName, version, userHomeDirectory, configurationDirectory,
+                defaultWorkspaceDirectory, newEndpoint, defaultModel, requestTimeoutSeconds,
+                maxIterations, maxContextTokens, maxOutputTokens, maxRetryAttempts, secureSandboxEnabled
+        );
+    }
+
+    public ApplicationConfiguration withDefaultModel(String newModel) {
+        return new ApplicationConfiguration(
+                applicationName, version, userHomeDirectory, configurationDirectory,
+                defaultWorkspaceDirectory, ollamaEndpoint, newModel, requestTimeoutSeconds,
+                maxIterations, maxContextTokens, maxOutputTokens, maxRetryAttempts, secureSandboxEnabled
+        );
+    }
+
+    public ApplicationConfiguration withLimits(int timeoutSecs, int iterations, int retryAttempts) {
+        return new ApplicationConfiguration(
+                applicationName, version, userHomeDirectory, configurationDirectory,
+                defaultWorkspaceDirectory, ollamaEndpoint, defaultModel, timeoutSecs,
+                iterations, maxContextTokens, maxOutputTokens, retryAttempts, secureSandboxEnabled
         );
     }
 }

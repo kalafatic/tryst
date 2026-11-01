@@ -11,7 +11,8 @@ Require-Bundle: org.eclipse.core.runtime,
  org.eclipse.ui.workbench,
  org.eclipse.osgi,
  eu.kalafatic.tryst.core;bundle-version="0.1.0",
- eu.kalafatic.tryst.domain;bundle-version="0.1.0"
+ eu.kalafatic.tryst.domain;bundle-version="0.1.0",
+ eu.kalafatic.tryst.infrastructure;bundle-version="0.1.0"
 Export-Package: eu.kalafatic.tryst.ui,
  eu.kalafatic.tryst.ui.controller,
  eu.kalafatic.tryst.ui.perspective,

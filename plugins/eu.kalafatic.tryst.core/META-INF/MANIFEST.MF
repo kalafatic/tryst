@@ -11,6 +11,7 @@ Export-Package: eu.kalafatic.tryst.core,
  eu.kalafatic.tryst.core.concurrent,
  eu.kalafatic.tryst.core.config,
  eu.kalafatic.tryst.core.error,
+ eu.kalafatic.tryst.core.event,
  eu.kalafatic.tryst.core.lifecycle,
  eu.kalafatic.tryst.core.log
 Automatic-Module-Name: eu.kalafatic.tryst.core
