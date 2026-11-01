@@ -99,6 +99,25 @@ public class SqliteSessionRepository implements SessionRepository {
     }
 
     @Override
+    public List<Session> findAll() {
+        String sql = "SELECT id, project_id, name, status, created_at, updated_at FROM sessions ORDER BY created_at DESC;";
+        List<Session> list = new ArrayList<>();
+
+        synchronized (databaseManager.getLock()) {
+            Connection conn = databaseManager.getConnection();
+            try (PreparedStatement pstmt = conn.prepareStatement(sql);
+                 ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    list.add(mapResultSetToSession(rs));
+                }
+                return list;
+            } catch (SQLException e) {
+                throw new TrystInfrastructureException("Failed to find all sessions", e);
+            }
+        }
+    }
+
+    @Override
     public List<Session> findRecoverableSessions() {
         String sql = "SELECT id, project_id, name, status, created_at, updated_at FROM sessions WHERE status NOT IN ('COMPLETED', 'CLOSED', 'TERMINATED') ORDER BY updated_at DESC;";
         List<Session> list = new ArrayList<>();

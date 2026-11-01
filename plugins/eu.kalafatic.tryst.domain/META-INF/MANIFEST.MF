@@ -5,7 +5,11 @@ Bundle-SymbolicName: eu.kalafatic.tryst.domain
 Bundle-Version: 0.1.0.qualifier
 Bundle-RequiredExecutionEnvironment: JavaSE-21
 Require-Bundle: eu.kalafatic.tryst.core;bundle-version="0.1.0"
-Export-Package: eu.kalafatic.tryst.domain.model,
+Export-Package: eu.kalafatic.tryst.domain.ai,
+ eu.kalafatic.tryst.domain.model,
  eu.kalafatic.tryst.domain.repository,
- eu.kalafatic.tryst.domain.service
+ eu.kalafatic.tryst.domain.review,
+ eu.kalafatic.tryst.domain.security,
+ eu.kalafatic.tryst.domain.service,
+ eu.kalafatic.tryst.domain.tool
 Automatic-Module-Name: eu.kalafatic.tryst.domain

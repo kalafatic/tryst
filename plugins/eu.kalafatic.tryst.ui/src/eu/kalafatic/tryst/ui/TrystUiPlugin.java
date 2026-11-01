@@ -1,9 +1,15 @@
 package eu.kalafatic.tryst.ui;
 
 import eu.kalafatic.tryst.core.concurrent.AsyncExecutionService;
-import eu.kalafatic.tryst.core.error.TrystApplicationException;
+import eu.kalafatic.tryst.core.config.ConfigurationService;
+import eu.kalafatic.tryst.core.event.EventBus;
 import eu.kalafatic.tryst.core.log.TrystLog;
+import eu.kalafatic.tryst.domain.ai.AiInferenceService;
+import eu.kalafatic.tryst.domain.review.CodeReviewService;
+import eu.kalafatic.tryst.domain.service.AutonomousDevelopmentService;
+import eu.kalafatic.tryst.domain.service.SessionTaskOrchestrator;
 import eu.kalafatic.tryst.domain.service.WorkspaceService;
+import eu.kalafatic.tryst.infrastructure.vcs.GitService;
 import org.eclipse.ui.plugin.AbstractUIPlugin;
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.ServiceReference;
@@ -21,8 +27,12 @@ public class TrystUiPlugin extends AbstractUIPlugin {
     private BundleContext bundleContext;
     private ServiceTracker<WorkspaceService, WorkspaceService> workspaceServiceTracker;
     private ServiceTracker<AsyncExecutionService, AsyncExecutionService> asyncServiceTracker;
+    private ServiceTracker<SessionTaskOrchestrator, SessionTaskOrchestrator> orchestratorTracker;
+    private ServiceTracker<AutonomousDevelopmentService, AutonomousDevelopmentService> autonomousTracker;
+    private ServiceTracker<AiInferenceService, AiInferenceService> aiTracker;
+    private ServiceTracker<EventBus, EventBus> eventBusTracker;
+    private ServiceTracker<GitService, GitService> gitTracker;
 
-    // Fallback instance for test/standalone environments where OSGi service registry is offline
     private WorkspaceService fallbackWorkspaceService;
 
     @Override
@@ -37,19 +47,34 @@ public class TrystUiPlugin extends AbstractUIPlugin {
         this.asyncServiceTracker = new ServiceTracker<>(context, AsyncExecutionService.class, null);
         this.asyncServiceTracker.open();
 
+        this.orchestratorTracker = new ServiceTracker<>(context, SessionTaskOrchestrator.class, null);
+        this.orchestratorTracker.open();
+
+        this.autonomousTracker = new ServiceTracker<>(context, AutonomousDevelopmentService.class, null);
+        this.autonomousTracker.open();
+
+        this.aiTracker = new ServiceTracker<>(context, AiInferenceService.class, null);
+        this.aiTracker.open();
+
+        this.eventBusTracker = new ServiceTracker<>(context, EventBus.class, null);
+        this.eventBusTracker.open();
+
+        this.gitTracker = new ServiceTracker<>(context, GitService.class, null);
+        this.gitTracker.open();
+
         TrystLog.info(TrystUiPlugin.class, "TrystUiPlugin activated with OSGi ServiceTrackers.");
     }
 
     @Override
     public void stop(BundleContext context) throws Exception {
-        if (workspaceServiceTracker != null) {
-            workspaceServiceTracker.close();
-            workspaceServiceTracker = null;
-        }
-        if (asyncServiceTracker != null) {
-            asyncServiceTracker.close();
-            asyncServiceTracker = null;
-        }
+        if (workspaceServiceTracker != null) { workspaceServiceTracker.close(); workspaceServiceTracker = null; }
+        if (asyncServiceTracker != null) { asyncServiceTracker.close(); asyncServiceTracker = null; }
+        if (orchestratorTracker != null) { orchestratorTracker.close(); orchestratorTracker = null; }
+        if (autonomousTracker != null) { autonomousTracker.close(); autonomousTracker = null; }
+        if (aiTracker != null) { aiTracker.close(); aiTracker = null; }
+        if (eventBusTracker != null) { eventBusTracker.close(); eventBusTracker = null; }
+        if (gitTracker != null) { gitTracker.close(); gitTracker = null; }
+
         this.fallbackWorkspaceService = null;
         this.bundleContext = null;
         plugin = null;
@@ -60,31 +85,14 @@ public class TrystUiPlugin extends AbstractUIPlugin {
         return plugin;
     }
 
-    /**
-     * Obtains the registered WorkspaceService from the OSGi service registry.
-     */
     public WorkspaceService getWorkspaceService() {
         if (workspaceServiceTracker != null) {
             WorkspaceService service = workspaceServiceTracker.getService();
-            if (service != null) {
-                return service;
-            }
+            if (service != null) return service;
         }
-
-        // Direct ServiceReference lookup attempt
-        if (bundleContext != null) {
-            ServiceReference<WorkspaceService> ref = bundleContext.getServiceReference(WorkspaceService.class);
-            if (ref != null) {
-                return bundleContext.getService(ref);
-            }
-        }
-
-        // Standalone or testing fallback
         if (fallbackWorkspaceService == null) {
             synchronized (this) {
                 if (fallbackWorkspaceService == null) {
-                    TrystLog.warn(TrystUiPlugin.class,
-                            "WorkspaceService not yet found in OSGi registry; initializing local fallback.");
                     fallbackWorkspaceService = new WorkspaceService();
                 }
             }
@@ -92,22 +100,30 @@ public class TrystUiPlugin extends AbstractUIPlugin {
         return fallbackWorkspaceService;
     }
 
-    /**
-     * Obtains the registered AsyncExecutionService from the OSGi service registry.
-     */
     public AsyncExecutionService getAsyncExecutionService() {
         if (asyncServiceTracker != null) {
-            AsyncExecutionService service = asyncServiceTracker.getService();
-            if (service != null) {
-                return service;
-            }
-        }
-        if (bundleContext != null) {
-            ServiceReference<AsyncExecutionService> ref = bundleContext.getServiceReference(AsyncExecutionService.class);
-            if (ref != null) {
-                return bundleContext.getService(ref);
-            }
+            return asyncServiceTracker.getService();
         }
         return null;
+    }
+
+    public SessionTaskOrchestrator getSessionTaskOrchestrator() {
+        return orchestratorTracker != null ? orchestratorTracker.getService() : null;
+    }
+
+    public AutonomousDevelopmentService getAutonomousDevelopmentService() {
+        return autonomousTracker != null ? autonomousTracker.getService() : null;
+    }
+
+    public AiInferenceService getAiInferenceService() {
+        return aiTracker != null ? aiTracker.getService() : null;
+    }
+
+    public EventBus getEventBus() {
+        return eventBusTracker != null ? eventBusTracker.getService() : null;
+    }
+
+    public GitService getGitService() {
+        return gitTracker != null ? gitTracker.getService() : null;
     }
 }

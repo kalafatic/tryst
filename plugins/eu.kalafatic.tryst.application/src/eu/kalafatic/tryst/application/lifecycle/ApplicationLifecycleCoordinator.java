@@ -3,11 +3,15 @@ package eu.kalafatic.tryst.application.lifecycle;
 import eu.kalafatic.tryst.core.concurrent.AsyncExecutionService;
 import eu.kalafatic.tryst.core.concurrent.ManagedAsyncExecutionService;
 import eu.kalafatic.tryst.core.config.ApplicationConfiguration;
+import eu.kalafatic.tryst.core.config.ConfigurationService;
 import eu.kalafatic.tryst.core.error.TrystApplicationException;
+import eu.kalafatic.tryst.core.event.EventBus;
 import eu.kalafatic.tryst.core.lifecycle.ApplicationLifecycleEvent;
 import eu.kalafatic.tryst.core.lifecycle.ApplicationLifecycleListener;
 import eu.kalafatic.tryst.core.lifecycle.ApplicationLifecycleStage;
 import eu.kalafatic.tryst.core.log.TrystLog;
+import eu.kalafatic.tryst.domain.ai.AiContextManager;
+import eu.kalafatic.tryst.domain.ai.AiInferenceService;
 import eu.kalafatic.tryst.domain.repository.AgentRepository;
 import eu.kalafatic.tryst.domain.repository.ConversationMessageRepository;
 import eu.kalafatic.tryst.domain.repository.ExecutionResultRepository;
@@ -16,7 +20,16 @@ import eu.kalafatic.tryst.domain.repository.SessionRepository;
 import eu.kalafatic.tryst.domain.repository.TaskRepository;
 import eu.kalafatic.tryst.domain.repository.UnitOfWork;
 import eu.kalafatic.tryst.domain.repository.WorkspaceRepository;
+import eu.kalafatic.tryst.domain.review.CodeReviewService;
+import eu.kalafatic.tryst.domain.security.PermissionManager;
+import eu.kalafatic.tryst.domain.service.AutonomousDevelopmentService;
+import eu.kalafatic.tryst.domain.service.SessionTaskOrchestrator;
 import eu.kalafatic.tryst.domain.service.WorkspaceService;
+import eu.kalafatic.tryst.domain.tool.FileTools;
+import eu.kalafatic.tryst.domain.tool.GitTools;
+import eu.kalafatic.tryst.domain.tool.ToolRegistry;
+import eu.kalafatic.tryst.infrastructure.ai.OllamaClient;
+import eu.kalafatic.tryst.infrastructure.build.BuildAndTestService;
 import eu.kalafatic.tryst.infrastructure.persistence.SchemaMigrationService;
 import eu.kalafatic.tryst.infrastructure.persistence.SqliteBackupService;
 import eu.kalafatic.tryst.infrastructure.persistence.SqliteDatabaseManager;
@@ -27,10 +40,12 @@ import eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteProjectRep
 import eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteSessionRepository;
 import eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteTaskRepository;
 import eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteWorkspaceRepository;
+import eu.kalafatic.tryst.infrastructure.vcs.GitService;
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.ServiceRegistration;
 
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -38,26 +53,25 @@ import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * Authoritative coordinator for the TRYST application lifecycle and OSGi service management.
- * Enforces the deterministic startup and shutdown sequence:
- *
- * APPLICATION_START -> PLATFORM_INITIALIZATION -> CONFIGURATION_INITIALIZATION ->
- * CORE_SERVICE_INITIALIZATION -> APPLICATION_READY -> WORKBENCH_RUNNING ->
- * APPLICATION_SHUTDOWN -> SERVICE_DISPOSAL -> APPLICATION_TERMINATED
+ * Deterministic lifecycle coordinator driving startup, configuration,
+ * persistence, core/domain/AI services, OSGi registration, and clean shutdown.
  */
 public class ApplicationLifecycleCoordinator {
 
     private final BundleContext bundleContext;
-    private ApplicationLifecycleStage currentStage = ApplicationLifecycleStage.APPLICATION_START;
     private final List<ApplicationLifecycleListener> listeners = new CopyOnWriteArrayList<>();
+    private final List<ServiceRegistration<?>> serviceRegistrations = new ArrayList<>();
 
-    // Registered core services and their OSGi registrations
+    private ApplicationLifecycleStage currentStage = ApplicationLifecycleStage.APPLICATION_START;
+
+    // Services
+    private ConfigurationService configurationService;
     private ApplicationConfiguration configuration;
+    private EventBus eventBus;
     private SqliteDatabaseManager databaseManager;
     private SchemaMigrationService migrationService;
     private SqliteBackupService backupService;
 
-    // Repositories
     private ProjectRepository projectRepository;
     private TaskRepository taskRepository;
     private WorkspaceRepository workspaceRepository;
@@ -68,7 +82,19 @@ public class ApplicationLifecycleCoordinator {
 
     private WorkspaceService workspaceService;
     private AsyncExecutionService asyncExecutionService;
-    private final List<ServiceRegistration<?>> serviceRegistrations = new ArrayList<>();
+    private PermissionManager permissionManager;
+    private ToolRegistry toolRegistry;
+    private AiContextManager aiContextManager;
+    private AiInferenceService aiInferenceService;
+    private GitService gitService;
+    private BuildAndTestService buildAndTestService;
+    private CodeReviewService codeReviewService;
+    private SessionTaskOrchestrator sessionTaskOrchestrator;
+    private AutonomousDevelopmentService autonomousDevelopmentService;
+
+    public ApplicationLifecycleCoordinator() {
+        this(null);
+    }
 
     public ApplicationLifecycleCoordinator(BundleContext bundleContext) {
         this.bundleContext = bundleContext;
@@ -117,11 +143,17 @@ public class ApplicationLifecycleCoordinator {
     }
 
     private void onPlatformInitialization() {
-        TrystLog.info(ApplicationLifecycleCoordinator.class, "Platform initialization complete.");
+        this.eventBus = new EventBus();
+        TrystLog.info(ApplicationLifecycleCoordinator.class, "Platform initialization complete. EventBus ready.");
     }
 
     private void onConfigurationInitialization() {
-        this.configuration = ApplicationConfiguration.createDefault();
+        if (eventBus == null) {
+            this.eventBus = new EventBus();
+        }
+        Path configDir = Path.of(System.getProperty("user.home", ".")).resolve(".tryst").normalize();
+        this.configurationService = new ConfigurationService(configDir);
+        this.configuration = configurationService.getConfiguration();
         TrystLog.info(ApplicationLifecycleCoordinator.class,
                 "Configuration initialized for application: " + configuration.applicationName() +
                         " (workspace: " + configuration.defaultWorkspaceDirectory() + ")");
@@ -129,7 +161,7 @@ public class ApplicationLifecycleCoordinator {
 
     private void onCoreServiceInitialization() {
         if (configuration == null) {
-            this.configuration = ApplicationConfiguration.createDefault();
+            onConfigurationInitialization();
         }
 
         // 1. Resolve authoritative database location
@@ -158,9 +190,52 @@ public class ApplicationLifecycleCoordinator {
                 workspaceRepository, projectRepository, taskRepository);
         this.asyncExecutionService = new ManagedAsyncExecutionService();
 
-        // 5. Register into standard OSGi Service Registry if BundleContext is available
+        // 5. Initialize Security, Tools & AI Infrastructure
+        this.permissionManager = new PermissionManager();
+        this.toolRegistry = new ToolRegistry();
+        this.toolRegistry.register(new FileTools.ReadFileTool());
+        this.toolRegistry.register(new FileTools.WriteFileTool());
+        this.toolRegistry.register(new FileTools.ListDirectoryTool());
+        this.toolRegistry.register(new FileTools.CreateDirectoryTool());
+        this.toolRegistry.register(new GitTools.GitDiffTool());
+
+        this.aiContextManager = new AiContextManager(configuration.maxContextTokens());
+        this.aiInferenceService = new OllamaClient(
+                configuration.ollamaEndpoint(),
+                Duration.ofSeconds(configuration.requestTimeoutSeconds())
+        );
+        this.gitService = new GitService();
+        this.buildAndTestService = new BuildAndTestService();
+        this.codeReviewService = new CodeReviewService();
+
+        this.sessionTaskOrchestrator = new SessionTaskOrchestrator(
+                sessionRepository,
+                taskRepository,
+                conversationMessageRepository,
+                executionResultRepository,
+                toolRegistry,
+                permissionManager,
+                eventBus,
+                workspaceService,
+                aiContextManager
+        );
+
+        this.autonomousDevelopmentService = new AutonomousDevelopmentService(
+                sessionTaskOrchestrator,
+                workspaceService,
+                taskRepository,
+                executionResultRepository,
+                toolRegistry,
+                permissionManager,
+                codeReviewService,
+                eventBus
+        );
+
+        // 6. Register into standard OSGi Service Registry if BundleContext is available
         if (bundleContext != null) {
             registerService(ApplicationConfiguration.class, this.configuration);
+            registerService(ConfigurationService.class, this.configurationService);
+            registerService(EventBus.class, this.eventBus);
             registerService(UnitOfWork.class, this.databaseManager);
             registerService(SqliteDatabaseManager.class, this.databaseManager);
             registerService(SqliteBackupService.class, this.backupService);
@@ -173,8 +248,18 @@ public class ApplicationLifecycleCoordinator {
             registerService(AgentRepository.class, this.agentRepository);
             registerService(WorkspaceService.class, this.workspaceService);
             registerService(AsyncExecutionService.class, this.asyncExecutionService);
+            registerService(PermissionManager.class, this.permissionManager);
+            registerService(ToolRegistry.class, this.toolRegistry);
+            registerService(AiContextManager.class, this.aiContextManager);
+            registerService(AiInferenceService.class, this.aiInferenceService);
+            registerService(GitService.class, this.gitService);
+            registerService(BuildAndTestService.class, this.buildAndTestService);
+            registerService(CodeReviewService.class, this.codeReviewService);
+            registerService(SessionTaskOrchestrator.class, this.sessionTaskOrchestrator);
+            registerService(AutonomousDevelopmentService.class, this.autonomousDevelopmentService);
+
             TrystLog.info(ApplicationLifecycleCoordinator.class,
-                    "Core and Persistence OSGi services registered successfully.");
+                    "Core, Persistence, AI, and Orchestration OSGi services registered successfully.");
         } else {
             TrystLog.warn(ApplicationLifecycleCoordinator.class,
                     "BundleContext unavailable; services initialized in standalone/test mode.");
@@ -235,6 +320,11 @@ public class ApplicationLifecycleCoordinator {
             databaseManager = null;
         }
 
+        if (eventBus != null) {
+            eventBus.clear();
+            eventBus = null;
+        }
+
         this.projectRepository = null;
         this.taskRepository = null;
         this.workspaceRepository = null;
@@ -246,6 +336,16 @@ public class ApplicationLifecycleCoordinator {
         this.migrationService = null;
         this.workspaceService = null;
         this.configuration = null;
+        this.configurationService = null;
+        this.permissionManager = null;
+        this.toolRegistry = null;
+        this.aiContextManager = null;
+        this.aiInferenceService = null;
+        this.gitService = null;
+        this.buildAndTestService = null;
+        this.codeReviewService = null;
+        this.sessionTaskOrchestrator = null;
+        this.autonomousDevelopmentService = null;
 
         TrystLog.info(ApplicationLifecycleCoordinator.class, "Service disposal complete.");
     }
@@ -281,6 +381,14 @@ public class ApplicationLifecycleCoordinator {
 
     public ApplicationConfiguration getConfiguration() {
         return configuration;
+    }
+
+    public ConfigurationService getConfigurationService() {
+        return configurationService;
+    }
+
+    public EventBus getEventBus() {
+        return eventBus;
     }
 
     public WorkspaceService getWorkspaceService() {
@@ -325,6 +433,38 @@ public class ApplicationLifecycleCoordinator {
 
     public SqliteBackupService getBackupService() {
         return backupService;
+    }
+
+    public PermissionManager getPermissionManager() {
+        return permissionManager;
+    }
+
+    public ToolRegistry getToolRegistry() {
+        return toolRegistry;
+    }
+
+    public AiInferenceService getAiInferenceService() {
+        return aiInferenceService;
+    }
+
+    public GitService getGitService() {
+        return gitService;
+    }
+
+    public BuildAndTestService getBuildAndTestService() {
+        return buildAndTestService;
+    }
+
+    public CodeReviewService getCodeReviewService() {
+        return codeReviewService;
+    }
+
+    public SessionTaskOrchestrator getSessionTaskOrchestrator() {
+        return sessionTaskOrchestrator;
+    }
+
+    public AutonomousDevelopmentService getAutonomousDevelopmentService() {
+        return autonomousDevelopmentService;
     }
 
     public List<ServiceRegistration<?>> getServiceRegistrations() {
