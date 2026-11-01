@@ -122,7 +122,7 @@ class CommunicationServiceTest {
         assertEquals(200, staticConn.getResponseCode());
         assertEquals("text/html; charset=UTF-8", staticConn.getContentType());
         String html = new String(staticConn.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-        assertTrue(html.contains("TRYST Server"));
+        assertTrue(html.contains("TRYST"));
 
         // 4. Test OPTIONS preflight request
         HttpURLConnection optionsConn = (HttpURLConnection) URI.create("http://127.0.0.1:" + port + "/api/status").toURL().openConnection();

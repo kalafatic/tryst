@@ -254,6 +254,116 @@ public class SchemaMigrationService {
         );
         migrations.add(new Migration(2, "Project isolation and code review persistence", v2Statements));
 
+        // V3: Production Platform - Users, Sessions, Audit, Telemetry, Notifications, and Managed Processes
+        List<String> v3Statements = List.of(
+                """
+                CREATE TABLE IF NOT EXISTS users (
+                    id TEXT PRIMARY KEY,
+                    username TEXT NOT NULL UNIQUE,
+                    password_hash TEXT NOT NULL,
+                    salt TEXT NOT NULL,
+                    role TEXT NOT NULL DEFAULT 'USER',
+                    active INTEGER NOT NULL DEFAULT 1,
+                    locked INTEGER NOT NULL DEFAULT 0,
+                    failed_attempts INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);",
+                "CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);",
+
+                """
+                CREATE TABLE IF NOT EXISTS user_sessions (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    token_hash TEXT NOT NULL UNIQUE,
+                    client_ip TEXT,
+                    user_agent TEXT,
+                    expires_at TEXT NOT NULL,
+                    revoked INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    last_activity TEXT NOT NULL,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                );
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id);",
+                "CREATE INDEX IF NOT EXISTS idx_user_sessions_token ON user_sessions(token_hash);",
+                "CREATE INDEX IF NOT EXISTS idx_user_sessions_revoked ON user_sessions(revoked);",
+
+                """
+                CREATE TABLE IF NOT EXISTS audit_events (
+                    id TEXT PRIMARY KEY,
+                    event_time TEXT NOT NULL,
+                    actor_id TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    target_type TEXT NOT NULL,
+                    target_id TEXT,
+                    project_id TEXT,
+                    task_id TEXT,
+                    outcome TEXT NOT NULL,
+                    details_json TEXT
+                );
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_audit_events_time ON audit_events(event_time);",
+                "CREATE INDEX IF NOT EXISTS idx_audit_events_actor ON audit_events(actor_id);",
+                "CREATE INDEX IF NOT EXISTS idx_audit_events_action ON audit_events(action);",
+                "CREATE INDEX IF NOT EXISTS idx_audit_events_project ON audit_events(project_id);",
+
+                """
+                CREATE TABLE IF NOT EXISTS telemetry_snapshots (
+                    id TEXT PRIMARY KEY,
+                    timestamp TEXT NOT NULL,
+                    cpu_system REAL,
+                    cpu_process REAL,
+                    memory_heap_used INTEGER,
+                    memory_heap_max INTEGER,
+                    memory_system_used INTEGER,
+                    disk_workspace_used INTEGER,
+                    disk_workspace_total INTEGER,
+                    active_sessions INTEGER,
+                    queued_tasks INTEGER,
+                    running_tasks INTEGER,
+                    ai_latency_ms REAL
+                );
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_telemetry_time ON telemetry_snapshots(timestamp);",
+
+                """
+                CREATE TABLE IF NOT EXISTS notifications (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    reference_type TEXT,
+                    reference_id TEXT,
+                    is_read INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                );
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON notifications(user_id, is_read);",
+
+                """
+                CREATE TABLE IF NOT EXISTS managed_processes (
+                    id TEXT PRIMARY KEY,
+                    task_id TEXT,
+                    pid INTEGER NOT NULL,
+                    command_class TEXT NOT NULL,
+                    working_dir TEXT NOT NULL,
+                    start_time TEXT NOT NULL,
+                    duration_ms INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL,
+                    exit_code INTEGER,
+                    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL
+                );
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_managed_processes_task ON managed_processes(task_id);",
+                "CREATE INDEX IF NOT EXISTS idx_managed_processes_status ON managed_processes(status);"
+        );
+        migrations.add(new Migration(3, "Production platform security, observability and operational intelligence", v3Statements));
+
         return migrations;
     }
 }
