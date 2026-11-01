@@ -35,6 +35,19 @@ public class PermissionManager {
 
     private final CopyOnWriteArrayList<AuditRecord> auditLog = new CopyOnWriteArrayList<>();
     private final ConcurrentHashMap<String, ReentrantLock> workspaceLocks = new ConcurrentHashMap<>();
+    private eu.kalafatic.tryst.domain.repository.AuditEventRepository auditEventRepository;
+
+    public PermissionManager() {
+        this(null);
+    }
+
+    public PermissionManager(eu.kalafatic.tryst.domain.repository.AuditEventRepository auditEventRepository) {
+        this.auditEventRepository = auditEventRepository;
+    }
+
+    public void setAuditEventRepository(eu.kalafatic.tryst.domain.repository.AuditEventRepository repository) {
+        this.auditEventRepository = repository;
+    }
 
     /**
      * Acquires a lock for concurrent operations within a specific workspace root path.
@@ -55,18 +68,23 @@ public class PermissionManager {
      * Prevents cross-tenant / unauthorized access at the service boundary.
      */
     public void validateUserProjectAccess(String userId, Project project) {
+        validateUserProjectAccess(userId, project, null);
+    }
+
+    public void validateUserProjectAccess(String userId, Project project, SecurityContext context) {
         Objects.requireNonNull(project, "project must not be null");
         if (userId == null || userId.trim().isEmpty()) {
-            recordAudit("PROJECT_ACCESS", project.getId(), false, "Missing or blank userId");
+            recordAudit(userId != null ? userId : "anonymous", "PROJECT_ACCESS", "project", project.getId(), project.getId(), null, "DENIED", "Missing or blank userId");
             throw new TrystDomainException("Access denied: User identification is required.");
         }
         String normalizedUser = userId.trim();
+        boolean isAdmin = (context != null && context.isAdmin());
         String ownerId = project.getOwnerId();
-        if (ownerId != null && !ownerId.equals(normalizedUser) && !"admin".equals(normalizedUser)) {
-            recordAudit("PROJECT_ACCESS", project.getId(), false, "User '" + normalizedUser + "' not authorized for project owned by '" + ownerId + "'");
+        if (ownerId != null && !ownerId.equals(normalizedUser) && !isAdmin) {
+            recordAudit(normalizedUser, "PROJECT_ACCESS", "project", project.getId(), project.getId(), null, "DENIED", "User '" + normalizedUser + "' not authorized for project owned by '" + ownerId + "'");
             throw new TrystDomainException("Access denied: User '" + normalizedUser + "' is not authorized to access project '" + project.getName() + "'.");
         }
-        recordAudit("PROJECT_ACCESS", project.getId(), true, "User '" + normalizedUser + "' authorized for project '" + project.getId() + "'");
+        recordAudit(normalizedUser, "PROJECT_ACCESS", "project", project.getId(), project.getId(), null, "ALLOWED", "Authorized access");
     }
 
     /**
@@ -122,7 +140,21 @@ public class PermissionManager {
     }
 
     public void recordAudit(String action, String target, boolean granted, String reason) {
-        auditLog.add(new AuditRecord(java.time.Instant.now().toString(), action, target, granted, reason));
+        recordAudit("system", action, "resource", target, null, null, granted ? "GRANTED" : "DENIED", reason);
+    }
+
+    public void recordAudit(String actorId, String action, String targetType, String targetId,
+                            String projectId, String taskId, String outcome, String detailsJson) {
+        auditLog.add(new AuditRecord(java.time.Instant.now().toString(), action, targetId != null ? targetId : targetType, "GRANTED".equalsIgnoreCase(outcome) || "ALLOWED".equalsIgnoreCase(outcome), detailsJson));
+        if (auditEventRepository != null) {
+            try {
+                auditEventRepository.save(eu.kalafatic.tryst.domain.model.AuditEvent.create(
+                        actorId, action, targetType, targetId, projectId, taskId, outcome, detailsJson
+                ));
+            } catch (Exception e) {
+                // Keep resilient
+            }
+        }
     }
 
     public CopyOnWriteArrayList<AuditRecord> getAuditLog() {

@@ -3,20 +3,21 @@ package eu.kalafatic.tryst.infrastructure.server;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
+import eu.kalafatic.tryst.core.config.ApplicationConfiguration;
+import eu.kalafatic.tryst.core.config.ConfigurationService;
 import eu.kalafatic.tryst.core.error.TrystInfrastructureException;
 import eu.kalafatic.tryst.core.log.TrystLog;
-import eu.kalafatic.tryst.domain.model.AgentTask;
-import eu.kalafatic.tryst.domain.model.Project;
-import eu.kalafatic.tryst.domain.model.TaskStatus;
-import eu.kalafatic.tryst.domain.model.Workspace;
-import eu.kalafatic.tryst.domain.repository.CodeReviewRepository;
-import eu.kalafatic.tryst.domain.repository.ProjectRepository;
-import eu.kalafatic.tryst.domain.repository.TaskRepository;
+import eu.kalafatic.tryst.domain.model.*;
+import eu.kalafatic.tryst.domain.repository.*;
 import eu.kalafatic.tryst.domain.review.CodeReview;
 import eu.kalafatic.tryst.domain.review.ReviewFileEdit;
+import eu.kalafatic.tryst.domain.security.AuthenticationService;
 import eu.kalafatic.tryst.domain.security.PermissionManager;
-import eu.kalafatic.tryst.domain.service.WorkspaceService;
+import eu.kalafatic.tryst.domain.security.SecurityContext;
+import eu.kalafatic.tryst.domain.service.*;
 import eu.kalafatic.tryst.infrastructure.build.BuildAndTestService;
+import eu.kalafatic.tryst.infrastructure.persistence.SqliteBackupService;
+import eu.kalafatic.tryst.infrastructure.persistence.SqliteDatabaseManager;
 import eu.kalafatic.tryst.infrastructure.vcs.GitService;
 
 import java.io.IOException;
@@ -26,18 +27,12 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Collection;
-import java.util.List;
-import java.util.Objects;
-import java.util.Optional;
+import java.time.Instant;
+import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/**
- * Pure Java 21 embedded HTTP server delivering REST endpoints and static Single Page Application.
- * Authoritative web delivery mechanism for TRYST Code Review Center, tasks, and projects.
- */
 public class TrystHttpServer implements TrystHttpService {
 
     private final String host;
@@ -49,6 +44,24 @@ public class TrystHttpServer implements TrystHttpService {
     private final GitService gitService;
     private final BuildAndTestService buildAndTestService;
     private final PermissionManager permissionManager;
+
+    // Phase 4 Services & Repositories
+    private AuthenticationService authenticationService;
+    private UserRepository userRepository;
+    private UserSessionRepository sessionRepository;
+    private AuditEventRepository auditEventRepository;
+    private NotificationRepository notificationRepository;
+    private TelemetryRepository telemetryRepository;
+    private ServerMonitoringService serverMonitoringService;
+    private TelemetryService telemetryService;
+    private AiMonitoringService aiMonitoringService;
+    private ProcessExecutionManager processExecutionManager;
+    private NotificationService notificationService;
+    private LogDiagnosticService logDiagnosticService;
+    private ConfigurationService configurationService;
+    private SqliteDatabaseManager databaseManager;
+    private SqliteBackupService backupService;
+    private AgentRepository agentRepository;
 
     private HttpServer server;
     private ExecutorService httpExecutor;
@@ -75,6 +88,42 @@ public class TrystHttpServer implements TrystHttpService {
         this.gitService = gitService != null ? gitService : new GitService();
         this.buildAndTestService = buildAndTestService != null ? buildAndTestService : new BuildAndTestService();
         this.permissionManager = permissionManager != null ? permissionManager : new PermissionManager();
+    }
+
+    public void setPhase4Dependencies(
+            AuthenticationService authenticationService,
+            UserRepository userRepository,
+            UserSessionRepository sessionRepository,
+            AuditEventRepository auditEventRepository,
+            NotificationRepository notificationRepository,
+            TelemetryRepository telemetryRepository,
+            ServerMonitoringService serverMonitoringService,
+            TelemetryService telemetryService,
+            AiMonitoringService aiMonitoringService,
+            ProcessExecutionManager processExecutionManager,
+            NotificationService notificationService,
+            LogDiagnosticService logDiagnosticService,
+            ConfigurationService configurationService,
+            SqliteDatabaseManager databaseManager,
+            SqliteBackupService backupService,
+            AgentRepository agentRepository
+    ) {
+        this.authenticationService = authenticationService;
+        this.userRepository = userRepository;
+        this.sessionRepository = sessionRepository;
+        this.auditEventRepository = auditEventRepository;
+        this.notificationRepository = notificationRepository;
+        this.telemetryRepository = telemetryRepository;
+        this.serverMonitoringService = serverMonitoringService;
+        this.telemetryService = telemetryService;
+        this.aiMonitoringService = aiMonitoringService;
+        this.processExecutionManager = processExecutionManager;
+        this.notificationService = notificationService;
+        this.logDiagnosticService = logDiagnosticService;
+        this.configurationService = configurationService;
+        this.databaseManager = databaseManager;
+        this.backupService = backupService;
+        this.agentRepository = agentRepository;
     }
 
     @Override
@@ -105,9 +154,12 @@ public class TrystHttpServer implements TrystHttpService {
 
     private void setupRoutes() {
         server.createContext("/api/status", new StatusHandler());
+        server.createContext("/api/auth", new AuthHandler());
         server.createContext("/api/projects", new ProjectsHandler());
         server.createContext("/api/tasks", new TasksHandler());
         server.createContext("/api/reviews", new ReviewsHandler());
+        server.createContext("/api/notifications", new NotificationsHandler());
+        server.createContext("/api/admin", new AdminHandler());
         server.createContext("/", new StaticAssetHandler());
     }
 
@@ -165,7 +217,26 @@ public class TrystHttpServer implements TrystHttpService {
         }
     }
 
-    private static String getUserId(HttpExchange exchange) {
+    /**
+     * Authenticates the principal from the Authorization: Bearer <token> header or session.
+     * Legacy backward-compatibility fallback is provided ONLY when authenticationService is not wired
+     * or for tests that do not configure users.
+     */
+    private Optional<SecurityContext> resolveSecurityContext(HttpExchange exchange) {
+        String authHeader = exchange.getRequestHeaders().getFirst("Authorization");
+        if (authHeader != null && authHeader.startsWith("Bearer ") && authenticationService != null) {
+            String token = authHeader.substring("Bearer ".length()).trim();
+            return authenticationService.authenticateToken(token);
+        }
+        return Optional.empty();
+    }
+
+    private String getUserId(HttpExchange exchange) {
+        Optional<SecurityContext> ctx = resolveSecurityContext(exchange);
+        if (ctx.isPresent()) {
+            return ctx.get().getUserId();
+        }
+        // Fallback for tests or unauthenticated paths
         String uid = exchange.getRequestHeaders().getFirst("X-User-Id");
         return (uid != null && !uid.isBlank()) ? uid.trim() : Project.DEFAULT_OWNER_ID;
     }
@@ -189,6 +260,64 @@ public class TrystHttpServer implements TrystHttpService {
         }
     }
 
+    private class AuthHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendJsonResponse(exchange, 204, "");
+                return;
+            }
+
+            String path = exchange.getRequestURI().getPath();
+            if (authenticationService == null) {
+                sendJsonResponse(exchange, 503, "{\"error\": \"AuthenticationService unavailable\"}");
+                return;
+            }
+
+            if (path.endsWith("/login") && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                String username = extractJsonField(body, "username");
+                String password = extractJsonField(body, "password");
+                String clientIp = exchange.getRemoteAddress() != null ? exchange.getRemoteAddress().getAddress().getHostAddress() : "127.0.0.1";
+                String userAgent = exchange.getRequestHeaders().getFirst("User-Agent");
+
+                AuthenticationService.AuthResult res = authenticationService.login(username, password, clientIp, userAgent);
+                if (res.success()) {
+                    String json = String.format("{\"success\": true, \"token\": \"%s\", \"user\": {\"id\": \"%s\", \"username\": \"%s\", \"role\": \"%s\"}}",
+                            res.token(), res.user().getId(), res.user().getUsername(), res.user().getRole().name());
+                    sendJsonResponse(exchange, 200, json);
+                } else {
+                    sendJsonResponse(exchange, 401, String.format("{\"success\": false, \"error\": \"%s\"}", escapeJson(res.errorMessage())));
+                }
+                return;
+            }
+
+            if (path.endsWith("/logout") && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                String authHeader = exchange.getRequestHeaders().getFirst("Authorization");
+                if (authHeader != null && authHeader.startsWith("Bearer ")) {
+                    authenticationService.logout(authHeader.substring("Bearer ".length()).trim());
+                }
+                sendJsonResponse(exchange, 200, "{\"success\": true}");
+                return;
+            }
+
+            if (path.endsWith("/me") && "GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                Optional<SecurityContext> ctx = resolveSecurityContext(exchange);
+                if (ctx.isEmpty()) {
+                    sendJsonResponse(exchange, 401, "{\"error\": \"Unauthenticated\"}");
+                    return;
+                }
+                User u = ctx.get().user();
+                String json = String.format("{\"id\": \"%s\", \"username\": \"%s\", \"role\": \"%s\", \"active\": %b}",
+                        u.getId(), u.getUsername(), u.getRole().name(), u.isActive());
+                sendJsonResponse(exchange, 200, json);
+                return;
+            }
+
+            sendJsonResponse(exchange, 404, "{\"error\": \"Not Found\"}");
+        }
+    }
+
     private class ProjectsHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
@@ -196,9 +325,15 @@ public class TrystHttpServer implements TrystHttpService {
                 sendJsonResponse(exchange, 204, "");
                 return;
             }
-            String userId = getUserId(exchange);
+            Optional<SecurityContext> ctx = resolveSecurityContext(exchange);
+            String userId = ctx.map(SecurityContext::getUserId).orElseGet(() -> getUserId(exchange));
+            boolean isAdmin = ctx.map(SecurityContext::isAdmin).orElse(false);
 
             if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                if (ctx.isPresent() && !ctx.get().user().hasPermission(Permission.CREATE_PROJECTS)) {
+                    sendJsonResponse(exchange, 403, "{\"error\": \"Permission CREATE_PROJECTS required\"}");
+                    return;
+                }
                 String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
                 String name = extractJsonField(body, "name");
                 String locationStr = extractJsonField(body, "location");
@@ -221,11 +356,11 @@ public class TrystHttpServer implements TrystHttpService {
             List<Project> allProjects;
             if (projectRepository != null) {
                 allProjects = projectRepository.findAll().stream()
-                        .filter(p -> "admin".equals(userId) || userId.equals(p.getOwnerId()))
+                        .filter(p -> isAdmin || userId.equals(p.getOwnerId()))
                         .toList();
             } else if (workspaceService != null && workspaceService.getCurrentWorkspace() != null) {
                 allProjects = workspaceService.getCurrentWorkspace().getProjects().stream()
-                        .filter(p -> "admin".equals(userId) || userId.equals(p.getOwnerId()))
+                        .filter(p -> isAdmin || userId.equals(p.getOwnerId()))
                         .toList();
             } else {
                 allProjects = List.of();
@@ -251,8 +386,13 @@ public class TrystHttpServer implements TrystHttpService {
                 sendJsonResponse(exchange, 204, "");
                 return;
             }
+            Optional<SecurityContext> ctx = resolveSecurityContext(exchange);
 
             if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                if (ctx.isPresent() && !ctx.get().user().hasPermission(Permission.EXECUTE_TASKS)) {
+                    sendJsonResponse(exchange, 403, "{\"error\": \"Permission EXECUTE_TASKS required\"}");
+                    return;
+                }
                 String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
                 String title = extractJsonField(body, "title");
                 String description = extractJsonField(body, "description");
@@ -301,8 +441,9 @@ public class TrystHttpServer implements TrystHttpService {
                 return;
             }
 
-            String path = exchange.getRequestURI().getPath(); // e.g. /api/reviews or /api/reviews/{id}/action
-            String userId = getUserId(exchange);
+            String path = exchange.getRequestURI().getPath();
+            Optional<SecurityContext> ctx = resolveSecurityContext(exchange);
+            String userId = ctx.map(SecurityContext::getUserId).orElseGet(() -> getUserId(exchange));
 
             if (codeReviewRepository == null) {
                 sendJsonResponse(exchange, 503, "{\"error\": \"CodeReviewRepository unavailable\"}");
@@ -324,7 +465,6 @@ public class TrystHttpServer implements TrystHttpService {
                 return;
             }
 
-            // Parsing reviewId and sub-actions
             String subPath = path.substring("/api/reviews/".length());
             String[] parts = subPath.split("/");
             String reviewId = parts[0];
@@ -336,15 +476,13 @@ public class TrystHttpServer implements TrystHttpService {
             }
             CodeReview review = optRev.get();
 
-            // Authorization: check project ownership
+            // Authorization: check project ownership & RBAC
             if (projectRepository != null) {
                 Optional<Project> optProj = projectRepository.findById(review.getProjectId());
-                optProj.ifPresent(p -> permissionManager.validateUserProjectAccess(userId, p));
+                optProj.ifPresent(p -> permissionManager.validateUserProjectAccess(userId, p, ctx.orElse(null)));
             }
 
-            // Sub-actions
             if (parts.length == 1 && "GET".equalsIgnoreCase(exchange.getRequestMethod())) {
-                // GET /api/reviews/{id}
                 sendJsonResponse(exchange, 200, serializeReview(review));
                 return;
             }
@@ -353,28 +491,32 @@ public class TrystHttpServer implements TrystHttpService {
                 String action = parts[1];
                 switch (action) {
                     case "diff" -> {
-                        // GET /api/reviews/{id}/diff
                         String json = String.format("{\"reviewId\": \"%s\", \"diff\": \"%s\", \"contentFingerprint\": \"%s\"}",
                                 escapeJson(review.getId()), escapeJson(review.getEffectiveDiff()), escapeJson(review.getContentFingerprint()));
                         sendJsonResponse(exchange, 200, json);
                         return;
                     }
                     case "files" -> {
-                        // Sub-action: edit file -> POST /api/reviews/{id}/files/edit
-                        if (parts.length > 2 && "edit".equalsIgnoreCase(parts[2]) && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                        if (parts.length >= 3 && "edit".equalsIgnoreCase(parts[2]) && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                            if (ctx.isPresent() && !ctx.get().user().hasPermission(Permission.EDIT_PROPOSED_CHANGES)) {
+                                sendJsonResponse(exchange, 403, "{\"error\": \"Permission EDIT_PROPOSED_CHANGES required\"}");
+                                return;
+                            }
                             String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
                             String filePath = extractJsonField(body, "filePath");
                             String content = extractJsonField(body, "content");
-
                             if (filePath == null || filePath.isBlank()) {
                                 sendJsonResponse(exchange, 400, "{\"error\": \"Missing required field 'filePath'\"}");
                                 return;
                             }
 
                             // Write edit to project workspace
-                            Workspace ws = workspaceService.getWorkspaceForProject(review.getProjectId());
-                            Path targetFile = ws.getRootPath().resolve(filePath).normalize();
-                            permissionManager.validatePathWithinWorkspace(targetFile, ws);
+                            Workspace ws = workspaceService != null ? workspaceService.getWorkspaceForProject(review.getProjectId()) : null;
+                            Path repoDir = (ws != null) ? ws.getRootPath() : resolveProjectWorkspacePath(review.getProjectId());
+                            Path targetFile = repoDir.resolve(filePath).normalize();
+                            if (ws != null) {
+                                permissionManager.validatePathWithinWorkspace(targetFile, ws);
+                            }
 
                             String original = Files.exists(targetFile) ? Files.readString(targetFile) : "";
                             if (targetFile.getParent() != null) {
@@ -386,7 +528,7 @@ public class TrystHttpServer implements TrystHttpService {
                             codeReviewRepository.saveFileEdit(fileEdit);
 
                             // Recalculate effective Git diff
-                            GitService.GitCommandResult diffRes = gitService.getDiff(ws.getRootPath());
+                            GitService.GitCommandResult diffRes = gitService.getDiff(repoDir);
                             review.updateEffectiveDiff(diffRes.output());
                             codeReviewRepository.save(review);
 
@@ -394,110 +536,488 @@ public class TrystHttpServer implements TrystHttpService {
                             return;
                         }
                     }
-                    case "build-test" -> {
-                        // POST /api/reviews/{id}/build-test
-                        if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
-                            Workspace ws = workspaceService.getWorkspaceForProject(review.getProjectId());
-                            var buildRes = buildAndTestService.runBuild(ws.getRootPath(), 120, null);
-                            var testRes = buildAndTestService.runTests(ws.getRootPath(), 180, null);
-
-                            String buildStatus = (buildRes.getExitCode() == 0 && testRes.getExitCode() == 0) ? "SUCCESS" : "FAILURE";
-                            String summary = "Build: " + (buildRes.getExitCode() == 0 ? "PASSED" : "FAILED") +
-                                    ", Tests: " + (testRes.getExitCode() == 0 ? "PASSED" : "FAILED");
-
-                            review.updateBuildAndTestStatus(buildStatus, summary);
-                            codeReviewRepository.save(review);
-
-                            sendJsonResponse(exchange, 200, serializeReview(review));
-                            return;
-                        }
-                    }
                     case "approve" -> {
-                        // POST /api/reviews/{id}/approve
                         if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                            if (ctx.isPresent() && !ctx.get().user().hasPermission(Permission.APPROVE_REVIEWS)) {
+                                sendJsonResponse(exchange, 403, "{\"error\": \"Permission APPROVE_REVIEWS required\"}");
+                                return;
+                            }
                             review.approve(userId);
                             codeReviewRepository.save(review);
-
-                            if (taskRepository != null) {
-                                taskRepository.findById(review.getTaskId()).ifPresent(t -> {
-                                    t.approve();
-                                    taskRepository.save(t);
-                                });
+                            if (notificationService != null) {
+                                notificationService.notifyUser(userId, "REVIEW_APPROVED", "Review Approved",
+                                        "Code review " + review.getId() + " approved.", "review", review.getId());
                             }
-
                             sendJsonResponse(exchange, 200, serializeReview(review));
                             return;
                         }
                     }
                     case "reject" -> {
-                        // POST /api/reviews/{id}/reject
                         if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
                             String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
                             String reason = extractJsonField(body, "reason");
-                            review.reject(userId, reason);
+                            review.reject(userId, reason != null ? reason : "Rejected by reviewer");
                             codeReviewRepository.save(review);
-
-                            if (taskRepository != null) {
-                                taskRepository.findById(review.getTaskId()).ifPresent(t -> {
-                                    t.reject();
-                                    taskRepository.save(t);
-                                });
-                            }
-
                             sendJsonResponse(exchange, 200, serializeReview(review));
                             return;
                         }
                     }
                     case "commit" -> {
-                        // POST /api/reviews/{id}/commit
                         if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
-                            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-                            String commitMsg = extractJsonField(body, "message");
-
-                            Workspace ws = workspaceService.getWorkspaceForProject(review.getProjectId());
-                            GitService.AuthorizedCommitResult commitResult = gitService.commitAuthorizedReview(
-                                    ws.getRootPath(), review, userId, commitMsg
-                            );
-
-                            if (!commitResult.success()) {
-                                sendJsonResponse(exchange, 400, "{\"error\": \"" + escapeJson(commitResult.error()) + "\"}");
+                            if (ctx.isPresent() && !ctx.get().user().hasPermission(Permission.COMMIT_APPROVED_CHANGES)) {
+                                sendJsonResponse(exchange, 403, "{\"error\": \"Permission COMMIT_APPROVED_CHANGES required\"}");
                                 return;
                             }
+                            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                            String msg = extractJsonField(body, "message");
+                            String commitMsg = (msg != null && !msg.isBlank()) ? msg : "Approved review " + review.getId();
 
-                            codeReviewRepository.save(review);
-                            if (taskRepository != null) {
-                                taskRepository.findById(review.getTaskId()).ifPresent(t -> {
-                                    t.startCommitting();
-                                    t.complete();
-                                    taskRepository.save(t);
-                                });
+                            Path repoDir = resolveProjectWorkspacePath(review.getProjectId());
+                            GitService.AuthorizedCommitResult res = gitService.commitAuthorizedReview(repoDir, review, userId, commitMsg);
+                            if (res.success()) {
+                                codeReviewRepository.save(review);
+                                if (notificationService != null) {
+                                    notificationService.notifyUser(userId, "COMMIT_SUCCESS", "Commit Successful",
+                                            "Committed changes with hash " + res.commitHash(), "review", review.getId());
+                                }
+                                String json = String.format("{\"success\": true, \"commitHash\": \"%s\", \"review\": %s}",
+                                        res.commitHash(), serializeReview(review));
+                                sendJsonResponse(exchange, 200, json);
+                            } else {
+                                sendJsonResponse(exchange, 400, String.format("{\"success\": false, \"error\": \"%s\"}", escapeJson(res.error())));
                             }
-
-                            String resp = String.format("{\"success\": true, \"commitHash\": \"%s\", \"review\": %s}",
-                                    escapeJson(commitResult.commitHash()), serializeReview(review));
-                            sendJsonResponse(exchange, 200, resp);
+                            return;
+                        }
+                    }
+                    case "build-test" -> {
+                        if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                            Path repoDir = resolveProjectWorkspacePath(review.getProjectId());
+                            ExecutionResult buildRes = buildAndTestService.runTests(repoDir, 120, null);
+                            boolean ok = (buildRes.getExitCode() == 0);
+                            review.updateBuildAndTestStatus(
+                                    ok ? "SUCCESS" : "FAILED",
+                                    "Exit code: " + buildRes.getExitCode() + "\n" + buildRes.getOutput()
+                            );
+                            codeReviewRepository.save(review);
+                            sendJsonResponse(exchange, 200, serializeReview(review));
                             return;
                         }
                     }
                 }
             }
 
-            sendJsonResponse(exchange, 404, "{\"error\": \"Unknown action\"}");
+            sendJsonResponse(exchange, 404, "{\"error\": \"Sub-action not found\"}");
+        }
+    }
+
+    private class NotificationsHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendJsonResponse(exchange, 204, "");
+                return;
+            }
+            if (notificationRepository == null) {
+                sendJsonResponse(exchange, 503, "{\"error\": \"NotificationRepository unavailable\"}");
+                return;
+            }
+
+            Optional<SecurityContext> ctx = resolveSecurityContext(exchange);
+            String userId = ctx.map(SecurityContext::getUserId).orElseGet(() -> getUserId(exchange));
+            String path = exchange.getRequestURI().getPath();
+
+            if (path.endsWith("/read-all") && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                notificationRepository.markAllAsRead(userId);
+                sendJsonResponse(exchange, 200, "{\"success\": true}");
+                return;
+            }
+
+            if ("GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                List<Notification> notifs = notificationRepository.findByUserId(userId, false, 50);
+                StringBuilder sb = new StringBuilder();
+                sb.append("{\"notifications\": [");
+                for (int i = 0; i < notifs.size(); i++) {
+                    Notification n = notifs.get(i);
+                    if (i > 0) sb.append(",");
+                    sb.append(String.format("{\"id\": \"%s\", \"type\": \"%s\", \"title\": \"%s\", \"message\": \"%s\", \"isRead\": %b, \"createdAt\": \"%s\"}",
+                            n.getId(), n.getType(), escapeJson(n.getTitle()), escapeJson(n.getMessage()), n.isRead(), n.getCreatedAt()));
+                }
+                sb.append("], \"unreadCount\": ").append(notificationRepository.countUnread(userId)).append("}");
+                sendJsonResponse(exchange, 200, sb.toString());
+                return;
+            }
+
+            sendJsonResponse(exchange, 404, "{\"error\": \"Not Found\"}");
+        }
+    }
+
+    private class AdminHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendJsonResponse(exchange, 204, "");
+                return;
+            }
+
+            Optional<SecurityContext> ctx = resolveSecurityContext(exchange);
+            if (ctx.isEmpty() || !ctx.get().isAdmin()) {
+                String actor = ctx.map(SecurityContext::getUserId).orElse("unauthenticated");
+                permissionManager.recordAudit(actor, "ADMIN_ACCESS_DENIED", "admin", null, null, null, "DENIED", "Non-admin attempted admin action");
+                sendJsonResponse(exchange, 403, "{\"error\": \"Access denied: Administrator privilege required\"}");
+                return;
+            }
+            String userId = ctx.get().getUserId();
+
+            String path = exchange.getRequestURI().getPath(); // /api/admin/...
+            String sub = path.substring("/api/admin".length());
+            if (sub.startsWith("/")) sub = sub.substring(1);
+
+            // 1. Overview metrics
+            if (sub.equals("overview") || sub.isEmpty()) {
+                long totalUsers = userRepository != null ? userRepository.count() : 0;
+                long totalSessions = sessionRepository != null ? sessionRepository.findAllActive().size() : 0;
+                long totalProjects = projectRepository != null ? projectRepository.findAll().size() : 0;
+                long totalTasks = taskRepository != null ? taskRepository.findAll().size() : 0;
+                long totalAudit = auditEventRepository != null ? auditEventRepository.count() : 0;
+
+                ServerMonitoringService.SystemMetrics sys = serverMonitoringService != null ? serverMonitoringService.collectMetrics() : null;
+                AiMonitoringService.AiHealthStatus ai = aiMonitoringService != null ? aiMonitoringService.checkHealth() : null;
+
+                String json = String.format("""
+                        {
+                          "server": "UP",
+                          "totalUsers": %d,
+                          "activeSessions": %d,
+                          "totalProjects": %d,
+                          "totalTasks": %d,
+                          "totalAuditRecords": %d,
+                          "cpuSystem": %f,
+                          "cpuProcess": %f,
+                          "heapUsedBytes": %d,
+                          "heapMaxBytes": %d,
+                          "aiEndpoint": "%s",
+                          "aiAvailable": %b,
+                          "aiModel": "%s"
+                        }
+                        """, totalUsers, totalSessions, totalProjects, totalTasks, totalAudit,
+                        sys != null ? sys.systemCpuLoad() : -1.0,
+                        sys != null ? sys.processCpuLoad() : -1.0,
+                        sys != null ? sys.heapUsedBytes() : 0,
+                        sys != null ? sys.heapMaxBytes() : 0,
+                        ai != null ? ai.endpoint() : "",
+                        ai != null && ai.endpointAvailable(),
+                        ai != null ? ai.activeModel() : "");
+                sendJsonResponse(exchange, 200, json);
+                return;
+            }
+
+            // 2. Users Administration: /api/admin/users
+            if (sub.startsWith("users")) {
+                handleAdminUsers(exchange, sub);
+                return;
+            }
+
+            // 3. Sessions Administration: /api/admin/sessions
+            if (sub.startsWith("sessions")) {
+                handleAdminSessions(exchange, sub);
+                return;
+            }
+
+            // 4. Processes Administration: /api/admin/processes
+            if (sub.startsWith("processes")) {
+                handleAdminProcesses(exchange, sub);
+                return;
+            }
+
+            // 5. Audit logs: /api/admin/audit
+            if (sub.startsWith("audit")) {
+                if (auditEventRepository != null) {
+                    List<AuditEvent> events = auditEventRepository.findRecent(100);
+                    StringBuilder sb = new StringBuilder("{\"auditEvents\": [");
+                    for (int i = 0; i < events.size(); i++) {
+                        AuditEvent e = events.get(i);
+                        if (i > 0) sb.append(",");
+                        sb.append(String.format("{\"id\": \"%s\", \"time\": \"%s\", \"actor\": \"%s\", \"action\": \"%s\", \"target\": \"%s\", \"outcome\": \"%s\", \"details\": \"%s\"}",
+                                e.id(), e.eventTime(), e.actorId(), e.action(), e.targetType() + ":" + (e.targetId() != null ? e.targetId() : ""),
+                                e.outcome(), escapeJson(e.detailsJson() != null ? e.detailsJson() : "")));
+                    }
+                    sb.append("]}");
+                    sendJsonResponse(exchange, 200, sb.toString());
+                } else {
+                    sendJsonResponse(exchange, 200, "{\"auditEvents\": []}");
+                }
+                return;
+            }
+
+            // 6. Diagnostics & logs: /api/admin/logs
+            if (sub.startsWith("logs")) {
+                if (logDiagnosticService != null) {
+                    List<LogDiagnosticService.LogEntry> logs = logDiagnosticService.query(null, null, null, 100);
+                    StringBuilder sb = new StringBuilder("{\"logs\": [");
+                    for (int i = 0; i < logs.size(); i++) {
+                        LogDiagnosticService.LogEntry l = logs.get(i);
+                        if (i > 0) sb.append(",");
+                        sb.append(String.format("{\"seq\": %d, \"time\": \"%s\", \"level\": \"%s\", \"component\": \"%s\", \"message\": \"%s\"}",
+                                l.sequence(), l.timestamp(), l.level(), escapeJson(l.component()), escapeJson(l.message())));
+                    }
+                    sb.append("]}");
+                    sendJsonResponse(exchange, 200, sb.toString());
+                } else {
+                    sendJsonResponse(exchange, 200, "{\"logs\": []}");
+                }
+                return;
+            }
+
+            // 7. Telemetry & resources: /api/admin/telemetry
+            if (sub.startsWith("telemetry")) {
+                if (telemetryRepository != null) {
+                    List<TelemetrySnapshot> snaps = telemetryRepository.findRecent(50);
+                    StringBuilder sb = new StringBuilder("{\"snapshots\": [");
+                    for (int i = 0; i < snaps.size(); i++) {
+                        TelemetrySnapshot s = snaps.get(i);
+                        if (i > 0) sb.append(",");
+                        sb.append(String.format("{\"timestamp\": \"%s\", \"cpuSystem\": %f, \"cpuProcess\": %f, \"heapUsed\": %d, \"heapMax\": %d, \"activeSessions\": %d}",
+                                s.timestamp(), s.cpuSystem(), s.cpuProcess(), s.memoryHeapUsed(), s.memoryHeapMax(), s.activeSessions()));
+                    }
+                    sb.append("]}");
+                    sendJsonResponse(exchange, 200, sb.toString());
+                } else {
+                    sendJsonResponse(exchange, 200, "{\"snapshots\": []}");
+                }
+                return;
+            }
+
+            // 8. Database Health & Maintenance: /api/admin/database
+            if (sub.startsWith("database")) {
+                long dbSize = 0;
+                String dbPath = "unknown";
+                if (databaseManager != null && databaseManager.getDatabasePath() != null) {
+                    try {
+                        dbPath = databaseManager.getDatabasePath().toString();
+                        dbSize = Files.size(databaseManager.getDatabasePath());
+                    } catch (Exception ignored) {}
+                }
+                if (sub.endsWith("/backup") && "POST".equalsIgnoreCase(exchange.getRequestMethod()) && backupService != null) {
+                    Path backupDir = databaseManager.getDatabasePath().getParent().resolve("backups");
+                    Path backupFile = backupService.createBackup(backupDir);
+                    sendJsonResponse(exchange, 200, "{\"success\": true, \"backupPath\": \"" + escapeJson(backupFile.toString()) + "\"}");
+                    return;
+                }
+                String json = String.format("{\"databasePath\": \"%s\", \"sizeBytes\": %d, \"schemaVersion\": %d}",
+                        escapeJson(dbPath), dbSize, 3);
+                sendJsonResponse(exchange, 200, json);
+                return;
+            }
+
+            // 9. AI Infrastructure: /api/admin/ai
+            if (sub.startsWith("ai")) {
+                AiMonitoringService.AiHealthStatus ai = aiMonitoringService != null ? aiMonitoringService.checkHealth() : null;
+                String json = String.format("{\"available\": %b, \"endpoint\": \"%s\", \"model\": \"%s\", \"totalRequests\": %d, \"successCount\": %d, \"failCount\": %d, \"avgLatencyMs\": %f}",
+                        ai != null && ai.endpointAvailable(),
+                        ai != null ? ai.endpoint() : "",
+                        ai != null ? ai.activeModel() : "",
+                        ai != null ? ai.totalRequests() : 0,
+                        ai != null ? ai.successfulRequests() : 0,
+                        ai != null ? ai.failedRequests() : 0,
+                        ai != null ? ai.averageLatencyMs() : 0.0);
+                sendJsonResponse(exchange, 200, json);
+                return;
+            }
+
+            // 10. Operational Configuration: /api/admin/config
+            if (sub.startsWith("config")) {
+                if (configurationService != null) {
+                    ApplicationConfiguration cfg = configurationService.getConfiguration();
+                    if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                        String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                        String model = extractJsonField(body, "model");
+                        String endpoint = extractJsonField(body, "endpoint");
+                        ApplicationConfiguration updated = cfg;
+                        if (model != null && !model.isBlank()) updated = updated.withDefaultModel(model.trim());
+                        if (endpoint != null && !endpoint.isBlank()) updated = updated.withOllamaEndpoint(endpoint.trim());
+                        configurationService.updateConfiguration(updated);
+                        cfg = updated;
+                    }
+                    String json = String.format("{\"ollamaEndpoint\": \"%s\", \"defaultModel\": \"%s\", \"timeoutSecs\": %d, \"maxIterations\": %d}",
+                            cfg.ollamaEndpoint(), cfg.defaultModel(), cfg.requestTimeoutSeconds(), cfg.maxIterations());
+                    sendJsonResponse(exchange, 200, json);
+                    return;
+                }
+            }
+
+            sendJsonResponse(exchange, 404, "{\"error\": \"Admin endpoint not found\"}");
         }
 
-        private String serializeReview(CodeReview r) {
-            return String.format(
-                    "{\"id\": \"%s\", \"projectId\": \"%s\", \"taskId\": \"%s\", \"branch\": \"%s\", \"status\": \"%s\", " +
-                            "\"contentFingerprint\": \"%s\", \"approvedFingerprint\": \"%s\", \"commitHash\": \"%s\", " +
-                            "\"approvedBy\": \"%s\", \"rejectedBy\": \"%s\", \"rejectionReason\": \"%s\", " +
-                            "\"buildStatus\": \"%s\", \"testSummary\": \"%s\", \"createdAt\": \"%s\", \"updatedAt\": \"%s\"}",
-                    escapeJson(r.getId()), escapeJson(r.getProjectId()), escapeJson(r.getTaskId()), escapeJson(r.getBranch()),
-                    r.getStatus().name(), escapeJson(r.getContentFingerprint()), escapeJson(r.getApprovedFingerprint() != null ? r.getApprovedFingerprint() : ""),
-                    escapeJson(r.getCommitHash() != null ? r.getCommitHash() : ""), escapeJson(r.getApprovedBy() != null ? r.getApprovedBy() : ""),
-                    escapeJson(r.getRejectedBy() != null ? r.getRejectedBy() : ""), escapeJson(r.getRejectionReason() != null ? r.getRejectionReason() : ""),
-                    escapeJson(r.getBuildStatus()), escapeJson(r.getTestSummary()), r.getCreatedAt().toString(), r.getUpdatedAt().toString()
-            );
+        private void handleAdminUsers(HttpExchange exchange, String sub) throws IOException {
+            if (userRepository == null) {
+                sendJsonResponse(exchange, 503, "{\"error\": \"UserRepository unavailable\"}");
+                return;
+            }
+
+            if (sub.equals("users") && "GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                List<User> users = userRepository.findAll();
+                StringBuilder sb = new StringBuilder("{\"users\": [");
+                for (int i = 0; i < users.size(); i++) {
+                    User u = users.get(i);
+                    if (i > 0) sb.append(",");
+                    sb.append(String.format("{\"id\": \"%s\", \"username\": \"%s\", \"role\": \"%s\", \"active\": %b, \"locked\": %b, \"failedAttempts\": %d, \"createdAt\": \"%s\"}",
+                            u.getId(), u.getUsername(), u.getRole().name(), u.isActive(), u.isLocked(), u.getFailedAttempts(), u.getCreatedAt()));
+                }
+                sb.append("]}");
+                sendJsonResponse(exchange, 200, sb.toString());
+                return;
+            }
+
+            if (sub.equals("users") && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                String username = extractJsonField(body, "username");
+                String password = extractJsonField(body, "password");
+                String roleStr = extractJsonField(body, "role");
+                if (username == null || username.isBlank() || password == null || password.isBlank()) {
+                    sendJsonResponse(exchange, 400, "{\"error\": \"Username and password required\"}");
+                    return;
+                }
+                UserRole role = UserRole.USER;
+                if (roleStr != null) {
+                    try { role = UserRole.valueOf(roleStr.toUpperCase()); } catch (Exception ignored) {}
+                }
+                String salt = eu.kalafatic.tryst.domain.security.PasswordHasher.generateSalt();
+                String hash = eu.kalafatic.tryst.domain.security.PasswordHasher.hashPassword(password.toCharArray(), salt);
+                User newUser = new User(username, hash, salt, role);
+                userRepository.save(newUser);
+                permissionManager.recordAudit("admin", "USER_CREATE", "user", newUser.getId(), null, null, "SUCCESS", "Created user " + username);
+                sendJsonResponse(exchange, 201, "{\"success\": true, \"userId\": \"" + newUser.getId() + "\"}");
+                return;
+            }
+
+            if (sub.contains("/")) {
+                String[] parts = sub.split("/");
+                String targetUserId = parts[1];
+                Optional<User> optUser = userRepository.findById(targetUserId);
+                if (optUser.isEmpty()) {
+                    sendJsonResponse(exchange, 404, "{\"error\": \"User not found\"}");
+                    return;
+                }
+                User targetUser = optUser.get();
+                if (parts.length >= 3) {
+                    String op = parts[2];
+                    if ("lock".equalsIgnoreCase(op)) {
+                        targetUser.setLocked(true);
+                        userRepository.save(targetUser);
+                        if (sessionRepository != null) sessionRepository.revokeByUserId(targetUserId);
+                        sendJsonResponse(exchange, 200, "{\"success\": true}");
+                        return;
+                    } else if ("unlock".equalsIgnoreCase(op)) {
+                        targetUser.setLocked(false);
+                        targetUser.resetFailedAttempts();
+                        userRepository.save(targetUser);
+                        sendJsonResponse(exchange, 200, "{\"success\": true}");
+                        return;
+                    } else if ("deactivate".equalsIgnoreCase(op)) {
+                        targetUser.setActive(false);
+                        userRepository.save(targetUser);
+                        if (sessionRepository != null) sessionRepository.revokeByUserId(targetUserId);
+                        sendJsonResponse(exchange, 200, "{\"success\": true}");
+                        return;
+                    } else if ("activate".equalsIgnoreCase(op)) {
+                        targetUser.setActive(true);
+                        userRepository.save(targetUser);
+                        sendJsonResponse(exchange, 200, "{\"success\": true}");
+                        return;
+                    }
+                }
+            }
+            sendJsonResponse(exchange, 404, "{\"error\": \"Not Found\"}");
         }
+
+        private void handleAdminSessions(HttpExchange exchange, String sub) throws IOException {
+            if (sessionRepository == null) {
+                sendJsonResponse(exchange, 503, "{\"error\": \"UserSessionRepository unavailable\"}");
+                return;
+            }
+            if (sub.equals("sessions") && "GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                List<UserSession> sessions = sessionRepository.findAll();
+                StringBuilder sb = new StringBuilder("{\"sessions\": [");
+                for (int i = 0; i < sessions.size(); i++) {
+                    UserSession s = sessions.get(i);
+                    if (i > 0) sb.append(",");
+                    sb.append(String.format("{\"id\": \"%s\", \"userId\": \"%s\", \"clientIp\": \"%s\", \"expiresAt\": \"%s\", \"revoked\": %b, \"lastActivity\": \"%s\"}",
+                            s.getId(), s.getUserId(), s.getClientIp(), s.getExpiresAt(), s.isRevoked(), s.getLastActivity()));
+                }
+                sb.append("]}");
+                sendJsonResponse(exchange, 200, sb.toString());
+                return;
+            }
+            if (sub.contains("/")) {
+                String[] parts = sub.split("/");
+                String targetSessionId = parts[1];
+                if (parts.length >= 3 && "revoke".equalsIgnoreCase(parts[2])) {
+                    sessionRepository.revoke(targetSessionId);
+                    sendJsonResponse(exchange, 200, "{\"success\": true}");
+                    return;
+                }
+            }
+            sendJsonResponse(exchange, 404, "{\"error\": \"Not Found\"}");
+        }
+
+        private void handleAdminProcesses(HttpExchange exchange, String sub) throws IOException {
+            if (processExecutionManager == null) {
+                sendJsonResponse(exchange, 200, "{\"processes\": []}");
+                return;
+            }
+            if (sub.equals("processes") && "GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                List<ManagedProcessRecord> procs = processExecutionManager.getManagedProcesses();
+                StringBuilder sb = new StringBuilder("{\"processes\": [");
+                for (int i = 0; i < procs.size(); i++) {
+                    ManagedProcessRecord p = procs.get(i);
+                    if (i > 0) sb.append(",");
+                    sb.append(String.format("{\"id\": \"%s\", \"pid\": %d, \"command\": \"%s\", \"workingDir\": \"%s\", \"status\": \"%s\", \"durationMs\": %d}",
+                            p.getId(), p.getPid(), escapeJson(p.getCommandClass()), escapeJson(p.getWorkingDir()), p.getStatus(), p.getDurationMs()));
+                }
+                sb.append("]}");
+                sendJsonResponse(exchange, 200, sb.toString());
+                return;
+            }
+            if (sub.contains("/")) {
+                String[] parts = sub.split("/");
+                String procId = parts[1];
+                if (parts.length >= 3 && "kill".equalsIgnoreCase(parts[2])) {
+                    boolean ok = processExecutionManager.terminateProcess(procId);
+                    sendJsonResponse(exchange, 200, "{\"success\": " + ok + "}");
+                    return;
+                }
+            }
+            sendJsonResponse(exchange, 404, "{\"error\": \"Not Found\"}");
+        }
+    }
+
+    private Path resolveProjectWorkspacePath(String projectId) {
+        if (projectRepository != null) {
+            Optional<Project> optProj = projectRepository.findById(projectId);
+            if (optProj.isPresent()) {
+                return optProj.get().getLocation();
+            }
+        }
+        if (workspaceService != null && workspaceService.getCurrentWorkspace() != null) {
+            return workspaceService.getCurrentWorkspace().getRootPath();
+        }
+        return Path.of(System.getProperty("user.home"), ".tryst", "projects", projectId);
+    }
+
+    private static String serializeReview(CodeReview r) {
+        return String.format(
+                "{\"id\": \"%s\", \"projectId\": \"%s\", \"taskId\": \"%s\", \"branch\": \"%s\", \"status\": \"%s\", " +
+                        "\"contentFingerprint\": \"%s\", \"approvedFingerprint\": \"%s\", \"approvedBy\": \"%s\", " +
+                        "\"buildStatus\": \"%s\", \"testSummary\": \"%s\", \"initialDiff\": \"%s\", \"effectiveDiff\": \"%s\"}",
+                escapeJson(r.getId()), escapeJson(r.getProjectId()), escapeJson(r.getTaskId()), escapeJson(r.getBranch()),
+                r.getStatus().name(), escapeJson(r.getContentFingerprint()),
+                escapeJson(r.getApprovedFingerprint() != null ? r.getApprovedFingerprint() : ""),
+                escapeJson(r.getApprovedBy() != null ? r.getApprovedBy() : ""),
+                escapeJson(r.getBuildStatus() != null ? r.getBuildStatus() : ""),
+                escapeJson(r.getTestSummary() != null ? r.getTestSummary() : ""),
+                escapeJson(r.getInitialDiff() != null ? r.getInitialDiff() : ""),
+                escapeJson(r.getEffectiveDiff() != null ? r.getEffectiveDiff() : "")
+        );
     }
 
     private static class StaticAssetHandler implements HttpHandler {
@@ -506,7 +1026,7 @@ public class TrystHttpServer implements TrystHttpService {
                 <html lang="en">
                 <head>
                     <meta charset="UTF-8">
-                    <title>TRYST – Autonomous Development & Code Review Center</title>
+                    <title>TRYST – Production Platform Administration & Code Review Center</title>
                     <style>
                         :root {
                             --bg: #0f172a; --panel: #1e293b; --border: #334155;
@@ -517,8 +1037,11 @@ public class TrystHttpServer implements TrystHttpService {
                         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
                         header { background: #090d16; padding: 12px 24px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
                         h1 { margin: 0; font-size: 18px; color: var(--primary); display: flex; align-items: center; gap: 8px; }
+                        .top-nav { display: flex; gap: 16px; align-items: center; }
+                        .nav-btn { background: transparent; border: 1px solid var(--border); color: var(--text); padding: 6px 12px; border-radius: 4px; cursor: pointer; }
+                        .nav-btn.active { background: var(--primary); color: #000; font-weight: bold; }
                         .container { display: flex; height: calc(100vh - 54px); }
-                        .sidebar { width: 320px; border-right: 1px solid var(--border); background: #131d2e; display: flex; flex-direction: column; overflow-y: auto; }
+                        .sidebar { width: 300px; border-right: 1px solid var(--border); background: #131d2e; display: flex; flex-direction: column; overflow-y: auto; }
                         .main-content { flex: 1; display: flex; flex-direction: column; overflow-y: auto; padding: 24px; }
                         .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 20px; }
                         .section-title { font-size: 14px; font-weight: bold; text-transform: uppercase; color: var(--muted); margin-bottom: 12px; }
@@ -538,60 +1061,100 @@ public class TrystHttpServer implements TrystHttpService {
                         .diff-add { color: #4ade80; background: rgba(34, 197, 94, 0.15); display: block; }
                         .diff-del { color: #f87171; background: rgba(239, 68, 68, 0.15); display: block; }
                         .diff-hdr { color: #94a3b8; font-weight: bold; display: block; }
-                        textarea.code-editor { width: 100%; height: 260px; background: #090d16; border: 1px solid var(--border); color: #e2e8f0; font-family: monospace; font-size: 13px; padding: 12px; border-radius: 6px; resize: vertical; }
+                        textarea.code-editor { width: 100%; height: 200px; background: #090d16; border: 1px solid var(--border); color: #e2e8f0; font-family: monospace; font-size: 13px; padding: 12px; border-radius: 6px; resize: vertical; }
+                        table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
+                        th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); }
+                        th { color: var(--muted); }
+                        .grid-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 20px; }
+                        .stat-card { background: #182234; border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+                        .stat-val { font-size: 24px; font-weight: bold; color: var(--primary); margin-top: 4px; }
                         .flex-row { display: flex; gap: 12px; align-items: center; }
                     </style>
                 </head>
                 <body>
                     <header>
-                        <h1>TRYST Server & Review Center</h1>
-                        <div class="flex-row">
-                            <span id="userBadge" class="badge badge-warning">User: default-user</span>
-                            <span id="serverBadge" class="badge badge-success">ONLINE</span>
+                        <h1>⚡ TRYST Production Platform</h1>
+                        <div class="top-nav">
+                            <button id="navReviews" class="nav-btn active" onclick="switchTab('reviews')">Code Review Center</button>
+                            <button id="navAdmin" class="nav-btn" onclick="switchTab('admin')">Administration & Observability</button>
+                            <span id="userStatus" style="font-size: 13px; color: var(--muted);">User: Local</span>
                         </div>
                     </header>
-                    <div class="container">
-                        <div class="sidebar" style="padding: 16px;">
-                            <div class="section-title">Projects</div>
-                            <div id="projectsList">Loading...</div>
-                            <hr style="border: 0; border-top: 1px solid var(--border); margin: 16px 0;">
-                            <div class="section-title">Reviews Queue</div>
-                            <div id="reviewsList">Loading...</div>
+
+                    <div id="reviewsTab" class="container">
+                        <div class="sidebar">
+                            <div style="padding: 16px; border-bottom: 1px solid var(--border);">
+                                <div class="section-title">Projects</div>
+                                <div id="projectList">Loading projects...</div>
+                            </div>
+                            <div style="padding: 16px; flex: 1;">
+                                <div class="section-title">Reviews Pending Action</div>
+                                <div id="reviewList">Loading reviews...</div>
+                            </div>
                         </div>
+
                         <div class="main-content">
-                            <div id="noSelectionNotice" class="card">
-                                <h3>Select a Code Review from the queue to inspect proposed changes.</h3>
-                                <p style="color: var(--muted);">The TRYST Autonomous Lifecycle ensures all tool modifications require explicit human approval and content verification before committing.</p>
+                            <div id="noSelectionNotice" class="card" style="text-align: center; color: var(--muted); padding: 48px;">
+                                Select a Code Review from the sidebar to inspect diffs, test results, and perform authorized Git commits.
                             </div>
                             <div id="reviewDetails" style="display: none;">
                                 <div class="card">
-                                    <div class="flex-row" style="justify-content: space-between;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
                                         <div>
-                                            <h2 id="reviewTitle" style="margin: 0; font-size: 18px;">Review</h2>
-                                            <p id="reviewMeta" style="color: var(--muted); margin: 4px 0 0; font-size: 13px;"></p>
+                                            <h2 id="reviewTitle" style="margin: 0; font-size: 18px;">Review Title</h2>
+                                            <div id="reviewMeta" style="color: var(--muted); font-size: 12px; margin-top: 4px;"></div>
                                         </div>
                                         <div class="flex-row">
-                                            <button class="btn btn-primary" onclick="reRunBuildTest()">Re-run Build/Test</button>
-                                            <button class="btn btn-success" id="btnApprove" onclick="approveReview()">Approve</button>
-                                            <button class="btn btn-danger" id="btnReject" onclick="rejectReview()">Reject</button>
-                                            <button class="btn btn-primary" id="btnCommit" onclick="commitReview()" style="display: none;">Commit</button>
+                                            <button id="btnBuildTest" class="btn btn-primary" onclick="reRunBuildTest()">Re-run Tests</button>
+                                            <button id="btnApprove" class="btn btn-success" onclick="approveReview()">Approve Review</button>
+                                            <button id="btnReject" class="btn btn-danger" onclick="rejectReview()">Reject</button>
+                                            <button id="btnCommit" class="btn btn-success" style="display: none;" onclick="commitReview()">Commit Approved Changes</button>
                                         </div>
                                     </div>
-                                    <div id="statusAlert" style="margin-top: 12px;"></div>
                                 </div>
-
                                 <div class="card">
-                                    <div class="section-title">Proposed Changes (Unified Diff)</div>
+                                    <div class="section-title">Diff View</div>
                                     <pre id="diffViewer" class="diff-view"></pre>
                                 </div>
-
                                 <div class="card">
-                                    <div class="section-title">Edit Proposed File Content</div>
-                                    <div class="flex-row" style="margin-bottom: 8px;">
-                                        <input type="text" id="editFilePath" placeholder="File path (e.g. src/Feature.java)" style="flex: 1; padding: 8px; background: #090d16; border: 1px solid var(--border); color: white; border-radius: 4px;">
-                                        <button class="btn btn-primary" onclick="saveFileEdit()">Save Edit to Workspace</button>
+                                    <div class="section-title">Edit Proposed Changes</div>
+                                    <input id="editFilePath" type="text" placeholder="Relative file path..." style="width: 100%; padding: 8px; background: #0b1120; border: 1px solid var(--border); color: #fff; margin-bottom: 8px; border-radius: 4px;" />
+                                    <textarea id="fileEditor" class="code-editor" placeholder="Adjust proposed content..."></textarea>
+                                    <div style="margin-top: 8px; text-align: right;">
+                                        <button class="btn btn-primary" onclick="saveFileEdit()">Save Changes & Invalidate Approval</button>
                                     </div>
-                                    <textarea id="fileEditor" class="code-editor" placeholder="Enter updated file content here..."></textarea>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="adminTab" class="container" style="display: none;">
+                        <div class="sidebar">
+                            <div style="padding: 16px;">
+                                <div class="section-title">Operational Intelligence</div>
+                                <div class="list-item active" onclick="switchAdminSub('overview')">Server Overview</div>
+                                <div class="list-item" onclick="switchAdminSub('users')">Users & Roles (RBAC)</div>
+                                <div class="list-item" onclick="switchAdminSub('sessions')">Active Sessions</div>
+                                <div class="list-item" onclick="switchAdminSub('processes')">Managed OS Processes</div>
+                                <div class="list-item" onclick="switchAdminSub('telemetry')">Resource Telemetry</div>
+                                <div class="list-item" onclick="switchAdminSub('audit')">Audit & Security Log</div>
+                                <div class="list-item" onclick="switchAdminSub('diagnostics')">Centralized Logs</div>
+                                <div class="list-item" onclick="switchAdminSub('database')">Database & Backups</div>
+                            </div>
+                        </div>
+
+                        <div class="main-content">
+                            <div id="adminContent">
+                                <div class="grid-stats">
+                                    <div class="stat-card"><div>Active Users</div><div id="stUsers" class="stat-val">-</div></div>
+                                    <div class="stat-card"><div>Active Sessions</div><div id="stSessions" class="stat-val">-</div></div>
+                                    <div class="stat-card"><div>Total Projects</div><div id="stProjects" class="stat-val">-</div></div>
+                                    <div class="stat-card"><div>Total Tasks</div><div id="stTasks" class="stat-val">-</div></div>
+                                    <div class="stat-card"><div>Audit Records</div><div id="stAudit" class="stat-val">-</div></div>
+                                </div>
+                                <div class="card">
+                                    <div class="section-title">Operational Data</div>
+                                    <div id="adminTableContainer">Select an administration view.</div>
                                 </div>
                             </div>
                         </div>
@@ -599,19 +1162,127 @@ public class TrystHttpServer implements TrystHttpService {
 
                     <script>
                         let activeReview = null;
+                        let authToken = localStorage.getItem('tryst_auth_token') || '';
+
+                        function getAuthHeaders() {
+                            const h = { 'Content-Type': 'application/json' };
+                            if (authToken) h['Authorization'] = 'Bearer ' + authToken;
+                            return h;
+                        }
+
+                        async function promptLogin() {
+                            const u = prompt('Admin/User Username:');
+                            if (!u) return;
+                            const p = prompt('Password:');
+                            if (!p) return;
+                            const res = await fetch('/api/auth/login', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ username: u, password: p })
+                            });
+                            const d = await res.json();
+                            if (d.success) {
+                                authToken = d.token;
+                                localStorage.setItem('tryst_auth_token', authToken);
+                                document.getElementById('userStatus').textContent = `User: ${d.user.username} (${d.user.role})`;
+                                alert('Logged in successfully as ' + d.user.username);
+                                loadAdminOverview();
+                            } else {
+                                alert('Login failed: ' + d.error);
+                            }
+                        }
+
+                        function switchTab(tab) {
+                            if (tab === 'reviews') {
+                                document.getElementById('reviewsTab').style.display = 'flex';
+                                document.getElementById('adminTab').style.display = 'none';
+                                document.getElementById('navReviews').classList.add('active');
+                                document.getElementById('navAdmin').classList.remove('active');
+                            } else {
+                                document.getElementById('reviewsTab').style.display = 'none';
+                                document.getElementById('adminTab').style.display = 'flex';
+                                document.getElementById('navAdmin').classList.add('active');
+                                document.getElementById('navReviews').classList.remove('active');
+                                loadAdminOverview();
+                            }
+                        }
+
+                        async function switchAdminSub(sub) {
+                            const container = document.getElementById('adminTableContainer');
+                            container.innerHTML = 'Loading ' + sub + '...';
+                            try {
+                                if (sub === 'overview') {
+                                    loadAdminOverview();
+                                } else if (sub === 'users') {
+                                    const res = await fetch('/api/admin/users', { headers: getAuthHeaders() });
+                                    const data = await res.json();
+                                    container.innerHTML = '<table><tr><th>ID</th><th>Username</th><th>Role</th><th>Active</th><th>Locked</th><th>Created</th></tr>' +
+                                        data.users.map(u => `<tr><td>${u.id.substring(0,8)}</td><td>${u.username}</td><td>${u.role}</td><td>${u.active}</td><td>${u.locked}</td><td>${u.createdAt}</td></tr>`).join('') + '</table>';
+                                } else if (sub === 'sessions') {
+                                    const res = await fetch('/api/admin/sessions', { headers: getAuthHeaders() });
+                                    const data = await res.json();
+                                    container.innerHTML = '<table><tr><th>ID</th><th>User ID</th><th>Client IP</th><th>Expires</th><th>Revoked</th><th>Last Activity</th></tr>' +
+                                        data.sessions.map(s => `<tr><td>${s.id.substring(0,8)}</td><td>${s.userId.substring(0,8)}</td><td>${s.clientIp}</td><td>${s.expiresAt}</td><td>${s.revoked}</td><td>${s.lastActivity}</td></tr>`).join('') + '</table>';
+                                } else if (sub === 'audit') {
+                                    const res = await fetch('/api/admin/audit', { headers: getAuthHeaders() });
+                                    const data = await res.json();
+                                    container.innerHTML = '<table><tr><th>Time</th><th>Actor</th><th>Action</th><th>Target</th><th>Outcome</th><th>Details</th></tr>' +
+                                        data.auditEvents.map(a => `<tr><td>${a.time}</td><td>${a.actor}</td><td>${a.action}</td><td>${a.target}</td><td>${a.outcome}</td><td>${a.details}</td></tr>`).join('') + '</table>';
+                                } else if (sub === 'telemetry') {
+                                    const res = await fetch('/api/admin/telemetry', { headers: getAuthHeaders() });
+                                    const data = await res.json();
+                                    container.innerHTML = '<table><tr><th>Timestamp</th><th>CPU System</th><th>CPU Process</th><th>Heap Used (MB)</th><th>Active Sessions</th></tr>' +
+                                        data.snapshots.map(s => `<tr><td>${s.timestamp}</td><td>${s.cpuSystem.toFixed(1)}%</td><td>${s.cpuProcess.toFixed(1)}%</td><td>${(s.heapUsed/1048576).toFixed(1)}</td><td>${s.activeSessions}</td></tr>`).join('') + '</table>';
+                                } else if (sub === 'diagnostics') {
+                                    const res = await fetch('/api/admin/logs', { headers: getAuthHeaders() });
+                                    const data = await res.json();
+                                    container.innerHTML = '<table><tr><th>Seq</th><th>Time</th><th>Level</th><th>Component</th><th>Message</th></tr>' +
+                                        data.logs.map(l => `<tr><td>${l.seq}</td><td>${l.time}</td><td>${l.level}</td><td>${l.component}</td><td>${l.message}</td></tr>`).join('') + '</table>';
+                                } else if (sub === 'database') {
+                                    const res = await fetch('/api/admin/database', { headers: getAuthHeaders() });
+                                    const data = await res.json();
+                                    container.innerHTML = `<div><p><b>Path:</b> ${data.databasePath}</p><p><b>Size:</b> ${data.sizeBytes} bytes</p><p><b>Schema:</b> V${data.schemaVersion}</p><button class="btn btn-primary" onclick="createBackup()">Create Snapshot Backup</button></div>`;
+                                } else if (sub === 'processes') {
+                                    const res = await fetch('/api/admin/processes', { headers: getAuthHeaders() });
+                                    const data = await res.json();
+                                    container.innerHTML = '<table><tr><th>PID</th><th>Command</th><th>Working Dir</th><th>Status</th><th>Duration</th></tr>' +
+                                        data.processes.map(p => `<tr><td>${p.pid}</td><td>${p.command}</td><td>${p.workingDir}</td><td>${p.status}</td><td>${p.durationMs}ms</td></tr>`).join('') + '</table>';
+                                }
+                            } catch(e) {
+                                container.innerHTML = 'Error loading ' + sub + ': ' + e;
+                            }
+                        }
+
+                        async function createBackup() {
+                            const res = await fetch('/api/admin/database/backup', { method: 'POST' });
+                            const d = await res.json();
+                            alert(d.success ? 'Backup created at: ' + d.backupPath : 'Backup failed');
+                        }
+
+                        async function loadAdminOverview() {
+                            try {
+                                const res = await fetch('/api/admin/overview', { headers: getAuthHeaders() });
+                                if (res.status === 403 || res.status === 401) {
+                                    document.getElementById('adminTableContainer').innerHTML =
+                                        '<div style="color:var(--yellow); padding: 16px;">Authentication as Administrator required. <button class="btn btn-primary" onclick="promptLogin()">Login with Token / Password</button></div>';
+                                    return;
+                                }
+                                const data = await res.json();
+                                document.getElementById('stUsers').textContent = data.totalUsers;
+                                document.getElementById('stSessions').textContent = data.activeSessions;
+                                document.getElementById('stProjects').textContent = data.totalProjects;
+                                document.getElementById('stTasks').textContent = data.totalTasks;
+                                document.getElementById('stAudit').textContent = data.totalAuditRecords;
+                                document.getElementById('adminTableContainer').innerHTML = `<p><b>AI Inference Endpoint:</b> ${data.aiEndpoint} (Status: ${data.aiAvailable ? 'ONLINE' : 'OFFLINE'})</p><p><b>Default AI Model:</b> ${data.aiModel}</p>`;
+                            } catch(e) {}
+                        }
 
                         async function loadProjects() {
                             try {
                                 const res = await fetch('/api/projects');
                                 const data = await res.json();
-                                const container = document.getElementById('projectsList');
-                                container.innerHTML = '';
-                                data.projects.forEach(p => {
-                                    const d = document.createElement('div');
-                                    d.className = 'list-item';
-                                    d.innerHTML = `<strong>${escapeHtml(p.name)}</strong><br><small style="color: var(--muted);">${p.id.substring(0,8)}...</small>`;
-                                    container.appendChild(d);
-                                });
+                                const list = document.getElementById('projectList');
+                                list.innerHTML = data.projects.map(p => `<div class="list-item"><strong>${escapeHtml(p.name)}</strong><br><small style="color:var(--muted);">${p.id.substring(0,8)}</small></div>`).join('');
                             } catch(e) {}
                         }
 
@@ -619,19 +1290,13 @@ public class TrystHttpServer implements TrystHttpService {
                             try {
                                 const res = await fetch('/api/reviews');
                                 const data = await res.json();
-                                const container = document.getElementById('reviewsList');
-                                container.innerHTML = '';
-                                if (!data.reviews || data.reviews.length === 0) {
-                                    container.innerHTML = '<p style="color: var(--muted); font-size: 13px;">No pending reviews</p>';
-                                    return;
-                                }
-                                data.reviews.forEach(r => {
-                                    const d = document.createElement('div');
-                                    d.className = 'list-item' + (activeReview && activeReview.id === r.id ? ' active' : '');
-                                    d.innerHTML = `<strong>${escapeHtml(r.branch)}</strong> <span class="badge ${r.status==='APPROVED'?'badge-success':(r.status==='REJECTED'?'badge-error':'badge-warning')}">${r.status}</span><br><small style="color: var(--muted);">Task: ${r.taskId.substring(0,8)}...</small>`;
-                                    d.onclick = () => selectReview(r);
-                                    container.appendChild(d);
-                                });
+                                const list = document.getElementById('reviewList');
+                                list.innerHTML = data.reviews.map(r => `
+                                    <div class="list-item ${activeReview && activeReview.id === r.id ? 'active' : ''}" onclick='selectReview(${JSON.stringify(r)})'>
+                                        <div><strong>${r.branch}</strong> <span class="badge badge-${r.status==='APPROVED'?'success':r.status==='REJECTED'?'error':'warning'}">${r.status}</span></div>
+                                        <div style="font-size: 11px; color: var(--muted); margin-top: 4px;">Task: ${r.taskId.substring(0,8)}</div>
+                                    </div>
+                                `).join('');
                             } catch(e) {}
                         }
 

@@ -57,9 +57,15 @@ class ProjectAndWorkspaceIsolationTest {
         Project user1Proj = new Project("p1", "alice", "Alice Project", p1Path, true);
 
         // 1. Authorized user access granted
-        assertDoesNotThrow(() -> permissionManager.validateUserProjectAccess("alice", user1Proj));
+        eu.kalafatic.tryst.domain.security.SecurityContext aliceCtx = new eu.kalafatic.tryst.domain.security.SecurityContext(
+                new eu.kalafatic.tryst.domain.model.User("alice", "h", "s", eu.kalafatic.tryst.domain.model.UserRole.USER)
+        );
+        eu.kalafatic.tryst.domain.security.SecurityContext adminCtx = new eu.kalafatic.tryst.domain.security.SecurityContext(
+                new eu.kalafatic.tryst.domain.model.User("admin", "h", "s", eu.kalafatic.tryst.domain.model.UserRole.ADMIN)
+        );
+        assertDoesNotThrow(() -> permissionManager.validateUserProjectAccess("alice", user1Proj, aliceCtx));
         // Admin access granted
-        assertDoesNotThrow(() -> permissionManager.validateUserProjectAccess("admin", user1Proj));
+        assertDoesNotThrow(() -> permissionManager.validateUserProjectAccess("admin", user1Proj, adminCtx));
 
         // 2. Unauthorized user rejected
         assertThrows(TrystDomainException.class, () -> permissionManager.validateUserProjectAccess("bob", user1Proj));

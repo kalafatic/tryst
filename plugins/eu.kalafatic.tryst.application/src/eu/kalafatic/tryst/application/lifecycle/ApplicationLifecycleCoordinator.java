@@ -103,6 +103,20 @@ public class ApplicationLifecycleCoordinator {
     private TrystTcpService tcpService;
     private TrystHttpService httpService;
 
+    // Phase 4 Services & Repositories
+    private eu.kalafatic.tryst.domain.repository.UserRepository userRepository;
+    private eu.kalafatic.tryst.domain.repository.UserSessionRepository userSessionRepository;
+    private eu.kalafatic.tryst.domain.repository.AuditEventRepository auditEventRepository;
+    private eu.kalafatic.tryst.domain.repository.NotificationRepository notificationRepository;
+    private eu.kalafatic.tryst.domain.repository.TelemetryRepository telemetryRepository;
+    private eu.kalafatic.tryst.domain.security.AuthenticationService authenticationService;
+    private eu.kalafatic.tryst.domain.service.ServerMonitoringService serverMonitoringService;
+    private eu.kalafatic.tryst.domain.service.TelemetryService telemetryService;
+    private eu.kalafatic.tryst.domain.service.AiMonitoringService aiMonitoringService;
+    private eu.kalafatic.tryst.domain.service.ProcessExecutionManager processExecutionManager;
+    private eu.kalafatic.tryst.domain.service.NotificationService notificationService;
+    private eu.kalafatic.tryst.domain.service.LogDiagnosticService logDiagnosticService;
+
     public ApplicationLifecycleCoordinator() {
         this(null);
     }
@@ -197,6 +211,13 @@ public class ApplicationLifecycleCoordinator {
         this.agentRepository = new SqliteAgentRepository(databaseManager);
         this.codeReviewRepository = new SqliteCodeReviewRepository(databaseManager);
 
+        // Phase 4 Repositories
+        this.userRepository = new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteUserRepository(databaseManager);
+        this.userSessionRepository = new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteUserSessionRepository(databaseManager);
+        this.auditEventRepository = new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteAuditEventRepository(databaseManager);
+        this.notificationRepository = new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteNotificationRepository(databaseManager);
+        this.telemetryRepository = new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteTelemetryRepository(databaseManager);
+
         // 4. Startup Task Reconciliation: detect interrupted tasks and mark them RECOVERY_REQUIRED
         reconcileInterruptedTasks();
 
@@ -206,7 +227,12 @@ public class ApplicationLifecycleCoordinator {
         this.asyncExecutionService = new ManagedAsyncExecutionService();
 
         // 6. Initialize Security, Tools & AI Infrastructure
-        this.permissionManager = new PermissionManager();
+        this.permissionManager = new PermissionManager(this.auditEventRepository);
+        this.authenticationService = new eu.kalafatic.tryst.domain.security.AuthenticationService(
+                this.userRepository, this.userSessionRepository, this.permissionManager);
+        // Provision initial administrator if no admin exists using configured or generated bootstrap credentials
+        String bootstrapAdminPass = System.getProperty("tryst.admin.password");
+        this.authenticationService.bootstrapAdmin("admin", bootstrapAdminPass);
         this.toolRegistry = new ToolRegistry();
         this.toolRegistry.register(new FileTools.ReadFileTool());
         this.toolRegistry.register(new FileTools.WriteFileTool());
@@ -248,6 +274,21 @@ public class ApplicationLifecycleCoordinator {
                 eventBus
         );
 
+        // Phase 4 Observability & Operational Services
+        this.serverMonitoringService = new eu.kalafatic.tryst.domain.service.ServerMonitoringService(configuration.defaultWorkspaceDirectory());
+        this.telemetryService = new eu.kalafatic.tryst.domain.service.TelemetryService(
+                this.telemetryRepository, this.serverMonitoringService, this.userSessionRepository, this.taskRepository);
+        this.telemetryService.start(30);
+
+        if (this.aiInferenceService instanceof eu.kalafatic.tryst.infrastructure.ai.OllamaClient client) {
+            this.aiMonitoringService = new eu.kalafatic.tryst.domain.service.AiMonitoringService(client);
+        } else {
+            this.aiMonitoringService = new eu.kalafatic.tryst.domain.service.AiMonitoringService(null);
+        }
+        this.processExecutionManager = new eu.kalafatic.tryst.domain.service.ProcessExecutionManager();
+        this.notificationService = new eu.kalafatic.tryst.domain.service.NotificationService(this.notificationRepository, this.eventBus);
+        this.logDiagnosticService = new eu.kalafatic.tryst.domain.service.LogDiagnosticService();
+
         // 7. Initialize and start TCP and HTTP communication services
         try {
             this.tcpService = new TrystTcpServer(configuration.serverHost(), configuration.tcpPort(), workspaceService);
@@ -257,11 +298,19 @@ public class ApplicationLifecycleCoordinator {
         }
 
         try {
-            this.httpService = new TrystHttpServer(
+            TrystHttpServer server = new TrystHttpServer(
                     configuration.serverHost(), configuration.httpPort(),
                     workspaceService, projectRepository, taskRepository,
                     codeReviewRepository, gitService, buildAndTestService, permissionManager
             );
+            server.setPhase4Dependencies(
+                    authenticationService, userRepository, userSessionRepository,
+                    auditEventRepository, notificationRepository, telemetryRepository,
+                    serverMonitoringService, telemetryService, aiMonitoringService,
+                    processExecutionManager, notificationService, logDiagnosticService,
+                    configurationService, databaseManager, backupService, agentRepository
+            );
+            this.httpService = server;
             this.httpService.start();
         } catch (Exception e) {
             TrystLog.error(ApplicationLifecycleCoordinator.class, "Failed to start HTTP service: " + e.getMessage(), e);
@@ -294,6 +343,19 @@ public class ApplicationLifecycleCoordinator {
             registerService(CodeReviewService.class, this.codeReviewService);
             registerService(SessionTaskOrchestrator.class, this.sessionTaskOrchestrator);
             registerService(AutonomousDevelopmentService.class, this.autonomousDevelopmentService);
+            registerService(eu.kalafatic.tryst.domain.repository.UserRepository.class, this.userRepository);
+            registerService(eu.kalafatic.tryst.domain.repository.UserSessionRepository.class, this.userSessionRepository);
+            registerService(eu.kalafatic.tryst.domain.repository.AuditEventRepository.class, this.auditEventRepository);
+            registerService(eu.kalafatic.tryst.domain.repository.NotificationRepository.class, this.notificationRepository);
+            registerService(eu.kalafatic.tryst.domain.repository.TelemetryRepository.class, this.telemetryRepository);
+            registerService(eu.kalafatic.tryst.domain.security.AuthenticationService.class, this.authenticationService);
+            registerService(eu.kalafatic.tryst.domain.service.ServerMonitoringService.class, this.serverMonitoringService);
+            registerService(eu.kalafatic.tryst.domain.service.TelemetryService.class, this.telemetryService);
+            registerService(eu.kalafatic.tryst.domain.service.AiMonitoringService.class, this.aiMonitoringService);
+            registerService(eu.kalafatic.tryst.domain.service.ProcessExecutionManager.class, this.processExecutionManager);
+            registerService(eu.kalafatic.tryst.domain.service.NotificationService.class, this.notificationService);
+            registerService(eu.kalafatic.tryst.domain.service.LogDiagnosticService.class, this.logDiagnosticService);
+
             if (tcpService != null) {
                 registerService(TrystTcpService.class, this.tcpService);
             }
@@ -302,7 +364,7 @@ public class ApplicationLifecycleCoordinator {
             }
 
             TrystLog.info(ApplicationLifecycleCoordinator.class,
-                    "Core, Persistence, AI, Orchestration, Review, and Communication OSGi services registered successfully.");
+                    "Core, Persistence, Security, Observability, AI, Orchestration, Review, and Communication OSGi services registered successfully.");
         } else {
             TrystLog.warn(ApplicationLifecycleCoordinator.class,
                     "BundleContext unavailable; services initialized in standalone/test mode.");
@@ -376,6 +438,24 @@ public class ApplicationLifecycleCoordinator {
         }
 
         // 3. Controlled disposal of thread pool / async execution service
+        if (telemetryService != null) {
+            try {
+                telemetryService.stop();
+            } catch (Exception e) {
+                TrystLog.error(ApplicationLifecycleCoordinator.class, "Error stopping TelemetryService", e);
+            }
+            telemetryService = null;
+        }
+
+        if (processExecutionManager != null) {
+            try {
+                processExecutionManager.shutdown();
+            } catch (Exception e) {
+                TrystLog.error(ApplicationLifecycleCoordinator.class, "Error shutting down ProcessExecutionManager", e);
+            }
+            processExecutionManager = null;
+        }
+
         if (asyncExecutionService != null) {
             try {
                 asyncExecutionService.shutdown();
