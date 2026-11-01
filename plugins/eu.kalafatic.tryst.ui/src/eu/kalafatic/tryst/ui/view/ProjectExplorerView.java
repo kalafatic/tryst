@@ -1,7 +1,7 @@
 package eu.kalafatic.tryst.ui.view;
 
 import eu.kalafatic.tryst.domain.model.Project;
-import eu.kalafatic.tryst.ui.TrystUiPlugin;
+import eu.kalafatic.tryst.ui.TrystUiServices;
 import eu.kalafatic.tryst.ui.controller.ProjectExplorerController;
 import org.eclipse.jface.action.Action;
 import org.eclipse.jface.action.IMenuManager;
@@ -49,7 +49,7 @@ public class ProjectExplorerView extends ViewPart {
             }
         });
 
-        this.controller = new ProjectExplorerController(TrystUiPlugin.getDefault().getWorkspaceService());
+        this.controller = new ProjectExplorerController(TrystUiServices.getWorkspaceService());
         this.controller.setViewCallback(() -> {
             Display display = viewer.getControl().getDisplay();
             if (!display.isDisposed()) {

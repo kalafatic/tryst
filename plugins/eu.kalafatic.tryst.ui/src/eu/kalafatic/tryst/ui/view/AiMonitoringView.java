@@ -1,7 +1,7 @@
 package eu.kalafatic.tryst.ui.view;
 
 import eu.kalafatic.tryst.domain.ai.AiInferenceService;
-import eu.kalafatic.tryst.ui.TrystUiPlugin;
+import eu.kalafatic.tryst.ui.TrystUiServices;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
@@ -54,7 +54,7 @@ public class AiMonitoringView extends ViewPart {
     }
 
     private void checkConnection() {
-        AiInferenceService ai = TrystUiPlugin.getDefault().getAiInferenceService();
+        AiInferenceService ai = TrystUiServices.getAiInferenceService();
         if (ai != null) {
             lblEndpoint.setText("Configured (Ollama)");
             lblModel.setText("codellama");

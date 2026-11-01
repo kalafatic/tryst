@@ -1,8 +1,9 @@
 package eu.kalafatic.tryst.ui.view;
 
+import eu.kalafatic.tryst.core.log.TrystLog;
 import eu.kalafatic.tryst.domain.model.TelemetrySnapshot;
 import eu.kalafatic.tryst.domain.service.TelemetryService;
-import eu.kalafatic.tryst.ui.TrystUiPlugin;
+import eu.kalafatic.tryst.ui.TrystUiServices;
 import org.eclipse.jface.viewers.*;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.layout.GridData;
@@ -10,18 +11,26 @@ import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.*;
 import org.eclipse.ui.part.ViewPart;
 
+import java.util.Collections;
+
 /**
  * Native SWT/JFace View for Historical Telemetry.
+ * Resolves TelemetryService directly via authoritative OSGi service infrastructure.
  */
 public class TelemetryView extends ViewPart {
 
     public static final String ID = "eu.kalafatic.tryst.ui.view.telemetry";
 
     private TableViewer viewer;
+    private Label statusLabel;
 
     @Override
     public void createPartControl(Composite parent) {
         parent.setLayout(new GridLayout(1, false));
+
+        statusLabel = new Label(parent, SWT.NONE);
+        statusLabel.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        statusLabel.setText("");
 
         viewer = new TableViewer(parent, SWT.BORDER | SWT.FULL_SELECTION);
         Table table = viewer.getTable();
@@ -71,14 +80,28 @@ public class TelemetryView extends ViewPart {
     }
 
     private void refreshData() {
-        TelemetryService telem = TrystUiPlugin.getDefault().getTelemetryService();
-        if (telem != null) {
-            viewer.setInput(telem.getRecentHistory(30));
+        TelemetryService telem = TrystUiServices.getTelemetryService();
+        if (telem == null) {
+            String msg = "TelemetryService is not currently available in OSGi registry.";
+            statusLabel.setText(msg);
+            TrystLog.warn(TelemetryView.class, msg);
+            viewer.setInput(Collections.emptyList());
+            return;
         }
+
+        statusLabel.setText("");
+        viewer.setInput(telem.getRecentHistory(30));
     }
 
     @Override
     public void setFocus() {
-        if (viewer != null) viewer.getControl().setFocus();
+        if (viewer != null && !viewer.getControl().isDisposed()) {
+            viewer.getControl().setFocus();
+        }
+    }
+
+    @Override
+    public void dispose() {
+        super.dispose();
     }
 }
