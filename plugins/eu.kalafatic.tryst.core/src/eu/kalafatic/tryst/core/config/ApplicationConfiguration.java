@@ -22,7 +22,10 @@ public record ApplicationConfiguration(
         int maxContextTokens,
         int maxOutputTokens,
         int maxRetryAttempts,
-        boolean secureSandboxEnabled
+        boolean secureSandboxEnabled,
+        String serverHost,
+        int httpPort,
+        int tcpPort
 ) {
     public static final String DEFAULT_APP_NAME = "TRYST – AI Development Environment";
     public static final String DEFAULT_VERSION = "0.1.0";
@@ -34,6 +37,9 @@ public record ApplicationConfiguration(
     public static final int DEFAULT_MAX_OUTPUT_TOKENS = 2048;
     public static final int DEFAULT_MAX_RETRY_ATTEMPTS = 3;
     public static final boolean DEFAULT_SECURE_SANDBOX = true;
+    public static final String DEFAULT_SERVER_HOST = "127.0.0.1";
+    public static final int DEFAULT_HTTP_PORT = 8080;
+    public static final int DEFAULT_TCP_PORT = 9090;
 
     public ApplicationConfiguration {
         Objects.requireNonNull(applicationName, "applicationName must not be null");
@@ -43,6 +49,7 @@ public record ApplicationConfiguration(
         Objects.requireNonNull(defaultWorkspaceDirectory, "defaultWorkspaceDirectory must not be null");
         Objects.requireNonNull(ollamaEndpoint, "ollamaEndpoint must not be null");
         Objects.requireNonNull(defaultModel, "defaultModel must not be null");
+        Objects.requireNonNull(serverHost, "serverHost must not be null");
 
         if (applicationName.isBlank()) {
             throw new TrystApplicationException("applicationName must not be blank");
@@ -68,6 +75,15 @@ public record ApplicationConfiguration(
         if (maxRetryAttempts < 0) {
             throw new TrystApplicationException("maxRetryAttempts must not be negative");
         }
+        if (serverHost.isBlank()) {
+            throw new TrystApplicationException("serverHost must not be blank");
+        }
+        if (httpPort < 0 || httpPort > 65535) {
+            throw new TrystApplicationException("httpPort must be between 0 and 65535");
+        }
+        if (tcpPort < 0 || tcpPort > 65535) {
+            throw new TrystApplicationException("tcpPort must be between 0 and 65535");
+        }
     }
 
     public ApplicationConfiguration(
@@ -90,7 +106,10 @@ public record ApplicationConfiguration(
                 DEFAULT_MAX_CONTEXT_TOKENS,
                 DEFAULT_MAX_OUTPUT_TOKENS,
                 DEFAULT_MAX_RETRY_ATTEMPTS,
-                DEFAULT_SECURE_SANDBOX
+                DEFAULT_SECURE_SANDBOX,
+                DEFAULT_SERVER_HOST,
+                DEFAULT_HTTP_PORT,
+                DEFAULT_TCP_PORT
         );
     }
 
@@ -113,7 +132,10 @@ public record ApplicationConfiguration(
                 DEFAULT_MAX_CONTEXT_TOKENS,
                 DEFAULT_MAX_OUTPUT_TOKENS,
                 DEFAULT_MAX_RETRY_ATTEMPTS,
-                DEFAULT_SECURE_SANDBOX
+                DEFAULT_SECURE_SANDBOX,
+                DEFAULT_SERVER_HOST,
+                DEFAULT_HTTP_PORT,
+                DEFAULT_TCP_PORT
         );
     }
 
@@ -121,7 +143,8 @@ public record ApplicationConfiguration(
         return new ApplicationConfiguration(
                 applicationName, version, userHomeDirectory, configurationDirectory,
                 defaultWorkspaceDirectory, newEndpoint, defaultModel, requestTimeoutSeconds,
-                maxIterations, maxContextTokens, maxOutputTokens, maxRetryAttempts, secureSandboxEnabled
+                maxIterations, maxContextTokens, maxOutputTokens, maxRetryAttempts, secureSandboxEnabled,
+                serverHost, httpPort, tcpPort
         );
     }
 
@@ -129,7 +152,8 @@ public record ApplicationConfiguration(
         return new ApplicationConfiguration(
                 applicationName, version, userHomeDirectory, configurationDirectory,
                 defaultWorkspaceDirectory, ollamaEndpoint, newModel, requestTimeoutSeconds,
-                maxIterations, maxContextTokens, maxOutputTokens, maxRetryAttempts, secureSandboxEnabled
+                maxIterations, maxContextTokens, maxOutputTokens, maxRetryAttempts, secureSandboxEnabled,
+                serverHost, httpPort, tcpPort
         );
     }
 
@@ -137,7 +161,17 @@ public record ApplicationConfiguration(
         return new ApplicationConfiguration(
                 applicationName, version, userHomeDirectory, configurationDirectory,
                 defaultWorkspaceDirectory, ollamaEndpoint, defaultModel, timeoutSecs,
-                iterations, maxContextTokens, maxOutputTokens, retryAttempts, secureSandboxEnabled
+                iterations, maxContextTokens, maxOutputTokens, retryAttempts, secureSandboxEnabled,
+                serverHost, httpPort, tcpPort
+        );
+    }
+
+    public ApplicationConfiguration withServerSettings(String host, int httpPort, int tcpPort) {
+        return new ApplicationConfiguration(
+                applicationName, version, userHomeDirectory, configurationDirectory,
+                defaultWorkspaceDirectory, ollamaEndpoint, defaultModel, requestTimeoutSeconds,
+                maxIterations, maxContextTokens, maxOutputTokens, maxRetryAttempts, secureSandboxEnabled,
+                host, httpPort, tcpPort
         );
     }
 }

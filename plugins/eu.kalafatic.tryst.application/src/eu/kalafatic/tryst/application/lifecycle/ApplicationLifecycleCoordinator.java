@@ -40,6 +40,10 @@ import eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteProjectRep
 import eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteSessionRepository;
 import eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteTaskRepository;
 import eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteWorkspaceRepository;
+import eu.kalafatic.tryst.infrastructure.server.TrystHttpServer;
+import eu.kalafatic.tryst.infrastructure.server.TrystHttpService;
+import eu.kalafatic.tryst.infrastructure.server.TrystTcpServer;
+import eu.kalafatic.tryst.infrastructure.server.TrystTcpService;
 import eu.kalafatic.tryst.infrastructure.vcs.GitService;
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.ServiceRegistration;
@@ -91,6 +95,8 @@ public class ApplicationLifecycleCoordinator {
     private CodeReviewService codeReviewService;
     private SessionTaskOrchestrator sessionTaskOrchestrator;
     private AutonomousDevelopmentService autonomousDevelopmentService;
+    private TrystTcpService tcpService;
+    private TrystHttpService httpService;
 
     public ApplicationLifecycleCoordinator() {
         this(null);
@@ -231,7 +237,22 @@ public class ApplicationLifecycleCoordinator {
                 eventBus
         );
 
-        // 6. Register into standard OSGi Service Registry if BundleContext is available
+        // 6. Initialize and start TCP and HTTP communication services
+        try {
+            this.tcpService = new TrystTcpServer(configuration.serverHost(), configuration.tcpPort(), workspaceService);
+            this.tcpService.start();
+        } catch (Exception e) {
+            TrystLog.error(ApplicationLifecycleCoordinator.class, "Failed to start TCP service: " + e.getMessage(), e);
+        }
+
+        try {
+            this.httpService = new TrystHttpServer(configuration.serverHost(), configuration.httpPort(), workspaceService);
+            this.httpService.start();
+        } catch (Exception e) {
+            TrystLog.error(ApplicationLifecycleCoordinator.class, "Failed to start HTTP service: " + e.getMessage(), e);
+        }
+
+        // 7. Register into standard OSGi Service Registry if BundleContext is available
         if (bundleContext != null) {
             registerService(ApplicationConfiguration.class, this.configuration);
             registerService(ConfigurationService.class, this.configurationService);
@@ -257,9 +278,15 @@ public class ApplicationLifecycleCoordinator {
             registerService(CodeReviewService.class, this.codeReviewService);
             registerService(SessionTaskOrchestrator.class, this.sessionTaskOrchestrator);
             registerService(AutonomousDevelopmentService.class, this.autonomousDevelopmentService);
+            if (tcpService != null) {
+                registerService(TrystTcpService.class, this.tcpService);
+            }
+            if (httpService != null) {
+                registerService(TrystHttpService.class, this.httpService);
+            }
 
             TrystLog.info(ApplicationLifecycleCoordinator.class,
-                    "Core, Persistence, AI, and Orchestration OSGi services registered successfully.");
+                    "Core, Persistence, AI, Orchestration, and Communication OSGi services registered successfully.");
         } else {
             TrystLog.warn(ApplicationLifecycleCoordinator.class,
                     "BundleContext unavailable; services initialized in standalone/test mode.");
@@ -300,7 +327,26 @@ public class ApplicationLifecycleCoordinator {
         }
         serviceRegistrations.clear();
 
-        // 2. Controlled disposal of thread pool / async execution service
+        // 2. Stop communication services cleanly
+        if (tcpService != null) {
+            try {
+                tcpService.stop();
+            } catch (Exception e) {
+                TrystLog.error(ApplicationLifecycleCoordinator.class, "Error stopping TCP service", e);
+            }
+            tcpService = null;
+        }
+
+        if (httpService != null) {
+            try {
+                httpService.stop();
+            } catch (Exception e) {
+                TrystLog.error(ApplicationLifecycleCoordinator.class, "Error stopping HTTP service", e);
+            }
+            httpService = null;
+        }
+
+        // 3. Controlled disposal of thread pool / async execution service
         if (asyncExecutionService != null) {
             try {
                 asyncExecutionService.shutdown();
@@ -465,6 +511,14 @@ public class ApplicationLifecycleCoordinator {
 
     public AutonomousDevelopmentService getAutonomousDevelopmentService() {
         return autonomousDevelopmentService;
+    }
+
+    public TrystTcpService getTcpService() {
+        return tcpService;
+    }
+
+    public TrystHttpService getHttpService() {
+        return httpService;
     }
 
     public List<ServiceRegistration<?>> getServiceRegistrations() {
