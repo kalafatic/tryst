@@ -9,11 +9,14 @@ import java.util.UUID;
 
 /**
  * Domain entity representing a software development project managed by TRYST.
- * Distinct from physical workspaces.
+ * Distinct from physical workspaces. Associates with an authoritative owner/tenant.
  */
 public class Project {
 
+    public static final String DEFAULT_OWNER_ID = "default-user";
+
     private final String id;
+    private final String ownerId;
     private final String name;
     private final String description;
     private final Path location;
@@ -27,18 +30,23 @@ public class Project {
     }
 
     public Project(String name, String description, Path location) {
-        this(UUID.randomUUID().toString(), name, description, location, ProjectStatus.ACTIVE, false, Instant.now(), Instant.now());
+        this(UUID.randomUUID().toString(), DEFAULT_OWNER_ID, name, description, location, ProjectStatus.ACTIVE, false, Instant.now(), Instant.now());
     }
 
     public Project(String id, String name, Path location, boolean active) {
-        this(id, name, "", location, ProjectStatus.ACTIVE, active, Instant.now(), Instant.now());
+        this(id, DEFAULT_OWNER_ID, name, "", location, ProjectStatus.ACTIVE, active, Instant.now(), Instant.now());
     }
 
-    public Project(String id, String name, String description, Path location, ProjectStatus status, boolean active, Instant createdAt, Instant updatedAt) {
+    public Project(String id, String ownerId, String name, Path location, boolean active) {
+        this(id, ownerId, name, "", location, ProjectStatus.ACTIVE, active, Instant.now(), Instant.now());
+    }
+
+    public Project(String id, String ownerId, String name, String description, Path location, ProjectStatus status, boolean active, Instant createdAt, Instant updatedAt) {
         if (name == null || name.trim().isEmpty()) {
             throw new TrystDomainException("Project name must not be null or blank");
         }
         this.id = Objects.requireNonNull(id, "id must not be null");
+        this.ownerId = ownerId != null && !ownerId.trim().isEmpty() ? ownerId.trim() : DEFAULT_OWNER_ID;
         this.name = name.trim();
         this.description = description != null ? description.trim() : "";
         this.location = Objects.requireNonNull(location, "location must not be null");
@@ -50,6 +58,10 @@ public class Project {
 
     public String getId() {
         return id;
+    }
+
+    public String getOwnerId() {
+        return ownerId;
     }
 
     public String getName() {
@@ -127,6 +139,7 @@ public class Project {
     public String toString() {
         return "Project{" +
                 "id='" + id + '\'' +
+                ", ownerId='" + ownerId + '\'' +
                 ", name='" + name + '\'' +
                 ", location=" + location +
                 ", status=" + status +

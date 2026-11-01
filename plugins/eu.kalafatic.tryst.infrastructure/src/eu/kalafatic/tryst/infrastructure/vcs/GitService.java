@@ -1,7 +1,9 @@
 package eu.kalafatic.tryst.infrastructure.vcs;
 
+import eu.kalafatic.tryst.core.error.TrystDomainException;
 import eu.kalafatic.tryst.core.error.TrystInfrastructureException;
 import eu.kalafatic.tryst.core.log.TrystLog;
+import eu.kalafatic.tryst.domain.review.CodeReview;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -15,7 +17,8 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Git integration service executing git CLI commands within authorized repositories.
- * Never performs implicit remote pushes or destructive operations without safety checks.
+ * Enforces strict commit authorization: commits are only permitted if an authoritative
+ * CodeReview has been approved and its content fingerprint matches the working tree diff.
  */
 public class GitService {
 
@@ -24,6 +27,13 @@ public class GitService {
             return exitCode == 0;
         }
     }
+
+    public record AuthorizedCommitResult(
+            boolean success,
+            String commitHash,
+            String message,
+            String error
+    ) {}
 
     public boolean isGitRepository(Path directory) {
         if (directory == null || !Files.exists(directory)) return false;
@@ -58,6 +68,58 @@ public class GitService {
     public GitCommandResult commit(Path repoDir, String message) {
         Objects.requireNonNull(message, "message must not be null");
         return runGit(repoDir, List.of("commit", "-m", message));
+    }
+
+    /**
+     * Executes a commit with strict authorization and content fingerprint verification.
+     * Prevents time-of-check/time-of-use bypass: commits only if the review is APPROVED
+     * and the current effective diff matches the approved fingerprint.
+     */
+    public AuthorizedCommitResult commitAuthorizedReview(Path repoDir, CodeReview review, String authorizerId, String commitMessage) {
+        Objects.requireNonNull(repoDir, "repoDir must not be null");
+        Objects.requireNonNull(review, "review must not be null");
+
+        if (!isGitRepository(repoDir)) {
+            return new AuthorizedCommitResult(false, null, commitMessage, "Directory is not a valid Git repository: " + repoDir);
+        }
+
+        if (!review.isApproved()) {
+            return new AuthorizedCommitResult(false, null, commitMessage,
+                    "Commit rejected: Code review " + review.getId() + " is not approved (status: " + review.getStatus() + ")");
+        }
+
+        // Verify that the current working tree diff matches the approved content fingerprint
+        GitCommandResult diffRes = getDiff(repoDir);
+        String currentDiff = diffRes.output();
+        String currentFingerprint = CodeReview.calculateFingerprint(currentDiff);
+
+        if (!currentFingerprint.equals(review.getApprovedFingerprint())) {
+            return new AuthorizedCommitResult(false, null, commitMessage,
+                    "Commit rejected: Working tree content fingerprint (" + currentFingerprint +
+                            ") does not match approved review fingerprint (" + review.getApprovedFingerprint() + "). Content was modified after approval.");
+        }
+
+        // Stage all authorized changes
+        GitCommandResult stageRes = stageAll(repoDir);
+        if (!stageRes.isSuccess()) {
+            return new AuthorizedCommitResult(false, null, commitMessage, "Failed to stage changes: " + stageRes.error());
+        }
+
+        String message = commitMessage != null && !commitMessage.isBlank()
+                ? commitMessage
+                : "TRYST: Approved changes for task " + review.getTaskId() + " (Review: " + review.getId() + ", ApprovedBy: " + authorizerId + ")";
+
+        GitCommandResult commitRes = commit(repoDir, message);
+        if (!commitRes.isSuccess()) {
+            return new AuthorizedCommitResult(false, null, message, "Git commit failed: " + commitRes.error());
+        }
+
+        // Retrieve resulting commit hash
+        GitCommandResult hashRes = runGit(repoDir, List.of("rev-parse", "HEAD"));
+        String commitHash = hashRes.isSuccess() ? hashRes.output().trim() : "UNKNOWN";
+
+        review.recordCommit(commitHash);
+        return new AuthorizedCommitResult(true, commitHash, message, null);
     }
 
     public GitCommandResult runGit(Path repoDir, List<String> args) {

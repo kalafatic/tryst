@@ -1,12 +1,19 @@
 package eu.kalafatic.tryst.domain.model;
 
 /**
- * Task execution lifecycle status.
+ * High-level execution status classification.
  */
 public enum ExecutionStatus {
     IDLE,
+    QUEUED,
+    CLAIMED,
     RUNNING,
+    WAITING_FOR_REVIEW,
+    APPROVED,
+    REJECTED,
+    COMMITTING,
     COMPLETED,
     FAILED,
-    CANCELLED
+    CANCELLED,
+    RECOVERY_REQUIRED
 }

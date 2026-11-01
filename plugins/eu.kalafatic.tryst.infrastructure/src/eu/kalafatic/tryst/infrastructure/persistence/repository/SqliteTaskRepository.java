@@ -3,6 +3,8 @@ package eu.kalafatic.tryst.infrastructure.persistence.repository;
 import eu.kalafatic.tryst.core.error.TrystInfrastructureException;
 import eu.kalafatic.tryst.domain.model.AgentTask;
 import eu.kalafatic.tryst.domain.model.ExecutionStatus;
+import eu.kalafatic.tryst.domain.model.TaskPriority;
+import eu.kalafatic.tryst.domain.model.TaskStatus;
 import eu.kalafatic.tryst.domain.repository.TaskRepository;
 import eu.kalafatic.tryst.infrastructure.persistence.SqliteDatabaseManager;
 
@@ -18,7 +20,7 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * SQLite implementation of TaskRepository.
+ * SQLite implementation of TaskRepository supporting full TaskStatus persistence.
  */
 public class SqliteTaskRepository implements TaskRepository {
 
@@ -59,7 +61,7 @@ public class SqliteTaskRepository implements TaskRepository {
                 }
                 pstmt.setString(4, task.getTitle());
                 pstmt.setString(5, task.getDescription());
-                pstmt.setString(6, task.getStatus().name());
+                pstmt.setString(6, task.getTaskStatus().name());
                 pstmt.setString(7, task.getCreatedAt().toString());
                 if (task.getCompletedAt() != null) {
                     pstmt.setString(8, task.getCompletedAt().toString());
@@ -141,19 +143,20 @@ public class SqliteTaskRepository implements TaskRepository {
     @Override
     public List<AgentTask> findTasksByStatus(ExecutionStatus status) {
         Objects.requireNonNull(status, "status must not be null");
-        String sql = "SELECT id, project_id, session_id, title, description, status, created_at, completed_at FROM tasks WHERE status = ? ORDER BY created_at ASC;";
+        String sql = "SELECT id, project_id, session_id, title, description, status, created_at, completed_at FROM tasks;";
         List<AgentTask> list = new ArrayList<>();
 
         synchronized (databaseManager.getLock()) {
             Connection conn = databaseManager.getConnection();
-            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                pstmt.setString(1, status.name());
-                try (ResultSet rs = pstmt.executeQuery()) {
-                    while (rs.next()) {
-                        list.add(mapResultSetToTask(rs));
+            try (PreparedStatement pstmt = conn.prepareStatement(sql);
+                 ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    AgentTask t = mapResultSetToTask(rs);
+                    if (t.getStatus() == status) {
+                        list.add(t);
                     }
-                    return list;
                 }
+                return list;
             } catch (SQLException e) {
                 throw new TrystInfrastructureException("Failed to find tasks by status: " + status, e);
             }
@@ -201,10 +204,36 @@ public class SqliteTaskRepository implements TaskRepository {
         String sessionId = rs.getString("session_id");
         String title = rs.getString("title");
         String description = rs.getString("description");
-        ExecutionStatus status = ExecutionStatus.valueOf(rs.getString("status"));
+        String statusStr = rs.getString("status");
+
+        TaskStatus taskStatus;
+        try {
+            taskStatus = TaskStatus.valueOf(statusStr);
+        } catch (IllegalArgumentException e) {
+            try {
+                ExecutionStatus es = ExecutionStatus.valueOf(statusStr);
+                taskStatus = switch (es) {
+                    case IDLE -> TaskStatus.CREATED;
+                    case QUEUED -> TaskStatus.QUEUED;
+                    case CLAIMED -> TaskStatus.CLAIMED;
+                    case RUNNING -> TaskStatus.RUNNING;
+                    case WAITING_FOR_REVIEW -> TaskStatus.WAITING_FOR_REVIEW;
+                    case APPROVED -> TaskStatus.APPROVED;
+                    case REJECTED -> TaskStatus.REJECTED;
+                    case COMMITTING -> TaskStatus.COMMITTING;
+                    case COMPLETED -> TaskStatus.COMPLETED;
+                    case FAILED -> TaskStatus.FAILED;
+                    case CANCELLED -> TaskStatus.CANCELLED;
+                    case RECOVERY_REQUIRED -> TaskStatus.RECOVERY_REQUIRED;
+                };
+            } catch (Exception ex) {
+                taskStatus = TaskStatus.CREATED;
+            }
+        }
+
         Instant createdAt = Instant.parse(rs.getString("created_at"));
         String completedAtStr = rs.getString("completed_at");
         Instant completedAt = completedAtStr != null ? Instant.parse(completedAtStr) : null;
-        return new AgentTask(id, projectId, sessionId, title, description, status, createdAt, completedAt);
+        return new AgentTask(id, projectId, sessionId, title, description, taskStatus, TaskPriority.NORMAL, null, null, createdAt, completedAt);
     }
 }

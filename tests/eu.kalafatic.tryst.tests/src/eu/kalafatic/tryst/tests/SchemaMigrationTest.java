@@ -12,13 +12,14 @@ import java.sql.ResultSet;
 import java.util.HashSet;
 import java.util.Set;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
-public class SchemaMigrationTest {
+class SchemaMigrationTest {
 
     @Test
-    public void testSequentialMigrationTracksVersionAndCreatesTables(@TempDir Path tempDir) throws Exception {
-        Path dbPath = tempDir.resolve("migration.db");
+    void testSequentialMigrationTracksVersionAndCreatesTables(@TempDir Path tempDir) throws Exception {
+        Path dbPath = tempDir.resolve("migration_test.db");
 
         try (SqliteDatabaseManager dbManager = new SqliteDatabaseManager(dbPath)) {
             dbManager.initialize();
@@ -27,7 +28,7 @@ public class SchemaMigrationTest {
             assertEquals(0, migrationService.getCurrentVersion());
 
             migrationService.migrate();
-            assertEquals(1, migrationService.getCurrentVersion());
+            assertEquals(2, migrationService.getCurrentVersion());
 
             // Verify all expected tables exist
             Connection conn = dbManager.getConnection();
@@ -47,6 +48,8 @@ public class SchemaMigrationTest {
             assertTrue(tables.contains("conversation_messages"));
             assertTrue(tables.contains("execution_results"));
             assertTrue(tables.contains("agents"));
+            assertTrue(tables.contains("code_reviews"));
+            assertTrue(tables.contains("review_file_edits"));
         }
     }
 }

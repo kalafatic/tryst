@@ -12,7 +12,10 @@ import eu.kalafatic.tryst.core.lifecycle.ApplicationLifecycleStage;
 import eu.kalafatic.tryst.core.log.TrystLog;
 import eu.kalafatic.tryst.domain.ai.AiContextManager;
 import eu.kalafatic.tryst.domain.ai.AiInferenceService;
+import eu.kalafatic.tryst.domain.model.AgentTask;
+import eu.kalafatic.tryst.domain.model.TaskStatus;
 import eu.kalafatic.tryst.domain.repository.AgentRepository;
+import eu.kalafatic.tryst.domain.repository.CodeReviewRepository;
 import eu.kalafatic.tryst.domain.repository.ConversationMessageRepository;
 import eu.kalafatic.tryst.domain.repository.ExecutionResultRepository;
 import eu.kalafatic.tryst.domain.repository.ProjectRepository;
@@ -34,6 +37,7 @@ import eu.kalafatic.tryst.infrastructure.persistence.SchemaMigrationService;
 import eu.kalafatic.tryst.infrastructure.persistence.SqliteBackupService;
 import eu.kalafatic.tryst.infrastructure.persistence.SqliteDatabaseManager;
 import eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteAgentRepository;
+import eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteCodeReviewRepository;
 import eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteConversationMessageRepository;
 import eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteExecutionResultRepository;
 import eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteProjectRepository;
@@ -58,7 +62,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * Deterministic lifecycle coordinator driving startup, configuration,
- * persistence, core/domain/AI services, OSGi registration, and clean shutdown.
+ * persistence, core/domain/AI services, OSGi registration, reconciliation, and clean shutdown.
  */
 public class ApplicationLifecycleCoordinator {
 
@@ -83,6 +87,7 @@ public class ApplicationLifecycleCoordinator {
     private ConversationMessageRepository conversationMessageRepository;
     private ExecutionResultRepository executionResultRepository;
     private AgentRepository agentRepository;
+    private CodeReviewRepository codeReviewRepository;
 
     private WorkspaceService workspaceService;
     private AsyncExecutionService asyncExecutionService;
@@ -190,13 +195,17 @@ public class ApplicationLifecycleCoordinator {
         this.conversationMessageRepository = new SqliteConversationMessageRepository(databaseManager);
         this.executionResultRepository = new SqliteExecutionResultRepository(databaseManager);
         this.agentRepository = new SqliteAgentRepository(databaseManager);
+        this.codeReviewRepository = new SqliteCodeReviewRepository(databaseManager);
 
-        // 4. Initialize Core domain & async services
+        // 4. Startup Task Reconciliation: detect interrupted tasks and mark them RECOVERY_REQUIRED
+        reconcileInterruptedTasks();
+
+        // 5. Initialize Core domain & async services
         this.workspaceService = new WorkspaceService(configuration.defaultWorkspaceDirectory(),
                 workspaceRepository, projectRepository, taskRepository);
         this.asyncExecutionService = new ManagedAsyncExecutionService();
 
-        // 5. Initialize Security, Tools & AI Infrastructure
+        // 6. Initialize Security, Tools & AI Infrastructure
         this.permissionManager = new PermissionManager();
         this.toolRegistry = new ToolRegistry();
         this.toolRegistry.register(new FileTools.ReadFileTool());
@@ -230,14 +239,16 @@ public class ApplicationLifecycleCoordinator {
                 sessionTaskOrchestrator,
                 workspaceService,
                 taskRepository,
+                projectRepository,
                 executionResultRepository,
+                codeReviewRepository,
                 toolRegistry,
                 permissionManager,
                 codeReviewService,
                 eventBus
         );
 
-        // 6. Initialize and start TCP and HTTP communication services
+        // 7. Initialize and start TCP and HTTP communication services
         try {
             this.tcpService = new TrystTcpServer(configuration.serverHost(), configuration.tcpPort(), workspaceService);
             this.tcpService.start();
@@ -246,13 +257,17 @@ public class ApplicationLifecycleCoordinator {
         }
 
         try {
-            this.httpService = new TrystHttpServer(configuration.serverHost(), configuration.httpPort(), workspaceService);
+            this.httpService = new TrystHttpServer(
+                    configuration.serverHost(), configuration.httpPort(),
+                    workspaceService, projectRepository, taskRepository,
+                    codeReviewRepository, gitService, buildAndTestService, permissionManager
+            );
             this.httpService.start();
         } catch (Exception e) {
             TrystLog.error(ApplicationLifecycleCoordinator.class, "Failed to start HTTP service: " + e.getMessage(), e);
         }
 
-        // 7. Register into standard OSGi Service Registry if BundleContext is available
+        // 8. Register into standard OSGi Service Registry if BundleContext is available
         if (bundleContext != null) {
             registerService(ApplicationConfiguration.class, this.configuration);
             registerService(ConfigurationService.class, this.configurationService);
@@ -267,6 +282,7 @@ public class ApplicationLifecycleCoordinator {
             registerService(ConversationMessageRepository.class, this.conversationMessageRepository);
             registerService(ExecutionResultRepository.class, this.executionResultRepository);
             registerService(AgentRepository.class, this.agentRepository);
+            registerService(CodeReviewRepository.class, this.codeReviewRepository);
             registerService(WorkspaceService.class, this.workspaceService);
             registerService(AsyncExecutionService.class, this.asyncExecutionService);
             registerService(PermissionManager.class, this.permissionManager);
@@ -286,10 +302,23 @@ public class ApplicationLifecycleCoordinator {
             }
 
             TrystLog.info(ApplicationLifecycleCoordinator.class,
-                    "Core, Persistence, AI, Orchestration, and Communication OSGi services registered successfully.");
+                    "Core, Persistence, AI, Orchestration, Review, and Communication OSGi services registered successfully.");
         } else {
             TrystLog.warn(ApplicationLifecycleCoordinator.class,
                     "BundleContext unavailable; services initialized in standalone/test mode.");
+        }
+    }
+
+    private void reconcileInterruptedTasks() {
+        if (taskRepository == null) return;
+        List<AgentTask> allTasks = taskRepository.findAll();
+        for (AgentTask task : allTasks) {
+            if (task.getTaskStatus() == TaskStatus.RUNNING || task.getTaskStatus() == TaskStatus.CLAIMED || task.getTaskStatus() == TaskStatus.COMMITTING) {
+                TrystLog.warn(ApplicationLifecycleCoordinator.class,
+                        "Reconciling interrupted task " + task.getId() + " from status " + task.getTaskStatus() + " to RECOVERY_REQUIRED");
+                task.markRecoveryRequired();
+                taskRepository.save(task);
+            }
         }
     }
 
@@ -356,7 +385,7 @@ public class ApplicationLifecycleCoordinator {
             asyncExecutionService = null;
         }
 
-        // 3. Close SQLite Database Manager cleanly
+        // 4. Close SQLite Database Manager cleanly
         if (databaseManager != null) {
             try {
                 databaseManager.close();
@@ -378,6 +407,7 @@ public class ApplicationLifecycleCoordinator {
         this.conversationMessageRepository = null;
         this.executionResultRepository = null;
         this.agentRepository = null;
+        this.codeReviewRepository = null;
         this.backupService = null;
         this.migrationService = null;
         this.workspaceService = null;
@@ -475,6 +505,10 @@ public class ApplicationLifecycleCoordinator {
 
     public AgentRepository getAgentRepository() {
         return agentRepository;
+    }
+
+    public CodeReviewRepository getCodeReviewRepository() {
+        return codeReviewRepository;
     }
 
     public SqliteBackupService getBackupService() {
