@@ -86,6 +86,9 @@ public class ConfigurationService {
             int maxOut = Integer.parseInt(props.getProperty("ai.maxOutputTokens", String.valueOf(base.maxOutputTokens())));
             int retry = Integer.parseInt(props.getProperty("execution.maxRetryAttempts", String.valueOf(base.maxRetryAttempts())));
             boolean sandbox = Boolean.parseBoolean(props.getProperty("security.sandboxEnabled", String.valueOf(base.secureSandboxEnabled())));
+            String host = props.getProperty("server.host", base.serverHost());
+            int httpPort = Integer.parseInt(props.getProperty("server.http.port", String.valueOf(base.httpPort())));
+            int tcpPort = Integer.parseInt(props.getProperty("server.tcp.port", String.valueOf(base.tcpPort())));
 
             return new ApplicationConfiguration(
                     base.applicationName(),
@@ -100,7 +103,10 @@ public class ConfigurationService {
                     maxTokens,
                     maxOut,
                     retry,
-                    sandbox
+                    sandbox,
+                    host,
+                    httpPort,
+                    tcpPort
             );
         } catch (Exception e) {
             TrystLog.warn(ConfigurationService.class, "Failed to load preferences from " + configFilePath + "; using defaults: " + e.getMessage());
@@ -120,6 +126,9 @@ public class ConfigurationService {
             props.setProperty("ai.maxOutputTokens", String.valueOf(config.maxOutputTokens()));
             props.setProperty("execution.maxRetryAttempts", String.valueOf(config.maxRetryAttempts()));
             props.setProperty("security.sandboxEnabled", String.valueOf(config.secureSandboxEnabled()));
+            props.setProperty("server.host", config.serverHost());
+            props.setProperty("server.http.port", String.valueOf(config.httpPort()));
+            props.setProperty("server.tcp.port", String.valueOf(config.tcpPort()));
 
             try (FileOutputStream fos = new FileOutputStream(configFilePath.toFile())) {
                 props.store(fos, "TRYST Configuration Properties");

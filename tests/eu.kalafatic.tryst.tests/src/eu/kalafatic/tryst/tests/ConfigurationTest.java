@@ -22,6 +22,9 @@ class ConfigurationTest {
 
         assertTrue(config.configurationDirectory().endsWith(".tryst"));
         assertTrue(config.defaultWorkspaceDirectory().endsWith("workspace"));
+        assertEquals("127.0.0.1", config.serverHost());
+        assertEquals(8080, config.httpPort());
+        assertEquals(9090, config.tcpPort());
     }
 
     @Test
@@ -41,5 +44,10 @@ class ConfigurationTest {
                 Path.of("/tmp/.tryst"),
                 Path.of("/tmp/.tryst/workspace")
         ));
+
+        ApplicationConfiguration valid = ApplicationConfiguration.createDefault();
+        assertThrows(TrystApplicationException.class, () -> valid.withServerSettings("", 8080, 9090));
+        assertThrows(TrystApplicationException.class, () -> valid.withServerSettings("127.0.0.1", -1, 9090));
+        assertThrows(TrystApplicationException.class, () -> valid.withServerSettings("127.0.0.1", 8080, 70000));
     }
 }

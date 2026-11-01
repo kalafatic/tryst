@@ -16,6 +16,7 @@ Export-Package: eu.kalafatic.tryst.infrastructure.ai,
  eu.kalafatic.tryst.infrastructure.build,
  eu.kalafatic.tryst.infrastructure.persistence,
  eu.kalafatic.tryst.infrastructure.persistence.repository,
+ eu.kalafatic.tryst.infrastructure.server,
  eu.kalafatic.tryst.infrastructure.vcs,
  org.sqlite
 Automatic-Module-Name: eu.kalafatic.tryst.infrastructure
