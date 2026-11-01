@@ -115,7 +115,9 @@ public class SchemaMigrationService {
                 """
                 CREATE TABLE IF NOT EXISTS projects (
                     id TEXT PRIMARY KEY,
+                    owner_id TEXT NOT NULL DEFAULT 'default-user',
                     name TEXT NOT NULL,
+                    description TEXT,
                     location TEXT NOT NULL,
                     active INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
@@ -123,6 +125,7 @@ public class SchemaMigrationService {
                 );
                 """,
                 "CREATE INDEX IF NOT EXISTS idx_projects_active ON projects(active);",
+                "CREATE INDEX IF NOT EXISTS idx_projects_owner ON projects(owner_id);",
 
                 """
                 CREATE TABLE IF NOT EXISTS workspaces (
@@ -206,6 +209,50 @@ public class SchemaMigrationService {
                 """
         );
         migrations.add(new Migration(1, "Initial relational schema", v1Statements));
+
+        // V2: Project Isolation & Code Review Center Schema
+        List<String> v2Statements = List.of(
+                """
+                CREATE TABLE IF NOT EXISTS code_reviews (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    branch TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    initial_diff TEXT,
+                    effective_diff TEXT,
+                    content_fingerprint TEXT,
+                    approved_fingerprint TEXT,
+                    commit_hash TEXT,
+                    approved_by TEXT,
+                    rejected_by TEXT,
+                    rejection_reason TEXT,
+                    build_status TEXT,
+                    test_summary TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+                    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+                );
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_code_reviews_project ON code_reviews(project_id);",
+                "CREATE INDEX IF NOT EXISTS idx_code_reviews_task ON code_reviews(task_id);",
+                "CREATE INDEX IF NOT EXISTS idx_code_reviews_status ON code_reviews(status);",
+
+                """
+                CREATE TABLE IF NOT EXISTS review_file_edits (
+                    id TEXT PRIMARY KEY,
+                    review_id TEXT NOT NULL,
+                    file_path TEXT NOT NULL,
+                    original_content TEXT,
+                    modified_content TEXT,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (review_id) REFERENCES code_reviews(id) ON DELETE CASCADE
+                );
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_review_file_edits_review ON review_file_edits(review_id);"
+        );
+        migrations.add(new Migration(2, "Project isolation and code review persistence", v2Statements));
 
         return migrations;
     }

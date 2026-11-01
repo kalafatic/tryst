@@ -17,7 +17,7 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * SQLite implementation of ProjectRepository.
+ * SQLite implementation of ProjectRepository with owner_id support.
  */
 public class SqliteProjectRepository implements ProjectRepository {
 
@@ -31,10 +31,12 @@ public class SqliteProjectRepository implements ProjectRepository {
     public void save(Project project) {
         Objects.requireNonNull(project, "project must not be null");
         String sql = """
-            INSERT INTO projects (id, name, location, active, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO projects (id, owner_id, name, description, location, active, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
+                owner_id = excluded.owner_id,
                 name = excluded.name,
+                description = excluded.description,
                 location = excluded.location,
                 active = excluded.active,
                 updated_at = excluded.updated_at;
@@ -45,11 +47,13 @@ public class SqliteProjectRepository implements ProjectRepository {
             try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
                 String now = Instant.now().toString();
                 pstmt.setString(1, project.getId());
-                pstmt.setString(2, project.getName());
-                pstmt.setString(3, project.getLocation().toAbsolutePath().normalize().toString());
-                pstmt.setInt(4, project.isActive() ? 1 : 0);
-                pstmt.setString(5, now);
-                pstmt.setString(6, now);
+                pstmt.setString(2, project.getOwnerId() != null ? project.getOwnerId() : Project.DEFAULT_OWNER_ID);
+                pstmt.setString(3, project.getName());
+                pstmt.setString(4, project.getDescription() != null ? project.getDescription() : "");
+                pstmt.setString(5, project.getLocation().toAbsolutePath().normalize().toString());
+                pstmt.setInt(6, project.isActive() ? 1 : 0);
+                pstmt.setString(7, now);
+                pstmt.setString(8, now);
                 pstmt.executeUpdate();
             } catch (SQLException e) {
                 throw new TrystInfrastructureException("Failed to save project: " + project.getId(), e);
@@ -60,7 +64,7 @@ public class SqliteProjectRepository implements ProjectRepository {
     @Override
     public Optional<Project> findById(String id) {
         Objects.requireNonNull(id, "id must not be null");
-        String sql = "SELECT id, name, location, active FROM projects WHERE id = ?;";
+        String sql = "SELECT id, owner_id, name, description, location, active FROM projects WHERE id = ?;";
 
         synchronized (databaseManager.getLock()) {
             Connection conn = databaseManager.getConnection();
@@ -80,7 +84,7 @@ public class SqliteProjectRepository implements ProjectRepository {
 
     @Override
     public List<Project> findAll() {
-        String sql = "SELECT id, name, location, active FROM projects ORDER BY name ASC;";
+        String sql = "SELECT id, owner_id, name, description, location, active FROM projects ORDER BY name ASC;";
         List<Project> list = new ArrayList<>();
 
         synchronized (databaseManager.getLock()) {
@@ -99,7 +103,7 @@ public class SqliteProjectRepository implements ProjectRepository {
 
     @Override
     public Optional<Project> findActive() {
-        String sql = "SELECT id, name, location, active FROM projects WHERE active = 1 LIMIT 1;";
+        String sql = "SELECT id, owner_id, name, description, location, active FROM projects WHERE active = 1 LIMIT 1;";
 
         synchronized (databaseManager.getLock()) {
             Connection conn = databaseManager.getConnection();
@@ -133,9 +137,15 @@ public class SqliteProjectRepository implements ProjectRepository {
 
     private Project mapResultSetToProject(ResultSet rs) throws SQLException {
         String id = rs.getString("id");
+        String ownerId = rs.getString("owner_id");
+        if (ownerId == null || ownerId.trim().isEmpty()) {
+            ownerId = Project.DEFAULT_OWNER_ID;
+        }
         String name = rs.getString("name");
+        String description = rs.getString("description");
         Path location = Path.of(rs.getString("location"));
         boolean active = rs.getInt("active") == 1;
-        return new Project(id, name, location, active);
+        return new Project(id, ownerId, name, description != null ? description : "", location,
+                eu.kalafatic.tryst.domain.model.ProjectStatus.ACTIVE, active, Instant.now(), Instant.now());
     }
 }
