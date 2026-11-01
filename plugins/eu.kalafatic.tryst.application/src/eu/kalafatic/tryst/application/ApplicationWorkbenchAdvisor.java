@@ -14,7 +14,7 @@ import org.eclipse.ui.application.WorkbenchWindowAdvisor;
  */
 public class ApplicationWorkbenchAdvisor extends WorkbenchAdvisor {
 
-    public static final String PERSPECTIVE_ID = "eu.kalafatic.tryst.ui.perspective.main";
+    public static final String PERSPECTIVE_ID = "eu.kalafatic.tryst.ui.perspective.administration";
 
     private final ApplicationLifecycleCoordinator coordinator;
 

@@ -8,12 +8,21 @@
             id="eu.kalafatic.tryst.ui.perspective.main"
             name="TRYST Main Perspective">
       </perspective>
+      <perspective
+            class="eu.kalafatic.tryst.ui.perspective.TrystAdministrationPerspective"
+            id="eu.kalafatic.tryst.ui.perspective.administration"
+            name="TRYST Administration Perspective">
+      </perspective>
    </extension>
    <extension
          point="org.eclipse.ui.views">
       <category
             id="eu.kalafatic.tryst.ui.category"
             name="TRYST">
+      </category>
+      <category
+            id="eu.kalafatic.tryst.ui.adminCategory"
+            name="TRYST Administration &amp; Observability">
       </category>
       <view
             category="eu.kalafatic.tryst.ui.category"
@@ -34,6 +43,69 @@
             class="eu.kalafatic.tryst.ui.view.ConsoleOutputView"
             id="eu.kalafatic.tryst.ui.view.consoleOutput"
             name="Console / Output / Status"
+            restorable="true">
+      </view>
+      <view
+            category="eu.kalafatic.tryst.ui.adminCategory"
+            class="eu.kalafatic.tryst.ui.view.ServerOverviewView"
+            id="eu.kalafatic.tryst.ui.view.serverOverview"
+            name="Server Overview &amp; Health"
+            restorable="true">
+      </view>
+      <view
+            category="eu.kalafatic.tryst.ui.adminCategory"
+            class="eu.kalafatic.tryst.ui.view.UsersAndSessionsView"
+            id="eu.kalafatic.tryst.ui.view.usersAndSessions"
+            name="Users &amp; Active Sessions"
+            restorable="true">
+      </view>
+      <view
+            category="eu.kalafatic.tryst.ui.adminCategory"
+            class="eu.kalafatic.tryst.ui.view.ProjectsAndGitView"
+            id="eu.kalafatic.tryst.ui.view.projectsAndGit"
+            name="Projects &amp; Git Repositories"
+            restorable="true">
+      </view>
+      <view
+            category="eu.kalafatic.tryst.ui.adminCategory"
+            class="eu.kalafatic.tryst.ui.view.TasksAndAgentsView"
+            id="eu.kalafatic.tryst.ui.view.tasksAndAgents"
+            name="Tasks &amp; Autonomous Agents"
+            restorable="true">
+      </view>
+      <view
+            category="eu.kalafatic.tryst.ui.adminCategory"
+            class="eu.kalafatic.tryst.ui.view.DatabaseAdminView"
+            id="eu.kalafatic.tryst.ui.view.databaseAdmin"
+            name="Database Administration"
+            restorable="true">
+      </view>
+      <view
+            category="eu.kalafatic.tryst.ui.adminCategory"
+            class="eu.kalafatic.tryst.ui.view.AiMonitoringView"
+            id="eu.kalafatic.tryst.ui.view.aiMonitoring"
+            name="AI Infrastructure &amp; Models"
+            restorable="true">
+      </view>
+      <view
+            category="eu.kalafatic.tryst.ui.adminCategory"
+            class="eu.kalafatic.tryst.ui.view.TelemetryView"
+            id="eu.kalafatic.tryst.ui.view.telemetry"
+            name="Resource Telemetry"
+            restorable="true">
+      </view>
+      <view
+            category="eu.kalafatic.tryst.ui.adminCategory"
+            class="eu.kalafatic.tryst.ui.view.AuditAndLogsView"
+            id="eu.kalafatic.tryst.ui.view.auditAndLogs"
+            name="Audit &amp; Security Logs"
+            restorable="true">
+      </view>
+      <view
+            category="eu.kalafatic.tryst.ui.adminCategory"
+            class="eu.kalafatic.tryst.ui.view.ManagedProcessesView"
+            id="eu.kalafatic.tryst.ui.view.processes"
+            name="Managed OS Processes"
             restorable="true">
       </view>
    </extension>
