@@ -23,21 +23,40 @@ public class ConfigurationService {
     private final Path configFilePath;
     private volatile ApplicationConfiguration currentConfiguration;
     private final CopyOnWriteArrayList<Consumer<ApplicationConfiguration>> listeners = new CopyOnWriteArrayList<>();
+    private final RuntimeEndpointRegistry endpointRegistry;
 
     public ConfigurationService(Path configurationDirectory) {
         Objects.requireNonNull(configurationDirectory, "configurationDirectory must not be null");
         this.configFilePath = configurationDirectory.resolve(PREF_FILE_NAME);
         this.currentConfiguration = loadConfiguration(configurationDirectory);
+        this.endpointRegistry = new RuntimeEndpointRegistry(
+                RuntimeEndpoint.uninitialized(
+                        currentConfiguration.applicationName(),
+                        currentConfiguration.serverHost(),
+                        currentConfiguration.httpPort()
+                )
+        );
     }
 
     public ConfigurationService(ApplicationConfiguration initialConfig) {
         Objects.requireNonNull(initialConfig, "initialConfig must not be null");
         this.configFilePath = initialConfig.configurationDirectory().resolve(PREF_FILE_NAME);
         this.currentConfiguration = initialConfig;
+        this.endpointRegistry = new RuntimeEndpointRegistry(
+                RuntimeEndpoint.uninitialized(
+                        initialConfig.applicationName(),
+                        initialConfig.serverHost(),
+                        initialConfig.httpPort()
+                )
+        );
     }
 
     public ApplicationConfiguration getConfiguration() {
         return currentConfiguration;
+    }
+
+    public RuntimeEndpointRegistry getEndpointRegistry() {
+        return endpointRegistry;
     }
 
     public synchronized void updateConfiguration(ApplicationConfiguration newConfiguration) {
@@ -89,6 +108,11 @@ public class ConfigurationService {
             String host = props.getProperty("server.host", base.serverHost());
             int httpPort = Integer.parseInt(props.getProperty("server.http.port", String.valueOf(base.httpPort())));
             int tcpPort = Integer.parseInt(props.getProperty("server.tcp.port", String.valueOf(base.tcpPort())));
+            boolean dynamicFallback = Boolean.parseBoolean(props.getProperty("server.dynamicPortFallback", String.valueOf(base.dynamicPortFallbackEnabled())));
+            int rangeStart = Integer.parseInt(props.getProperty("server.portRangeStart", String.valueOf(base.portRangeStart())));
+            int rangeEnd = Integer.parseInt(props.getProperty("server.portRangeEnd", String.valueOf(base.portRangeEnd())));
+            String publicUrl = props.getProperty("server.publicUrl", base.publicServerUrl());
+            boolean reverseProxy = Boolean.parseBoolean(props.getProperty("server.reverseProxyEnabled", String.valueOf(base.reverseProxyEnabled())));
 
             return new ApplicationConfiguration(
                     base.applicationName(),
@@ -106,7 +130,12 @@ public class ConfigurationService {
                     sandbox,
                     host,
                     httpPort,
-                    tcpPort
+                    tcpPort,
+                    dynamicFallback,
+                    rangeStart,
+                    rangeEnd,
+                    publicUrl,
+                    reverseProxy
             );
         } catch (Exception e) {
             TrystLog.warn(ConfigurationService.class, "Failed to load preferences from " + configFilePath + "; using defaults: " + e.getMessage());
@@ -129,6 +158,11 @@ public class ConfigurationService {
             props.setProperty("server.host", config.serverHost());
             props.setProperty("server.http.port", String.valueOf(config.httpPort()));
             props.setProperty("server.tcp.port", String.valueOf(config.tcpPort()));
+            props.setProperty("server.dynamicPortFallback", String.valueOf(config.dynamicPortFallbackEnabled()));
+            props.setProperty("server.portRangeStart", String.valueOf(config.portRangeStart()));
+            props.setProperty("server.portRangeEnd", String.valueOf(config.portRangeEnd()));
+            props.setProperty("server.publicUrl", config.publicServerUrl());
+            props.setProperty("server.reverseProxyEnabled", String.valueOf(config.reverseProxyEnabled()));
 
             try (FileOutputStream fos = new FileOutputStream(configFilePath.toFile())) {
                 props.store(fos, "TRYST Configuration Properties");

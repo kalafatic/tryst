@@ -25,8 +25,18 @@ public record ApplicationConfiguration(
         boolean secureSandboxEnabled,
         String serverHost,
         int httpPort,
-        int tcpPort
+        int tcpPort,
+        boolean dynamicPortFallbackEnabled,
+        int portRangeStart,
+        int portRangeEnd,
+        String publicServerUrl,
+        boolean reverseProxyEnabled
 ) {
+    public static final boolean DEFAULT_DYNAMIC_PORT_FALLBACK = true;
+    public static final int DEFAULT_PORT_RANGE_START = 8080;
+    public static final int DEFAULT_PORT_RANGE_END = 8180;
+    public static final String DEFAULT_PUBLIC_URL = "";
+    public static final boolean DEFAULT_REVERSE_PROXY = false;
     public static final String DEFAULT_APP_NAME = "TRYST – AI Development Environment";
     public static final String DEFAULT_VERSION = "0.1.0";
     public static final String DEFAULT_OLLAMA_ENDPOINT = "http://localhost:11434";
@@ -84,6 +94,55 @@ public record ApplicationConfiguration(
         if (tcpPort < 0 || tcpPort > 65535) {
             throw new TrystApplicationException("tcpPort must be between 0 and 65535");
         }
+        if (portRangeStart < 0 || portRangeStart > 65535) {
+            throw new TrystApplicationException("portRangeStart must be between 0 and 65535");
+        }
+        if (portRangeEnd < portRangeStart || portRangeEnd > 65535) {
+            throw new TrystApplicationException("portRangeEnd must be >= portRangeStart and <= 65535");
+        }
+    }
+
+    public ApplicationConfiguration(
+            String applicationName,
+            String version,
+            Path userHomeDirectory,
+            Path configurationDirectory,
+            Path defaultWorkspaceDirectory,
+            String ollamaEndpoint,
+            String defaultModel,
+            int requestTimeoutSeconds,
+            int maxIterations,
+            int maxContextTokens,
+            int maxOutputTokens,
+            int maxRetryAttempts,
+            boolean secureSandboxEnabled,
+            String serverHost,
+            int httpPort,
+            int tcpPort
+    ) {
+        this(
+                applicationName,
+                version,
+                userHomeDirectory,
+                configurationDirectory,
+                defaultWorkspaceDirectory,
+                ollamaEndpoint,
+                defaultModel,
+                requestTimeoutSeconds,
+                maxIterations,
+                maxContextTokens,
+                maxOutputTokens,
+                maxRetryAttempts,
+                secureSandboxEnabled,
+                serverHost,
+                httpPort,
+                tcpPort,
+                DEFAULT_DYNAMIC_PORT_FALLBACK,
+                DEFAULT_PORT_RANGE_START,
+                DEFAULT_PORT_RANGE_END,
+                DEFAULT_PUBLIC_URL,
+                DEFAULT_REVERSE_PROXY
+        );
     }
 
     public ApplicationConfiguration(
@@ -144,7 +203,8 @@ public record ApplicationConfiguration(
                 applicationName, version, userHomeDirectory, configurationDirectory,
                 defaultWorkspaceDirectory, newEndpoint, defaultModel, requestTimeoutSeconds,
                 maxIterations, maxContextTokens, maxOutputTokens, maxRetryAttempts, secureSandboxEnabled,
-                serverHost, httpPort, tcpPort
+                serverHost, httpPort, tcpPort, dynamicPortFallbackEnabled, portRangeStart, portRangeEnd,
+                publicServerUrl, reverseProxyEnabled
         );
     }
 
@@ -153,7 +213,8 @@ public record ApplicationConfiguration(
                 applicationName, version, userHomeDirectory, configurationDirectory,
                 defaultWorkspaceDirectory, ollamaEndpoint, newModel, requestTimeoutSeconds,
                 maxIterations, maxContextTokens, maxOutputTokens, maxRetryAttempts, secureSandboxEnabled,
-                serverHost, httpPort, tcpPort
+                serverHost, httpPort, tcpPort, dynamicPortFallbackEnabled, portRangeStart, portRangeEnd,
+                publicServerUrl, reverseProxyEnabled
         );
     }
 
@@ -162,7 +223,8 @@ public record ApplicationConfiguration(
                 applicationName, version, userHomeDirectory, configurationDirectory,
                 defaultWorkspaceDirectory, ollamaEndpoint, defaultModel, timeoutSecs,
                 iterations, maxContextTokens, maxOutputTokens, retryAttempts, secureSandboxEnabled,
-                serverHost, httpPort, tcpPort
+                serverHost, httpPort, tcpPort, dynamicPortFallbackEnabled, portRangeStart, portRangeEnd,
+                publicServerUrl, reverseProxyEnabled
         );
     }
 
@@ -171,7 +233,25 @@ public record ApplicationConfiguration(
                 applicationName, version, userHomeDirectory, configurationDirectory,
                 defaultWorkspaceDirectory, ollamaEndpoint, defaultModel, requestTimeoutSeconds,
                 maxIterations, maxContextTokens, maxOutputTokens, maxRetryAttempts, secureSandboxEnabled,
-                host, httpPort, tcpPort
+                host, httpPort, tcpPort, dynamicPortFallbackEnabled, portRangeStart, portRangeEnd,
+                publicServerUrl, reverseProxyEnabled
         );
+    }
+
+    public ApplicationConfiguration withDynamicNetworking(boolean fallback, int startPort, int endPort, String publicUrl, boolean reverseProxy) {
+        return new ApplicationConfiguration(
+                applicationName, version, userHomeDirectory, configurationDirectory,
+                defaultWorkspaceDirectory, ollamaEndpoint, defaultModel, requestTimeoutSeconds,
+                maxIterations, maxContextTokens, maxOutputTokens, maxRetryAttempts, secureSandboxEnabled,
+                serverHost, httpPort, tcpPort, fallback, startPort, endPort,
+                publicUrl != null ? publicUrl : "", reverseProxy
+        );
+    }
+
+    public String resolveEffectiveExternalUrl(int actualPort) {
+        if (reverseProxyEnabled && publicServerUrl != null && !publicServerUrl.isBlank()) {
+            return publicServerUrl.endsWith("/") ? publicServerUrl.substring(0, publicServerUrl.length() - 1) : publicServerUrl;
+        }
+        return "http://" + serverHost + ":" + actualPort;
     }
 }

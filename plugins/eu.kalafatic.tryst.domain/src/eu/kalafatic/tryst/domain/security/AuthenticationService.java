@@ -30,6 +30,8 @@ public class AuthenticationService {
     private final UserSessionRepository sessionRepository;
     private final PermissionManager permissionManager;
     private final SecureRandom secureRandom = new SecureRandom();
+    private volatile String oneTimeSetupToken;
+    private volatile boolean setupCompleted = false;
 
     public record AuthResult(
             boolean success,
@@ -66,9 +68,61 @@ public class AuthenticationService {
 
         User admin = new User(username, hash, salt, UserRole.ADMIN);
         userRepository.save(admin);
+        this.setupCompleted = true;
+        this.oneTimeSetupToken = null;
         permissionManager.recordAudit("system", "ADMIN_BOOTSTRAP", "user", admin.getId(), null, null, "SUCCESS",
                 "Bootstrapped administrator user '" + username + "'");
         TrystLog.info(AuthenticationService.class, "Bootstrapped administrator '" + username + "'.");
+        return admin;
+    }
+
+    public synchronized boolean hasAdministrator() {
+        return userRepository.findAll().stream().anyMatch(u -> u.getRole() == UserRole.ADMIN);
+    }
+
+    public synchronized String generateOneTimeSetupToken() {
+        if (hasAdministrator()) {
+            throw new TrystDomainException("Administrator already exists; setup token generation not permitted");
+        }
+        if (this.oneTimeSetupToken == null) {
+            this.oneTimeSetupToken = generateSecureToken();
+            TrystLog.warn(AuthenticationService.class, "Generated One-Time Setup Token: " + this.oneTimeSetupToken);
+        }
+        return this.oneTimeSetupToken;
+    }
+
+    public synchronized String getOneTimeSetupToken() {
+        return this.oneTimeSetupToken;
+    }
+
+    public synchronized boolean isSetupRequired() {
+        return !hasAdministrator();
+    }
+
+    public synchronized User completeInitialSetup(String token, String adminUsername, String adminPassword) {
+        if (hasAdministrator()) {
+            throw new TrystDomainException("Setup is already completed; administrator exists");
+        }
+        if (this.oneTimeSetupToken == null || !java.security.MessageDigest.isEqual(
+                this.oneTimeSetupToken.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                token.getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
+            permissionManager.recordAudit("system", "SETUP_FAILED", "system", null, null, null, "DENIED", "Invalid one-time setup token");
+            throw new TrystDomainException("Invalid setup token");
+        }
+        if (adminUsername == null || adminUsername.isBlank() || adminPassword == null || adminPassword.isBlank()) {
+            throw new TrystDomainException("Administrator username and password must not be blank");
+        }
+
+        String salt = PasswordHasher.generateSalt();
+        String hash = PasswordHasher.hashPassword(adminPassword.toCharArray(), salt);
+        User admin = new User(adminUsername.trim(), hash, salt, UserRole.ADMIN);
+        userRepository.save(admin);
+
+        this.oneTimeSetupToken = null;
+        this.setupCompleted = true;
+        permissionManager.recordAudit("system", "FIRST_RUN_SETUP", "user", admin.getId(), null, null, "SUCCESS",
+                "Initial administrator provisioned via first-run wizard: " + adminUsername);
+        TrystLog.info(AuthenticationService.class, "First-run setup complete. Administrator provisioned: " + adminUsername);
         return admin;
     }
 

@@ -54,6 +54,20 @@
       </view>
       <view
             category="eu.kalafatic.tryst.ui.adminCategory"
+            class="eu.kalafatic.tryst.ui.view.EmbeddedBrowserView"
+            id="eu.kalafatic.tryst.ui.view.embeddedBrowser"
+            name="Embedded TRYST Web Browser"
+            restorable="true">
+      </view>
+      <view
+            category="eu.kalafatic.tryst.ui.adminCategory"
+            class="eu.kalafatic.tryst.ui.view.SessionDetailView"
+            id="eu.kalafatic.tryst.ui.view.sessionDetail"
+            name="Session Operational Detail"
+            restorable="true">
+      </view>
+      <view
+            category="eu.kalafatic.tryst.ui.adminCategory"
             class="eu.kalafatic.tryst.ui.view.UsersAndSessionsView"
             id="eu.kalafatic.tryst.ui.view.usersAndSessions"
             name="Users &amp; Active Sessions"

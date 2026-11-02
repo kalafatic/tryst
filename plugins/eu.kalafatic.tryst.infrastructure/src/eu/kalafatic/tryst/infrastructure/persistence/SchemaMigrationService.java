@@ -364,6 +364,46 @@ public class SchemaMigrationService {
         );
         migrations.add(new Migration(3, "Production platform security, observability and operational intelligence", v3Statements));
 
+        // V4: AI Providers and Model Publication Catalog
+        List<String> v4Statements = List.of(
+                """
+                CREATE TABLE IF NOT EXISTS ai_providers (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    provider_type TEXT NOT NULL,
+                    endpoint TEXT NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    health_status TEXT NOT NULL DEFAULT 'UNKNOWN',
+                    last_checked_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_ai_providers_enabled ON ai_providers(enabled);",
+
+                """
+                CREATE TABLE IF NOT EXISTS ai_models (
+                    id TEXT PRIMARY KEY,
+                    provider_id TEXT NOT NULL,
+                    model_identifier TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    capabilities_json TEXT,
+                    context_limit INTEGER NOT NULL DEFAULT 4096,
+                    available INTEGER NOT NULL DEFAULT 1,
+                    published INTEGER NOT NULL DEFAULT 1,
+                    min_role TEXT NOT NULL DEFAULT 'USER',
+                    last_verified_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (provider_id) REFERENCES ai_providers(id) ON DELETE CASCADE
+                );
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_ai_models_provider ON ai_models(provider_id);",
+                "CREATE INDEX IF NOT EXISTS idx_ai_models_available ON ai_models(available);",
+                "CREATE INDEX IF NOT EXISTS idx_ai_models_published ON ai_models(published);"
+        );
+        migrations.add(new Migration(4, "AI providers and model publication catalog", v4Statements));
+
         return migrations;
     }
 }

@@ -17,9 +17,10 @@ public class TrystAdministrationPerspective implements IPerspectiveFactory {
         String editorArea = layout.getEditorArea();
         layout.setEditorAreaVisible(false);
 
-        // Top Left: Server Overview & AI
+        // Top Left: Server Overview & AI & Embedded Browser
         IFolderLayout topLeft = layout.createFolder("topLeft", IPageLayout.LEFT, 0.40f, editorArea);
         topLeft.addView("eu.kalafatic.tryst.ui.view.serverOverview");
+        topLeft.addView("eu.kalafatic.tryst.ui.view.embeddedBrowser");
         topLeft.addView("eu.kalafatic.tryst.ui.view.aiMonitoring");
 
         // Bottom Left: Telemetry & Database
@@ -27,8 +28,9 @@ public class TrystAdministrationPerspective implements IPerspectiveFactory {
         bottomLeft.addView("eu.kalafatic.tryst.ui.view.telemetry");
         bottomLeft.addView("eu.kalafatic.tryst.ui.view.databaseAdmin");
 
-        // Top Right: Users & Sessions, Projects & Tasks
+        // Top Right: Users & Sessions, Projects & Tasks, Session Detail
         IFolderLayout topRight = layout.createFolder("topRight", IPageLayout.RIGHT, 0.60f, editorArea);
+        topRight.addView("eu.kalafatic.tryst.ui.view.sessionDetail");
         topRight.addView("eu.kalafatic.tryst.ui.view.usersAndSessions");
         topRight.addView("eu.kalafatic.tryst.ui.view.projectsAndGit");
         topRight.addView("eu.kalafatic.tryst.ui.view.tasksAndAgents");

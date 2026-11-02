@@ -60,13 +60,16 @@ public class TrystServerApplication implements IApplication {
     private void cleanup() {
         if (coordinator != null) {
             try {
-                if (coordinator.getCurrentStage().ordinal() < ApplicationLifecycleStage.APPLICATION_SHUTDOWN.ordinal()) {
+                if (coordinator.getCurrentStage() == ApplicationLifecycleStage.APPLICATION_READY) {
+                    coordinator.transitionTo(ApplicationLifecycleStage.WORKBENCH_RUNNING);
+                }
+                if (coordinator.getCurrentStage() == ApplicationLifecycleStage.WORKBENCH_RUNNING) {
                     coordinator.transitionTo(ApplicationLifecycleStage.APPLICATION_SHUTDOWN);
                 }
-                if (coordinator.getCurrentStage().ordinal() < ApplicationLifecycleStage.SERVICE_DISPOSAL.ordinal()) {
+                if (coordinator.getCurrentStage() == ApplicationLifecycleStage.APPLICATION_SHUTDOWN) {
                     coordinator.transitionTo(ApplicationLifecycleStage.SERVICE_DISPOSAL);
                 }
-                if (coordinator.getCurrentStage().ordinal() < ApplicationLifecycleStage.APPLICATION_TERMINATED.ordinal()) {
+                if (coordinator.getCurrentStage() == ApplicationLifecycleStage.SERVICE_DISPOSAL) {
                     coordinator.transitionTo(ApplicationLifecycleStage.APPLICATION_TERMINATED);
                 }
             } catch (Exception e) {
