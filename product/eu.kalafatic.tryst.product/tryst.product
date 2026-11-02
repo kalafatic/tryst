@@ -15,8 +15,11 @@
       </vmArgsMac>
    </launcherArgs>
 
-   <windowImages/>
-
+   <splash
+      location="eu.kalafatic.tryst.application"
+      startupProgressRect="40,240,420,15"
+      startupMessageRect="40,220,420,20"
+      startupForegroundColor="94A3B8" />
    <launcher name="tryst">
       <win useIco="false">
          <bmp/>

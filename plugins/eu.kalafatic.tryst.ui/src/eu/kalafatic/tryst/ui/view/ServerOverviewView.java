@@ -23,6 +23,7 @@ public class ServerOverviewView extends ViewPart {
     private Label lblThreads;
     private Label lblUptime;
     private Label lblStatus;
+    private Label lblReadiness;
 
     @Override
     public void createPartControl(Composite parent) {
@@ -31,6 +32,9 @@ public class ServerOverviewView extends ViewPart {
         lblStatus = new Label(parent, SWT.NONE);
         lblStatus.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
         lblStatus.setText("");
+
+        createLabel(parent, "Server Readiness:");
+        lblReadiness = createValueLabel(parent);
 
         createLabel(parent, "System CPU Load:");
         lblSystemCpu = createValueLabel(parent);
@@ -80,10 +84,20 @@ public class ServerOverviewView extends ViewPart {
             lblHeapUsed.setText("-");
             lblThreads.setText("-");
             lblUptime.setText("-");
+            if (lblReadiness != null) {
+                lblReadiness.setText("UNKNOWN");
+            }
             return;
         }
 
         lblStatus.setText("");
+        eu.kalafatic.tryst.core.lifecycle.ServerReadinessService readiness = TrystUiServices.getServerReadinessService();
+        if (readiness != null && lblReadiness != null) {
+            var report = readiness.evaluateReadiness(eu.kalafatic.tryst.core.lifecycle.ApplicationLifecycleStage.WORKBENCH_RUNNING);
+            lblReadiness.setText(report.ready() ? "READY (Healthy)" : (report.degraded() ? "DEGRADED" : "INITIALIZING"));
+        } else if (lblReadiness != null) {
+            lblReadiness.setText("OPERATIONAL");
+        }
         ServerMonitoringService.SystemMetrics m = mon.collectMetrics();
         lblSystemCpu.setText(String.format("%.1f %%", m.systemCpuLoad()));
         lblProcessCpu.setText(String.format("%.1f %%", m.processCpuLoad()));

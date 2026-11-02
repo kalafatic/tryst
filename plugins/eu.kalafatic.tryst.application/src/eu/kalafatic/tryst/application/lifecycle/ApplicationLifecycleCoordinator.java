@@ -76,6 +76,7 @@ public class ApplicationLifecycleCoordinator {
     private ConfigurationService configurationService;
     private ApplicationConfiguration configuration;
     private EventBus eventBus;
+    private eu.kalafatic.tryst.core.lifecycle.ServerReadinessService serverReadinessService;
     private SqliteDatabaseManager databaseManager;
     private SchemaMigrationService migrationService;
     private SqliteBackupService backupService;
@@ -170,7 +171,13 @@ public class ApplicationLifecycleCoordinator {
 
     private void onPlatformInitialization() {
         this.eventBus = new EventBus();
-        TrystLog.info(ApplicationLifecycleCoordinator.class, "Platform initialization complete. EventBus ready.");
+        this.serverReadinessService = new eu.kalafatic.tryst.core.lifecycle.ServerReadinessService();
+        this.serverReadinessService.registerComponent("Database", true);
+        this.serverReadinessService.registerComponent("Authentication", true);
+        this.serverReadinessService.registerComponent("HttpServer", true);
+        this.serverReadinessService.registerComponent("TcpServer", false);
+        this.serverReadinessService.registerComponent("AiProvider", false);
+        TrystLog.info(ApplicationLifecycleCoordinator.class, "Platform initialization complete. EventBus and ServerReadinessService ready.");
     }
 
     private void onConfigurationInitialization() {
@@ -199,6 +206,10 @@ public class ApplicationLifecycleCoordinator {
 
         this.migrationService = new SchemaMigrationService(databaseManager);
         this.migrationService.migrate();
+
+        if (serverReadinessService != null) {
+            serverReadinessService.markHealthy("Database", java.util.Map.of("path", dbPath.toString()));
+        }
 
         this.backupService = new SqliteBackupService(databaseManager);
 
@@ -244,6 +255,11 @@ public class ApplicationLifecycleCoordinator {
             TrystLog.warn(ApplicationLifecycleCoordinator.class,
                     "No administrator account detected and no bootstrap password supplied. Initial setup token: " + token);
         }
+        if (serverReadinessService != null) {
+            serverReadinessService.markHealthy("Authentication", java.util.Map.of(
+                    "hasAdmin", Boolean.toString(this.authenticationService.hasAdministrator())
+            ));
+        }
         this.toolRegistry = new ToolRegistry();
         this.toolRegistry.register(new FileTools.ReadFileTool());
         this.toolRegistry.register(new FileTools.WriteFileTool());
@@ -260,8 +276,14 @@ public class ApplicationLifecycleCoordinator {
         this.aiModelRegistryService.registerProvider("ollama-default", "Default Ollama Endpoint", "OLLAMA", configuration.ollamaEndpoint(), true);
         try {
             this.aiModelRegistryService.discoverModelsFromInferenceService("ollama-default", this.aiInferenceService).join();
+            if (serverReadinessService != null) {
+                serverReadinessService.markHealthy("AiProvider", java.util.Map.of("provider", "ollama-default"));
+            }
         } catch (Exception e) {
             TrystLog.warn(ApplicationLifecycleCoordinator.class, "Initial AI model discovery deferred: " + e.getMessage());
+            if (serverReadinessService != null) {
+                serverReadinessService.markDegraded("AiProvider", e.getMessage(), java.util.Map.of("provider", "ollama-default"));
+            }
         }
         this.gitService = new GitService();
         this.buildAndTestService = new BuildAndTestService();
@@ -311,8 +333,14 @@ public class ApplicationLifecycleCoordinator {
         try {
             this.tcpService = new TrystTcpServer(configuration.serverHost(), configuration.tcpPort(), workspaceService);
             this.tcpService.start();
+            if (serverReadinessService != null) {
+                serverReadinessService.markHealthy("TcpServer", java.util.Map.of("port", Integer.toString(configuration.tcpPort())));
+            }
         } catch (Exception e) {
             TrystLog.error(ApplicationLifecycleCoordinator.class, "Failed to start TCP service: " + e.getMessage(), e);
+            if (serverReadinessService != null) {
+                serverReadinessService.markDegraded("TcpServer", e.getMessage(), java.util.Map.of());
+            }
         }
 
         try {
@@ -336,8 +364,17 @@ public class ApplicationLifecycleCoordinator {
             server.setAiModelRegistryService(this.aiModelRegistryService);
             this.httpService = server;
             this.httpService.start();
+            if (serverReadinessService != null) {
+                serverReadinessService.markHealthy("HttpServer", java.util.Map.of(
+                        "host", configuration.serverHost(),
+                        "port", Integer.toString(this.httpService.getPort())
+                ));
+            }
         } catch (Exception e) {
             TrystLog.error(ApplicationLifecycleCoordinator.class, "Failed to start HTTP service: " + e.getMessage(), e);
+            if (serverReadinessService != null) {
+                serverReadinessService.markFailed("HttpServer", e.getMessage(), java.util.Map.of());
+            }
         }
 
         // 8. Register into standard OSGi Service Registry if BundleContext is available
@@ -346,6 +383,9 @@ public class ApplicationLifecycleCoordinator {
             registerService(ConfigurationService.class, this.configurationService);
             registerService(eu.kalafatic.tryst.core.config.RuntimeEndpointRegistry.class, this.configurationService.getEndpointRegistry());
             registerService(EventBus.class, this.eventBus);
+            if (this.serverReadinessService != null) {
+                registerService(eu.kalafatic.tryst.core.lifecycle.ServerReadinessService.class, this.serverReadinessService);
+            }
             registerService(UnitOfWork.class, this.databaseManager);
             registerService(SqliteDatabaseManager.class, this.databaseManager);
             registerService(SqliteBackupService.class, this.backupService);
@@ -529,6 +569,7 @@ public class ApplicationLifecycleCoordinator {
         this.codeReviewService = null;
         this.sessionTaskOrchestrator = null;
         this.autonomousDevelopmentService = null;
+        this.serverReadinessService = null;
 
         TrystLog.info(ApplicationLifecycleCoordinator.class, "Service disposal complete.");
     }
@@ -572,6 +613,10 @@ public class ApplicationLifecycleCoordinator {
 
     public EventBus getEventBus() {
         return eventBus;
+    }
+
+    public eu.kalafatic.tryst.core.lifecycle.ServerReadinessService getServerReadinessService() {
+        return serverReadinessService;
     }
 
     public WorkspaceService getWorkspaceService() {
