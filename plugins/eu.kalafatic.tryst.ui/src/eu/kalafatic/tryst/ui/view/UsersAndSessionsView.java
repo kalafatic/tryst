@@ -105,9 +105,19 @@ public class UsersAndSessionsView extends ViewPart {
             @Override public void removeListener(ILabelProviderListener listener) {}
         });
 
-        Button btnRefresh = new Button(parent, SWT.PUSH);
+        Composite btnRow = new Composite(parent, SWT.NONE);
+        btnRow.setLayout(new GridLayout(2, false));
+        btnRow.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+
+        Button btnViewDetail = new Button(btnRow, SWT.PUSH);
+        btnViewDetail.setText("Inspect Selected User Detail");
+        btnViewDetail.addListener(SWT.Selection, e -> openSelectedUserDetail());
+
+        Button btnRefresh = new Button(btnRow, SWT.PUSH);
         btnRefresh.setText("Refresh Users & Sessions");
         btnRefresh.addListener(SWT.Selection, e -> refreshData());
+
+        userViewer.addDoubleClickListener(event -> openSelectedUserDetail());
 
         refreshData();
     }
@@ -134,6 +144,27 @@ public class UsersAndSessionsView extends ViewPart {
         statusLabel.setText("");
         userViewer.setInput(uRepo.findAll());
         sessionViewer.setInput(sRepo.findAllActive());
+    }
+
+    private void openSelectedUserDetail() {
+        IStructuredSelection selection = (IStructuredSelection) userViewer.getSelection();
+        if (selection.isEmpty() || !(selection.getFirstElement() instanceof User selectedUser)) {
+            statusLabel.setText("Please select a user from the table to inspect details.");
+            return;
+        }
+
+        try {
+            org.eclipse.ui.IWorkbenchPage page = getSite().getPage();
+            if (page != null) {
+                org.eclipse.ui.IViewPart view = page.showView(UserDetailView.ID);
+                if (view instanceof UserDetailView userDetailView) {
+                    userDetailView.displayUser(selectedUser);
+                }
+            }
+        } catch (Exception e) {
+            TrystLog.error(UsersAndSessionsView.class, "Failed to open UserDetailView: " + e.getMessage(), e);
+            statusLabel.setText("Failed to open User Detail view: " + e.getMessage());
+        }
     }
 
     @Override

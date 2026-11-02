@@ -68,14 +68,26 @@ public class EmbeddedBrowserView extends ViewPart {
 
     private void resolveAndNavigate() {
         RuntimeEndpointRegistry reg = TrystUiServices.getService(RuntimeEndpointRegistry.class);
-        String targetUrl = "http://127.0.0.1:8080";
+        String targetUrl = "http://127.0.0.1:8080/tryst";
         if (reg != null && reg.getCurrentEndpoint() != null) {
             RuntimeEndpoint ep = reg.getCurrentEndpoint();
-            targetUrl = ep.internalUrl();
+            targetUrl = resolveBestUrl(ep);
         }
 
         urlText.setText(targetUrl);
         navigateToUrl(targetUrl);
+    }
+
+    private String resolveBestUrl(RuntimeEndpoint ep) {
+        if (ep == null) return "http://127.0.0.1:8080/tryst";
+        // Prefer canonical or external URL when available, otherwise internal URL
+        if (ep.canonicalUrl() != null && !ep.canonicalUrl().isBlank()) {
+            return ep.canonicalUrl();
+        }
+        if (ep.externalUrl() != null && !ep.externalUrl().isBlank()) {
+            return ep.externalUrl();
+        }
+        return ep.internalUrl();
     }
 
     private void navigateToUrl(String url) {
@@ -93,8 +105,9 @@ public class EmbeddedBrowserView extends ViewPart {
                 if (urlText != null && !urlText.isDisposed()) {
                     urlText.getDisplay().asyncExec(() -> {
                         if (!urlText.isDisposed()) {
-                            urlText.setText(endpoint.internalUrl());
-                            navigateToUrl(endpoint.internalUrl());
+                            String bestUrl = resolveBestUrl(endpoint);
+                            urlText.setText(bestUrl);
+                            navigateToUrl(bestUrl);
                         }
                     });
                 }

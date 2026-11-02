@@ -17,5 +17,7 @@ public interface ProjectRepository {
 
     Optional<Project> findActive();
 
+    List<Project> findByOwnerId(String ownerId);
+
     boolean delete(String id);
 }

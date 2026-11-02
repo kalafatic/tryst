@@ -167,18 +167,26 @@ public class TrystHttpServer implements TrystHttpService {
             if (configurationService != null) {
                 ApplicationConfiguration cfg = configurationService.getConfiguration();
                 String extUrl = cfg.resolveEffectiveExternalUrl(actualPort);
-                String intUrl = "http://" + host + ":" + actualPort;
+                String intUrl = "http://" + host + ":" + actualPort + cfg.contextPath();
                 eu.kalafatic.tryst.core.config.RuntimeEndpoint ep = new eu.kalafatic.tryst.core.config.RuntimeEndpoint(
-                        cfg.applicationName(), host, actualPort, -1, intUrl, extUrl, "RUNNING", Instant.now()
+                        cfg.applicationName(), host, actualPort, -1, intUrl, extUrl,
+                        cfg.canonicalUrl(), cfg.contextPath(), "RUNNING", Instant.now()
                 );
                 configurationService.getEndpointRegistry().updateEndpoint(ep);
             }
 
-            TrystLog.info(TrystHttpServer.class, "HTTP Server started on http://" + host + ":" + actualPort + "/");
+            TrystLog.info(TrystHttpServer.class, "HTTP Server started on http://" + host + ":" + actualPort + "/ (Canonical: " + getCanonicalUrl() + ")");
         } catch (IOException e) {
             this.running.set(false);
             throw new TrystInfrastructureException("Failed to start HTTP server on " + host + ":" + preferredPort, e);
         }
+    }
+
+    public String getCanonicalUrl() {
+        if (configurationService != null) {
+            return configurationService.getConfiguration().canonicalUrl();
+        }
+        return "http://localhost/tryst";
     }
 
     private HttpServer bindHttpServer() throws IOException {
@@ -186,6 +194,11 @@ public class TrystHttpServer implements TrystHttpService {
         try {
             return HttpServer.create(new InetSocketAddress(host, preferredPort), 0);
         } catch (IOException e) {
+            if (preferredPort == 80) {
+                TrystLog.warn(TrystHttpServer.class,
+                        "Canonical port 80 is unavailable or requires privileged access (" + e.getMessage() +
+                        "). TRYST will allocate an internal listener port while preserving canonical external endpoint mapping.");
+            }
             if (!dynamicPortFallback) {
                 throw e;
             }
@@ -211,16 +224,75 @@ public class TrystHttpServer implements TrystHttpService {
     }
 
     private void setupRoutes() {
-        server.createContext("/api/status", new StatusHandler());
-        server.createContext("/api/setup", new SetupHandler());
-        server.createContext("/api/auth", new AuthHandler());
-        server.createContext("/api/models", new ModelsHandler());
-        server.createContext("/api/projects", new ProjectsHandler());
-        server.createContext("/api/tasks", new TasksHandler());
-        server.createContext("/api/reviews", new ReviewsHandler());
-        server.createContext("/api/notifications", new NotificationsHandler());
-        server.createContext("/api/admin", new AdminHandler());
-        server.createContext("/", new StaticAssetHandler());
+        String ctxPath = "/tryst";
+        if (configurationService != null) {
+            ctxPath = configurationService.getConfiguration().contextPath();
+        }
+        if (!ctxPath.startsWith("/")) ctxPath = "/" + ctxPath;
+        if (ctxPath.endsWith("/")) ctxPath = ctxPath.substring(0, ctxPath.length() - 1);
+
+        StatusHandler statusH = new StatusHandler();
+        SetupHandler setupH = new SetupHandler();
+        AuthHandler authH = new AuthHandler();
+        ModelsHandler modelsH = new ModelsHandler();
+        ProjectsHandler projectsH = new ProjectsHandler();
+        TasksHandler tasksH = new TasksHandler();
+        ReviewsHandler reviewsH = new ReviewsHandler();
+        NotificationsHandler notifH = new NotificationsHandler();
+        AdminHandler adminH = new AdminHandler();
+        StaticAssetHandler staticH = new StaticAssetHandler();
+
+        // Register default root /api/... routes
+        server.createContext("/api/status", statusH);
+        server.createContext("/api/setup", setupH);
+        server.createContext("/api/auth", authH);
+        server.createContext("/api/models", modelsH);
+        server.createContext("/api/projects", projectsH);
+        server.createContext("/api/tasks", tasksH);
+        server.createContext("/api/reviews", reviewsH);
+        server.createContext("/api/notifications", notifH);
+        server.createContext("/api/admin", adminH);
+
+        // Register context-path specific routes if not root
+        if (!ctxPath.isEmpty() && !"/".equals(ctxPath)) {
+            server.createContext(ctxPath + "/api/status", statusH);
+            server.createContext(ctxPath + "/api/setup", setupH);
+            server.createContext(ctxPath + "/api/auth", authH);
+            server.createContext(ctxPath + "/api/models", modelsH);
+            server.createContext(ctxPath + "/api/projects", projectsH);
+            server.createContext(ctxPath + "/api/tasks", tasksH);
+            server.createContext(ctxPath + "/api/reviews", reviewsH);
+            server.createContext(ctxPath + "/api/notifications", notifH);
+            server.createContext(ctxPath + "/api/admin", adminH);
+
+            server.createContext(ctxPath, staticH);
+        }
+
+        server.createContext("/", new RootRedirectOrStaticAssetHandler(ctxPath, staticH));
+    }
+
+    private static class RootRedirectOrStaticAssetHandler implements HttpHandler {
+        private final String contextPath;
+        private final StaticAssetHandler staticAssetHandler;
+
+        public RootRedirectOrStaticAssetHandler(String contextPath, StaticAssetHandler staticAssetHandler) {
+            this.contextPath = contextPath;
+            this.staticAssetHandler = staticAssetHandler;
+        }
+
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            String path = exchange.getRequestURI().getPath();
+            if (path == null || path.equals("/") || path.isBlank()) {
+                if (contextPath != null && !contextPath.isEmpty() && !"/".equals(contextPath)) {
+                    // Redirect to canonical context path
+                    exchange.getResponseHeaders().set("Location", contextPath);
+                    exchange.sendResponseHeaders(302, -1);
+                    return;
+                }
+            }
+            staticAssetHandler.handle(exchange);
+        }
     }
 
     @Override
@@ -278,16 +350,35 @@ public class TrystHttpServer implements TrystHttpService {
     }
 
     /**
-     * Authenticates the principal from the Authorization: Bearer <token> header or session.
+     * Authenticates the principal from the Authorization: Bearer <token> header or Cookie session.
      * Legacy backward-compatibility fallback is provided ONLY when authenticationService is not wired
      * or for tests that do not configure users.
      */
     private Optional<SecurityContext> resolveSecurityContext(HttpExchange exchange) {
+        if (authenticationService == null) {
+            return Optional.empty();
+        }
         String authHeader = exchange.getRequestHeaders().getFirst("Authorization");
-        if (authHeader != null && authHeader.startsWith("Bearer ") && authenticationService != null) {
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
             String token = authHeader.substring("Bearer ".length()).trim();
             return authenticationService.authenticateToken(token);
         }
+
+        // Support cookie-based authentication for browser sessions under context path /tryst
+        String cookieHeader = exchange.getRequestHeaders().getFirst("Cookie");
+        if (cookieHeader != null && !cookieHeader.isBlank()) {
+            String[] cookies = cookieHeader.split(";");
+            for (String cookie : cookies) {
+                String[] pair = cookie.trim().split("=", 2);
+                if (pair.length == 2 && ("tryst_session".equalsIgnoreCase(pair[0].trim()) || "token".equalsIgnoreCase(pair[0].trim()))) {
+                    String token = pair[1].trim();
+                    if (!token.isEmpty()) {
+                        return authenticationService.authenticateToken(token);
+                    }
+                }
+            }
+        }
+
         return Optional.empty();
     }
 
@@ -423,6 +514,10 @@ public class TrystHttpServer implements TrystHttpService {
 
                 AuthenticationService.AuthResult res = authenticationService.login(username, password, clientIp, userAgent);
                 if (res.success()) {
+                    String ctxPath = (configurationService != null) ? configurationService.getConfiguration().contextPath() : "/tryst";
+                    if (!ctxPath.startsWith("/")) ctxPath = "/" + ctxPath;
+                    exchange.getResponseHeaders().add("Set-Cookie",
+                            "tryst_session=" + res.token() + "; Path=" + ctxPath + "; HttpOnly; SameSite=Lax");
                     String json = String.format("{\"success\": true, \"token\": \"%s\", \"user\": {\"id\": \"%s\", \"username\": \"%s\", \"role\": \"%s\"}}",
                             res.token(), res.user().getId(), res.user().getUsername(), res.user().getRole().name());
                     sendJsonResponse(exchange, 200, json);
@@ -436,7 +531,20 @@ public class TrystHttpServer implements TrystHttpService {
                 String authHeader = exchange.getRequestHeaders().getFirst("Authorization");
                 if (authHeader != null && authHeader.startsWith("Bearer ")) {
                     authenticationService.logout(authHeader.substring("Bearer ".length()).trim());
+                } else {
+                    String cookieHeader = exchange.getRequestHeaders().getFirst("Cookie");
+                    if (cookieHeader != null) {
+                        for (String c : cookieHeader.split(";")) {
+                            String[] p = c.trim().split("=", 2);
+                            if (p.length == 2 && "tryst_session".equalsIgnoreCase(p[0].trim())) {
+                                authenticationService.logout(p[1].trim());
+                            }
+                        }
+                    }
                 }
+                String ctxPath = (configurationService != null) ? configurationService.getConfiguration().contextPath() : "/tryst";
+                if (!ctxPath.startsWith("/")) ctxPath = "/" + ctxPath;
+                exchange.getResponseHeaders().add("Set-Cookie", "tryst_session=; Path=" + ctxPath + "; Max-Age=0; HttpOnly; SameSite=Lax");
                 sendJsonResponse(exchange, 200, "{\"success\": true}");
                 return;
             }
@@ -1304,6 +1412,19 @@ public class TrystHttpServer implements TrystHttpService {
                         let activeReview = null;
                         let authToken = localStorage.getItem('tryst_auth_token') || '';
 
+                        // Determine the base context path dynamically from window.location.pathname
+                        function getContextBase() {
+                            const p = window.location.pathname;
+                            if (p.startsWith('/tryst')) {
+                                return '/tryst';
+                            }
+                            return '';
+                        }
+                        function apiUrl(endpoint) {
+                            const clean = endpoint.startsWith('/') ? endpoint : '/' + endpoint;
+                            return getContextBase() + clean;
+                        }
+
                         function getAuthHeaders() {
                             const h = { 'Content-Type': 'application/json' };
                             if (authToken) h['Authorization'] = 'Bearer ' + authToken;
@@ -1315,7 +1436,7 @@ public class TrystHttpServer implements TrystHttpService {
                             if (!u) return;
                             const p = prompt('Password:');
                             if (!p) return;
-                            const res = await fetch('/api/auth/login', {
+                            const res = await fetch(apiUrl('/api/auth/login'), {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ username: u, password: p })
@@ -1354,36 +1475,36 @@ public class TrystHttpServer implements TrystHttpService {
                                 if (sub === 'overview') {
                                     loadAdminOverview();
                                 } else if (sub === 'users') {
-                                    const res = await fetch('/api/admin/users', { headers: getAuthHeaders() });
+                                    const res = await fetch(apiUrl('/api/admin/users'), { headers: getAuthHeaders() });
                                     const data = await res.json();
                                     container.innerHTML = '<table><tr><th>ID</th><th>Username</th><th>Role</th><th>Active</th><th>Locked</th><th>Created</th></tr>' +
                                         data.users.map(u => `<tr><td>${u.id.substring(0,8)}</td><td>${u.username}</td><td>${u.role}</td><td>${u.active}</td><td>${u.locked}</td><td>${u.createdAt}</td></tr>`).join('') + '</table>';
                                 } else if (sub === 'sessions') {
-                                    const res = await fetch('/api/admin/sessions', { headers: getAuthHeaders() });
+                                    const res = await fetch(apiUrl('/api/admin/sessions'), { headers: getAuthHeaders() });
                                     const data = await res.json();
                                     container.innerHTML = '<table><tr><th>ID</th><th>User ID</th><th>Client IP</th><th>Expires</th><th>Revoked</th><th>Last Activity</th></tr>' +
                                         data.sessions.map(s => `<tr><td>${s.id.substring(0,8)}</td><td>${s.userId.substring(0,8)}</td><td>${s.clientIp}</td><td>${s.expiresAt}</td><td>${s.revoked}</td><td>${s.lastActivity}</td></tr>`).join('') + '</table>';
                                 } else if (sub === 'audit') {
-                                    const res = await fetch('/api/admin/audit', { headers: getAuthHeaders() });
+                                    const res = await fetch(apiUrl('/api/admin/audit'), { headers: getAuthHeaders() });
                                     const data = await res.json();
                                     container.innerHTML = '<table><tr><th>Time</th><th>Actor</th><th>Action</th><th>Target</th><th>Outcome</th><th>Details</th></tr>' +
                                         data.auditEvents.map(a => `<tr><td>${a.time}</td><td>${a.actor}</td><td>${a.action}</td><td>${a.target}</td><td>${a.outcome}</td><td>${a.details}</td></tr>`).join('') + '</table>';
                                 } else if (sub === 'telemetry') {
-                                    const res = await fetch('/api/admin/telemetry', { headers: getAuthHeaders() });
+                                    const res = await fetch(apiUrl('/api/admin/telemetry'), { headers: getAuthHeaders() });
                                     const data = await res.json();
                                     container.innerHTML = '<table><tr><th>Timestamp</th><th>CPU System</th><th>CPU Process</th><th>Heap Used (MB)</th><th>Active Sessions</th></tr>' +
                                         data.snapshots.map(s => `<tr><td>${s.timestamp}</td><td>${s.cpuSystem.toFixed(1)}%</td><td>${s.cpuProcess.toFixed(1)}%</td><td>${(s.heapUsed/1048576).toFixed(1)}</td><td>${s.activeSessions}</td></tr>`).join('') + '</table>';
                                 } else if (sub === 'diagnostics') {
-                                    const res = await fetch('/api/admin/logs', { headers: getAuthHeaders() });
+                                    const res = await fetch(apiUrl('/api/admin/logs'), { headers: getAuthHeaders() });
                                     const data = await res.json();
                                     container.innerHTML = '<table><tr><th>Seq</th><th>Time</th><th>Level</th><th>Component</th><th>Message</th></tr>' +
                                         data.logs.map(l => `<tr><td>${l.seq}</td><td>${l.time}</td><td>${l.level}</td><td>${l.component}</td><td>${l.message}</td></tr>`).join('') + '</table>';
                                 } else if (sub === 'database') {
-                                    const res = await fetch('/api/admin/database', { headers: getAuthHeaders() });
+                                    const res = await fetch(apiUrl('/api/admin/database'), { headers: getAuthHeaders() });
                                     const data = await res.json();
                                     container.innerHTML = `<div><p><b>Path:</b> ${data.databasePath}</p><p><b>Size:</b> ${data.sizeBytes} bytes</p><p><b>Schema:</b> V${data.schemaVersion}</p><button class="btn btn-primary" onclick="createBackup()">Create Snapshot Backup</button></div>`;
                                 } else if (sub === 'processes') {
-                                    const res = await fetch('/api/admin/processes', { headers: getAuthHeaders() });
+                                    const res = await fetch(apiUrl('/api/admin/processes'), { headers: getAuthHeaders() });
                                     const data = await res.json();
                                     container.innerHTML = '<table><tr><th>PID</th><th>Command</th><th>Working Dir</th><th>Status</th><th>Duration</th></tr>' +
                                         data.processes.map(p => `<tr><td>${p.pid}</td><td>${p.command}</td><td>${p.workingDir}</td><td>${p.status}</td><td>${p.durationMs}ms</td></tr>`).join('') + '</table>';
@@ -1394,14 +1515,14 @@ public class TrystHttpServer implements TrystHttpService {
                         }
 
                         async function createBackup() {
-                            const res = await fetch('/api/admin/database/backup', { method: 'POST' });
+                            const res = await fetch(apiUrl('/api/admin/database/backup'), { method: 'POST' });
                             const d = await res.json();
                             alert(d.success ? 'Backup created at: ' + d.backupPath : 'Backup failed');
                         }
 
                         async function loadAdminOverview() {
                             try {
-                                const res = await fetch('/api/admin/overview', { headers: getAuthHeaders() });
+                                const res = await fetch(apiUrl('/api/admin/overview'), { headers: getAuthHeaders() });
                                 if (res.status === 403 || res.status === 401) {
                                     document.getElementById('adminTableContainer').innerHTML =
                                         '<div style="color:var(--yellow); padding: 16px;">Authentication as Administrator required. <button class="btn btn-primary" onclick="promptLogin()">Login with Token / Password</button></div>';
@@ -1419,7 +1540,7 @@ public class TrystHttpServer implements TrystHttpService {
 
                         async function loadProjects() {
                             try {
-                                const res = await fetch('/api/projects');
+                                const res = await fetch(apiUrl('/api/projects'));
                                 const data = await res.json();
                                 const list = document.getElementById('projectList');
                                 list.innerHTML = data.projects.map(p => `<div class="list-item"><strong>${escapeHtml(p.name)}</strong><br><small style="color:var(--muted);">${p.id.substring(0,8)}</small></div>`).join('');
@@ -1428,7 +1549,7 @@ public class TrystHttpServer implements TrystHttpService {
 
                         async function loadReviews() {
                             try {
-                                const res = await fetch('/api/reviews');
+                                const res = await fetch(apiUrl('/api/reviews'));
                                 const data = await res.json();
                                 const list = document.getElementById('reviewList');
                                 list.innerHTML = data.reviews.map(r => `
@@ -1478,7 +1599,7 @@ public class TrystHttpServer implements TrystHttpService {
                             if (!activeReview) return;
                             const filePath = document.getElementById('editFilePath').value;
                             const content = document.getElementById('fileEditor').value;
-                            const res = await fetch(`/api/reviews/${activeReview.id}/files/edit`, {
+                            const res = await fetch(apiUrl(`/api/reviews/${activeReview.id}/files/edit`), {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ filePath, content })
@@ -1489,14 +1610,14 @@ public class TrystHttpServer implements TrystHttpService {
 
                         async function approveReview() {
                             if (!activeReview) return;
-                            const res = await fetch(`/api/reviews/${activeReview.id}/approve`, { method: 'POST' });
+                            const res = await fetch(apiUrl(`/api/reviews/${activeReview.id}/approve`), { method: 'POST' });
                             const updated = await res.json();
                             selectReview(updated);
                         }
 
                         async function rejectReview() {
                             if (!activeReview) return;
-                            const res = await fetch(`/api/reviews/${activeReview.id}/reject`, {
+                            const res = await fetch(apiUrl(`/api/reviews/${activeReview.id}/reject`), {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ reason: 'Rejected from web UI' })
@@ -1507,7 +1628,7 @@ public class TrystHttpServer implements TrystHttpService {
 
                         async function commitReview() {
                             if (!activeReview) return;
-                            const res = await fetch(`/api/reviews/${activeReview.id}/commit`, {
+                            const res = await fetch(apiUrl(`/api/reviews/${activeReview.id}/commit`), {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ message: 'Approved via TRYST Web Review Center' })
@@ -1523,7 +1644,7 @@ public class TrystHttpServer implements TrystHttpService {
 
                         async function reRunBuildTest() {
                             if (!activeReview) return;
-                            const res = await fetch(`/api/reviews/${activeReview.id}/build-test`, { method: 'POST' });
+                            const res = await fetch(apiUrl(`/api/reviews/${activeReview.id}/build-test`), { method: 'POST' });
                             const updated = await res.json();
                             selectReview(updated);
                         }

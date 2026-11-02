@@ -30,13 +30,17 @@ public record ApplicationConfiguration(
         int portRangeStart,
         int portRangeEnd,
         String publicServerUrl,
-        boolean reverseProxyEnabled
+        boolean reverseProxyEnabled,
+        String contextPath,
+        String canonicalUrl
 ) {
     public static final boolean DEFAULT_DYNAMIC_PORT_FALLBACK = true;
     public static final int DEFAULT_PORT_RANGE_START = 8080;
     public static final int DEFAULT_PORT_RANGE_END = 8180;
     public static final String DEFAULT_PUBLIC_URL = "";
     public static final boolean DEFAULT_REVERSE_PROXY = false;
+    public static final String DEFAULT_CONTEXT_PATH = "/tryst";
+    public static final String DEFAULT_CANONICAL_URL = "http://localhost/tryst";
     public static final String DEFAULT_APP_NAME = "TRYST – AI Development Environment";
     public static final String DEFAULT_VERSION = "0.1.0";
     public static final String DEFAULT_OLLAMA_ENDPOINT = "http://localhost:11434";
@@ -100,6 +104,62 @@ public record ApplicationConfiguration(
         if (portRangeEnd < portRangeStart || portRangeEnd > 65535) {
             throw new TrystApplicationException("portRangeEnd must be >= portRangeStart and <= 65535");
         }
+        if (contextPath == null || contextPath.isBlank()) {
+            throw new TrystApplicationException("contextPath must not be blank");
+        }
+        if (canonicalUrl == null || canonicalUrl.isBlank()) {
+            throw new TrystApplicationException("canonicalUrl must not be blank");
+        }
+    }
+
+    public ApplicationConfiguration(
+            String applicationName,
+            String version,
+            Path userHomeDirectory,
+            Path configurationDirectory,
+            Path defaultWorkspaceDirectory,
+            String ollamaEndpoint,
+            String defaultModel,
+            int requestTimeoutSeconds,
+            int maxIterations,
+            int maxContextTokens,
+            int maxOutputTokens,
+            int maxRetryAttempts,
+            boolean secureSandboxEnabled,
+            String serverHost,
+            int httpPort,
+            int tcpPort,
+            boolean dynamicPortFallbackEnabled,
+            int portRangeStart,
+            int portRangeEnd,
+            String publicServerUrl,
+            boolean reverseProxyEnabled
+    ) {
+        this(
+                applicationName,
+                version,
+                userHomeDirectory,
+                configurationDirectory,
+                defaultWorkspaceDirectory,
+                ollamaEndpoint,
+                defaultModel,
+                requestTimeoutSeconds,
+                maxIterations,
+                maxContextTokens,
+                maxOutputTokens,
+                maxRetryAttempts,
+                secureSandboxEnabled,
+                serverHost,
+                httpPort,
+                tcpPort,
+                dynamicPortFallbackEnabled,
+                portRangeStart,
+                portRangeEnd,
+                publicServerUrl,
+                reverseProxyEnabled,
+                DEFAULT_CONTEXT_PATH,
+                DEFAULT_CANONICAL_URL
+        );
     }
 
     public ApplicationConfiguration(
@@ -204,7 +264,7 @@ public record ApplicationConfiguration(
                 defaultWorkspaceDirectory, newEndpoint, defaultModel, requestTimeoutSeconds,
                 maxIterations, maxContextTokens, maxOutputTokens, maxRetryAttempts, secureSandboxEnabled,
                 serverHost, httpPort, tcpPort, dynamicPortFallbackEnabled, portRangeStart, portRangeEnd,
-                publicServerUrl, reverseProxyEnabled
+                publicServerUrl, reverseProxyEnabled, contextPath, canonicalUrl
         );
     }
 
@@ -214,7 +274,7 @@ public record ApplicationConfiguration(
                 defaultWorkspaceDirectory, ollamaEndpoint, newModel, requestTimeoutSeconds,
                 maxIterations, maxContextTokens, maxOutputTokens, maxRetryAttempts, secureSandboxEnabled,
                 serverHost, httpPort, tcpPort, dynamicPortFallbackEnabled, portRangeStart, portRangeEnd,
-                publicServerUrl, reverseProxyEnabled
+                publicServerUrl, reverseProxyEnabled, contextPath, canonicalUrl
         );
     }
 
@@ -224,7 +284,7 @@ public record ApplicationConfiguration(
                 defaultWorkspaceDirectory, ollamaEndpoint, defaultModel, timeoutSecs,
                 iterations, maxContextTokens, maxOutputTokens, retryAttempts, secureSandboxEnabled,
                 serverHost, httpPort, tcpPort, dynamicPortFallbackEnabled, portRangeStart, portRangeEnd,
-                publicServerUrl, reverseProxyEnabled
+                publicServerUrl, reverseProxyEnabled, contextPath, canonicalUrl
         );
     }
 
@@ -234,7 +294,7 @@ public record ApplicationConfiguration(
                 defaultWorkspaceDirectory, ollamaEndpoint, defaultModel, requestTimeoutSeconds,
                 maxIterations, maxContextTokens, maxOutputTokens, maxRetryAttempts, secureSandboxEnabled,
                 host, httpPort, tcpPort, dynamicPortFallbackEnabled, portRangeStart, portRangeEnd,
-                publicServerUrl, reverseProxyEnabled
+                publicServerUrl, reverseProxyEnabled, contextPath, canonicalUrl
         );
     }
 
@@ -244,7 +304,19 @@ public record ApplicationConfiguration(
                 defaultWorkspaceDirectory, ollamaEndpoint, defaultModel, requestTimeoutSeconds,
                 maxIterations, maxContextTokens, maxOutputTokens, maxRetryAttempts, secureSandboxEnabled,
                 serverHost, httpPort, tcpPort, fallback, startPort, endPort,
-                publicUrl != null ? publicUrl : "", reverseProxy
+                publicUrl != null ? publicUrl : "", reverseProxy, contextPath, canonicalUrl
+        );
+    }
+
+    public ApplicationConfiguration withCanonicalUrlSettings(String contextPath, String canonicalUrl) {
+        return new ApplicationConfiguration(
+                applicationName, version, userHomeDirectory, configurationDirectory,
+                defaultWorkspaceDirectory, ollamaEndpoint, defaultModel, requestTimeoutSeconds,
+                maxIterations, maxContextTokens, maxOutputTokens, maxRetryAttempts, secureSandboxEnabled,
+                serverHost, httpPort, tcpPort, dynamicPortFallbackEnabled, portRangeStart, portRangeEnd,
+                publicServerUrl, reverseProxyEnabled,
+                contextPath != null ? contextPath : DEFAULT_CONTEXT_PATH,
+                canonicalUrl != null ? canonicalUrl : DEFAULT_CANONICAL_URL
         );
     }
 
@@ -252,6 +324,10 @@ public record ApplicationConfiguration(
         if (reverseProxyEnabled && publicServerUrl != null && !publicServerUrl.isBlank()) {
             return publicServerUrl.endsWith("/") ? publicServerUrl.substring(0, publicServerUrl.length() - 1) : publicServerUrl;
         }
-        return "http://" + serverHost + ":" + actualPort;
+        String cleanContext = contextPath.startsWith("/") ? contextPath : "/" + contextPath;
+        if (cleanContext.endsWith("/")) {
+            cleanContext = cleanContext.substring(0, cleanContext.length() - 1);
+        }
+        return "http://" + serverHost + ":" + actualPort + cleanContext;
     }
 }

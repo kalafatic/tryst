@@ -28,9 +28,10 @@ public class TrystAdministrationPerspective implements IPerspectiveFactory {
         bottomLeft.addView("eu.kalafatic.tryst.ui.view.telemetry");
         bottomLeft.addView("eu.kalafatic.tryst.ui.view.databaseAdmin");
 
-        // Top Right: Users & Sessions, Projects & Tasks, Session Detail
+        // Top Right: Users & Sessions, Projects & Tasks, Session Detail, User Detail
         IFolderLayout topRight = layout.createFolder("topRight", IPageLayout.RIGHT, 0.60f, editorArea);
         topRight.addView("eu.kalafatic.tryst.ui.view.sessionDetail");
+        topRight.addView("eu.kalafatic.tryst.ui.view.userDetail");
         topRight.addView("eu.kalafatic.tryst.ui.view.usersAndSessions");
         topRight.addView("eu.kalafatic.tryst.ui.view.projectsAndGit");
         topRight.addView("eu.kalafatic.tryst.ui.view.tasksAndAgents");

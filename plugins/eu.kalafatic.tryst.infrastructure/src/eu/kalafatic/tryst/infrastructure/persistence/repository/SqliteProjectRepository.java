@@ -120,6 +120,28 @@ public class SqliteProjectRepository implements ProjectRepository {
     }
 
     @Override
+    public List<Project> findByOwnerId(String ownerId) {
+        Objects.requireNonNull(ownerId, "ownerId must not be null");
+        String sql = "SELECT id, owner_id, name, description, location, active FROM projects WHERE owner_id = ? ORDER BY name ASC;";
+        List<Project> list = new ArrayList<>();
+
+        synchronized (databaseManager.getLock()) {
+            Connection conn = databaseManager.getConnection();
+            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                pstmt.setString(1, ownerId.trim());
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    while (rs.next()) {
+                        list.add(mapResultSetToProject(rs));
+                    }
+                    return list;
+                }
+            } catch (SQLException e) {
+                throw new TrystInfrastructureException("Failed to find projects by owner: " + ownerId, e);
+            }
+        }
+    }
+
+    @Override
     public boolean delete(String id) {
         Objects.requireNonNull(id, "id must not be null");
         String sql = "DELETE FROM projects WHERE id = ?;";
