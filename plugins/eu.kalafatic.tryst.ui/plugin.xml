@@ -75,6 +75,13 @@
       </view>
       <view
             category="eu.kalafatic.tryst.ui.adminCategory"
+            class="eu.kalafatic.tryst.ui.view.UserDetailView"
+            id="eu.kalafatic.tryst.ui.view.userDetail"
+            name="User Detail Administration"
+            restorable="true">
+      </view>
+      <view
+            category="eu.kalafatic.tryst.ui.adminCategory"
             class="eu.kalafatic.tryst.ui.view.ProjectsAndGitView"
             id="eu.kalafatic.tryst.ui.view.projectsAndGit"
             name="Projects &amp; Git Repositories"

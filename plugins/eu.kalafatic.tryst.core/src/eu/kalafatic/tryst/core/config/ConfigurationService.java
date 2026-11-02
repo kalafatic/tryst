@@ -113,6 +113,8 @@ public class ConfigurationService {
             int rangeEnd = Integer.parseInt(props.getProperty("server.portRangeEnd", String.valueOf(base.portRangeEnd())));
             String publicUrl = props.getProperty("server.publicUrl", base.publicServerUrl());
             boolean reverseProxy = Boolean.parseBoolean(props.getProperty("server.reverseProxyEnabled", String.valueOf(base.reverseProxyEnabled())));
+            String contextPath = props.getProperty("server.contextPath", base.contextPath());
+            String canonicalUrl = props.getProperty("server.canonicalUrl", base.canonicalUrl());
 
             return new ApplicationConfiguration(
                     base.applicationName(),
@@ -135,7 +137,9 @@ public class ConfigurationService {
                     rangeStart,
                     rangeEnd,
                     publicUrl,
-                    reverseProxy
+                    reverseProxy,
+                    contextPath,
+                    canonicalUrl
             );
         } catch (Exception e) {
             TrystLog.warn(ConfigurationService.class, "Failed to load preferences from " + configFilePath + "; using defaults: " + e.getMessage());
@@ -163,6 +167,8 @@ public class ConfigurationService {
             props.setProperty("server.portRangeEnd", String.valueOf(config.portRangeEnd()));
             props.setProperty("server.publicUrl", config.publicServerUrl());
             props.setProperty("server.reverseProxyEnabled", String.valueOf(config.reverseProxyEnabled()));
+            props.setProperty("server.contextPath", config.contextPath());
+            props.setProperty("server.canonicalUrl", config.canonicalUrl());
 
             try (FileOutputStream fos = new FileOutputStream(configFilePath.toFile())) {
                 props.store(fos, "TRYST Configuration Properties");
