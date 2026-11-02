@@ -71,8 +71,34 @@ public class ConsoleOutputView extends ViewPart {
             }
         };
 
+        Action refreshAction = new Action("Refresh Console Messages") {
+            @Override
+            public void run() {
+                if (!textWidget.isDisposed()) {
+                    textWidget.setText("");
+                    for (ConsoleMessage msg : controller.getMessages()) {
+                        appendMessage(msg);
+                    }
+                }
+            }
+        };
+
         IToolBarManager toolbar = getViewSite().getActionBars().getToolBarManager();
+        toolbar.add(refreshAction);
         toolbar.add(clearAction);
+
+        org.eclipse.jface.action.IMenuManager menu = getViewSite().getActionBars().getMenuManager();
+        menu.add(refreshAction);
+        menu.add(clearAction);
+
+        org.eclipse.jface.action.MenuManager menuMgr = new org.eclipse.jface.action.MenuManager("#ConsolePopupMenu");
+        menuMgr.setRemoveAllWhenShown(true);
+        menuMgr.addMenuListener(m -> {
+            m.add(refreshAction);
+            m.add(clearAction);
+            m.add(new org.eclipse.jface.action.Separator(org.eclipse.ui.IWorkbenchActionConstants.MB_ADDITIONS));
+        });
+        textWidget.setMenu(menuMgr.createContextMenu(textWidget));
     }
 
     @Override

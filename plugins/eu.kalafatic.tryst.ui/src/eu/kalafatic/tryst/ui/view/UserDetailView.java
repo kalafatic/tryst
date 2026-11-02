@@ -106,6 +106,31 @@ public class UserDetailView extends ViewPart {
         createAuditTab(tabFolder);
 
         tabFolder.setSelection(0);
+
+        createActions(parent);
+    }
+
+    private void createActions(Composite parent) {
+        org.eclipse.jface.action.Action refreshAction = new org.eclipse.jface.action.Action("Refresh User Data") {
+            @Override
+            public void run() {
+                refreshCurrentUserData();
+            }
+        };
+
+        org.eclipse.jface.action.IToolBarManager toolbar = getViewSite().getActionBars().getToolBarManager();
+        toolbar.add(refreshAction);
+
+        org.eclipse.jface.action.IMenuManager menu = getViewSite().getActionBars().getMenuManager();
+        menu.add(refreshAction);
+
+        org.eclipse.jface.action.MenuManager menuMgr = new org.eclipse.jface.action.MenuManager("#UserDetailPopupMenu");
+        menuMgr.setRemoveAllWhenShown(true);
+        menuMgr.addMenuListener(m -> {
+            m.add(refreshAction);
+            m.add(new org.eclipse.jface.action.Separator(org.eclipse.ui.IWorkbenchActionConstants.MB_ADDITIONS));
+        });
+        parent.setMenu(menuMgr.createContextMenu(parent));
     }
 
     private void createOverviewTab(CTabFolder tabFolder) {
