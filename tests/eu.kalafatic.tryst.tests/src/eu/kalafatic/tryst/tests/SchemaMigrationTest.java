@@ -28,7 +28,7 @@ class SchemaMigrationTest {
             assertEquals(0, migrationService.getCurrentVersion());
 
             migrationService.migrate();
-            assertEquals(3, migrationService.getCurrentVersion());
+            assertEquals(4, migrationService.getCurrentVersion());
 
             // Verify all expected tables exist
             Connection conn = dbManager.getConnection();
@@ -56,6 +56,8 @@ class SchemaMigrationTest {
             assertTrue(tables.contains("telemetry_snapshots"));
             assertTrue(tables.contains("notifications"));
             assertTrue(tables.contains("managed_processes"));
+            assertTrue(tables.contains("ai_providers"));
+            assertTrue(tables.contains("ai_models"));
         }
     }
 }

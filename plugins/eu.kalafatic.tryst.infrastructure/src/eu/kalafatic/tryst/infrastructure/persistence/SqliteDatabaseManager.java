@@ -47,11 +47,37 @@ public class SqliteDatabaseManager implements UnitOfWork, AutoCloseable {
 
                 this.connection = DriverManager.getConnection(jdbcUrl);
                 configureConnectionPragmas(connection);
+                verifyDatabaseIntegrity(connection);
 
-                TrystLog.info(SqliteDatabaseManager.class, "SQLite database connection established at " + databasePath);
+                TrystLog.info(SqliteDatabaseManager.class, "SQLite database connection established and verified at " + databasePath);
             } catch (SQLException | IOException e) {
                 throw new TrystInfrastructureException("Failed to initialize SQLite database at " + databasePath, e);
             }
+        }
+    }
+
+    public boolean verifyDatabaseIntegrity() {
+        synchronized (dbLock) {
+            return verifyDatabaseIntegrity(getConnection());
+        }
+    }
+
+    private boolean verifyDatabaseIntegrity(Connection conn) {
+        try (Statement stmt = conn.createStatement();
+             var rs = stmt.executeQuery("PRAGMA integrity_check;")) {
+            if (rs.next()) {
+                String result = rs.getString(1);
+                if ("ok".equalsIgnoreCase(result)) {
+                    TrystLog.info(SqliteDatabaseManager.class, "SQLite database integrity verified: ok");
+                    return true;
+                } else {
+                    TrystLog.error(SqliteDatabaseManager.class, "SQLite database integrity check failed: " + result);
+                    throw new TrystInfrastructureException("Database integrity check failed: " + result);
+                }
+            }
+            return true;
+        } catch (SQLException e) {
+            throw new TrystInfrastructureException("Error executing integrity_check on SQLite database", e);
         }
     }
 

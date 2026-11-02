@@ -100,6 +100,7 @@ public class ApplicationLifecycleCoordinator {
     private CodeReviewService codeReviewService;
     private SessionTaskOrchestrator sessionTaskOrchestrator;
     private AutonomousDevelopmentService autonomousDevelopmentService;
+    private eu.kalafatic.tryst.domain.ai.AiModelRegistryService aiModelRegistryService;
     private TrystTcpService tcpService;
     private TrystHttpService httpService;
 
@@ -230,9 +231,19 @@ public class ApplicationLifecycleCoordinator {
         this.permissionManager = new PermissionManager(this.auditEventRepository);
         this.authenticationService = new eu.kalafatic.tryst.domain.security.AuthenticationService(
                 this.userRepository, this.userSessionRepository, this.permissionManager);
-        // Provision initial administrator if no admin exists using configured or generated bootstrap credentials
-        String bootstrapAdminPass = System.getProperty("tryst.admin.password");
-        this.authenticationService.bootstrapAdmin("admin", bootstrapAdminPass);
+        // Provision initial administrator if secret is provided via environment or system property;
+        // otherwise initialize one-time setup token for interactive/web setup
+        String envAdminPass = System.getenv("TRYST_ADMIN_PASSWORD");
+        String propAdminPass = System.getProperty("tryst.admin.password");
+        String adminPass = (propAdminPass != null && !propAdminPass.isBlank()) ? propAdminPass : envAdminPass;
+
+        if (adminPass != null && !adminPass.isBlank()) {
+            this.authenticationService.bootstrapAdmin("admin", adminPass);
+        } else if (!this.authenticationService.hasAdministrator()) {
+            String token = this.authenticationService.generateOneTimeSetupToken();
+            TrystLog.warn(ApplicationLifecycleCoordinator.class,
+                    "No administrator account detected and no bootstrap password supplied. Initial setup token: " + token);
+        }
         this.toolRegistry = new ToolRegistry();
         this.toolRegistry.register(new FileTools.ReadFileTool());
         this.toolRegistry.register(new FileTools.WriteFileTool());
@@ -245,6 +256,13 @@ public class ApplicationLifecycleCoordinator {
                 configuration.ollamaEndpoint(),
                 Duration.ofSeconds(configuration.requestTimeoutSeconds())
         );
+        this.aiModelRegistryService = new eu.kalafatic.tryst.domain.ai.AiModelRegistryService(configuration.defaultModel());
+        this.aiModelRegistryService.registerProvider("ollama-default", "Default Ollama Endpoint", "OLLAMA", configuration.ollamaEndpoint(), true);
+        try {
+            this.aiModelRegistryService.discoverModelsFromInferenceService("ollama-default", this.aiInferenceService).join();
+        } catch (Exception e) {
+            TrystLog.warn(ApplicationLifecycleCoordinator.class, "Initial AI model discovery deferred: " + e.getMessage());
+        }
         this.gitService = new GitService();
         this.buildAndTestService = new BuildAndTestService();
         this.codeReviewService = new CodeReviewService();
@@ -310,6 +328,12 @@ public class ApplicationLifecycleCoordinator {
                     processExecutionManager, notificationService, logDiagnosticService,
                     configurationService, databaseManager, backupService, agentRepository
             );
+            server.setDynamicPortConfiguration(
+                    configuration.dynamicPortFallbackEnabled(),
+                    configuration.portRangeStart(),
+                    configuration.portRangeEnd()
+            );
+            server.setAiModelRegistryService(this.aiModelRegistryService);
             this.httpService = server;
             this.httpService.start();
         } catch (Exception e) {
@@ -320,6 +344,7 @@ public class ApplicationLifecycleCoordinator {
         if (bundleContext != null) {
             registerService(ApplicationConfiguration.class, this.configuration);
             registerService(ConfigurationService.class, this.configurationService);
+            registerService(eu.kalafatic.tryst.core.config.RuntimeEndpointRegistry.class, this.configurationService.getEndpointRegistry());
             registerService(EventBus.class, this.eventBus);
             registerService(UnitOfWork.class, this.databaseManager);
             registerService(SqliteDatabaseManager.class, this.databaseManager);
@@ -338,6 +363,7 @@ public class ApplicationLifecycleCoordinator {
             registerService(ToolRegistry.class, this.toolRegistry);
             registerService(AiContextManager.class, this.aiContextManager);
             registerService(AiInferenceService.class, this.aiInferenceService);
+            registerService(eu.kalafatic.tryst.domain.ai.AiModelRegistryService.class, this.aiModelRegistryService);
             registerService(GitService.class, this.gitService);
             registerService(BuildAndTestService.class, this.buildAndTestService);
             registerService(CodeReviewService.class, this.codeReviewService);
@@ -497,6 +523,7 @@ public class ApplicationLifecycleCoordinator {
         this.toolRegistry = null;
         this.aiContextManager = null;
         this.aiInferenceService = null;
+        this.aiModelRegistryService = null;
         this.gitService = null;
         this.buildAndTestService = null;
         this.codeReviewService = null;
@@ -605,6 +632,10 @@ public class ApplicationLifecycleCoordinator {
 
     public AiInferenceService getAiInferenceService() {
         return aiInferenceService;
+    }
+
+    public eu.kalafatic.tryst.domain.ai.AiModelRegistryService getAiModelRegistryService() {
+        return aiModelRegistryService;
     }
 
     public GitService getGitService() {

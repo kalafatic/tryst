@@ -36,7 +36,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class TrystHttpServer implements TrystHttpService {
 
     private final String host;
-    private final int port;
+    private final int preferredPort;
+    private int actualPort;
+    private boolean dynamicPortFallback = true;
+    private int portRangeStart = 8080;
+    private int portRangeEnd = 8180;
     private final WorkspaceService workspaceService;
     private final ProjectRepository projectRepository;
     private final TaskRepository taskRepository;
@@ -62,6 +66,7 @@ public class TrystHttpServer implements TrystHttpService {
     private SqliteDatabaseManager databaseManager;
     private SqliteBackupService backupService;
     private AgentRepository agentRepository;
+    private eu.kalafatic.tryst.domain.ai.AiModelRegistryService aiModelRegistryService;
 
     private HttpServer server;
     private ExecutorService httpExecutor;
@@ -80,7 +85,8 @@ public class TrystHttpServer implements TrystHttpService {
                            BuildAndTestService buildAndTestService,
                            PermissionManager permissionManager) {
         this.host = Objects.requireNonNull(host, "host must not be null");
-        this.port = port;
+        this.preferredPort = port;
+        this.actualPort = port;
         this.workspaceService = workspaceService;
         this.projectRepository = projectRepository;
         this.taskRepository = taskRepository;
@@ -88,6 +94,12 @@ public class TrystHttpServer implements TrystHttpService {
         this.gitService = gitService != null ? gitService : new GitService();
         this.buildAndTestService = buildAndTestService != null ? buildAndTestService : new BuildAndTestService();
         this.permissionManager = permissionManager != null ? permissionManager : new PermissionManager();
+    }
+
+    public void setDynamicPortConfiguration(boolean fallbackEnabled, int rangeStart, int rangeEnd) {
+        this.dynamicPortFallback = fallbackEnabled;
+        this.portRangeStart = rangeStart;
+        this.portRangeEnd = rangeEnd;
     }
 
     public void setPhase4Dependencies(
@@ -126,6 +138,10 @@ public class TrystHttpServer implements TrystHttpService {
         this.agentRepository = agentRepository;
     }
 
+    public void setAiModelRegistryService(eu.kalafatic.tryst.domain.ai.AiModelRegistryService aiModelRegistryService) {
+        this.aiModelRegistryService = aiModelRegistryService;
+    }
+
     @Override
     public synchronized void start() {
         if (running.get()) {
@@ -133,7 +149,8 @@ public class TrystHttpServer implements TrystHttpService {
         }
 
         try {
-            this.server = HttpServer.create(new InetSocketAddress(host, port), 0);
+            this.server = bindHttpServer();
+            this.actualPort = server.getAddress().getPort();
             this.httpExecutor = Executors.newFixedThreadPool(10, r -> {
                 Thread t = new Thread(r, "tryst-http-worker-" + System.currentTimeMillis());
                 t.setDaemon(true);
@@ -145,16 +162,59 @@ public class TrystHttpServer implements TrystHttpService {
 
             this.server.start();
             this.running.set(true);
-            TrystLog.info(TrystHttpServer.class, "HTTP Server started on http://" + host + ":" + getPort() + "/");
+
+            // Publish runtime endpoint
+            if (configurationService != null) {
+                ApplicationConfiguration cfg = configurationService.getConfiguration();
+                String extUrl = cfg.resolveEffectiveExternalUrl(actualPort);
+                String intUrl = "http://" + host + ":" + actualPort;
+                eu.kalafatic.tryst.core.config.RuntimeEndpoint ep = new eu.kalafatic.tryst.core.config.RuntimeEndpoint(
+                        cfg.applicationName(), host, actualPort, -1, intUrl, extUrl, "RUNNING", Instant.now()
+                );
+                configurationService.getEndpointRegistry().updateEndpoint(ep);
+            }
+
+            TrystLog.info(TrystHttpServer.class, "HTTP Server started on http://" + host + ":" + actualPort + "/");
         } catch (IOException e) {
             this.running.set(false);
-            throw new TrystInfrastructureException("Failed to start HTTP server on " + host + ":" + port, e);
+            throw new TrystInfrastructureException("Failed to start HTTP server on " + host + ":" + preferredPort, e);
         }
+    }
+
+    private HttpServer bindHttpServer() throws IOException {
+        // 1. Try preferred port directly
+        try {
+            return HttpServer.create(new InetSocketAddress(host, preferredPort), 0);
+        } catch (IOException e) {
+            if (!dynamicPortFallback) {
+                throw e;
+            }
+            TrystLog.warn(TrystHttpServer.class, "Preferred port " + preferredPort + " is unavailable. Attempting dynamic allocation...");
+        }
+
+        // 2. Try port range if defined
+        if (portRangeStart > 0 && portRangeEnd >= portRangeStart) {
+            for (int p = portRangeStart; p <= portRangeEnd; p++) {
+                if (p == preferredPort) continue;
+                try {
+                    HttpServer s = HttpServer.create(new InetSocketAddress(host, p), 0);
+                    TrystLog.info(TrystHttpServer.class, "Bound to alternative port " + p + " from range [" + portRangeStart + ", " + portRangeEnd + "]");
+                    return s;
+                } catch (IOException ignored) {}
+            }
+        }
+
+        // 3. Fallback to OS assigned ephemeral port (port 0)
+        HttpServer ephemeralServer = HttpServer.create(new InetSocketAddress(host, 0), 0);
+        TrystLog.info(TrystHttpServer.class, "Bound to OS ephemeral port " + ephemeralServer.getAddress().getPort());
+        return ephemeralServer;
     }
 
     private void setupRoutes() {
         server.createContext("/api/status", new StatusHandler());
+        server.createContext("/api/setup", new SetupHandler());
         server.createContext("/api/auth", new AuthHandler());
+        server.createContext("/api/models", new ModelsHandler());
         server.createContext("/api/projects", new ProjectsHandler());
         server.createContext("/api/tasks", new TasksHandler());
         server.createContext("/api/reviews", new ReviewsHandler());
@@ -191,7 +251,7 @@ public class TrystHttpServer implements TrystHttpService {
         if (server != null) {
             return server.getAddress().getPort();
         }
-        return port;
+        return actualPort;
     }
 
     @Override
@@ -248,15 +308,95 @@ public class TrystHttpServer implements TrystHttpService {
                 sendJsonResponse(exchange, 204, "");
                 return;
             }
+            boolean setupReq = authenticationService != null && authenticationService.isSetupRequired();
             String json = """
                     {
                       "status": "UP",
                       "server": "TRYST",
                       "host": "%s",
-                      "httpPort": %d
+                      "httpPort": %d,
+                      "setupRequired": %b
                     }
-                    """.formatted(host, getPort()).trim();
+                    """.formatted(host, getPort(), setupReq).trim();
             sendJsonResponse(exchange, 200, json);
+        }
+    }
+
+    private class SetupHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendJsonResponse(exchange, 204, "");
+                return;
+            }
+
+            if (authenticationService == null) {
+                sendJsonResponse(exchange, 503, "{\"error\": \"AuthenticationService unavailable\"}");
+                return;
+            }
+
+            String path = exchange.getRequestURI().getPath();
+            if (path.endsWith("/status") && "GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                boolean req = authenticationService.isSetupRequired();
+                sendJsonResponse(exchange, 200, "{\"setupRequired\": " + req + "}");
+                return;
+            }
+
+            if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                if (!authenticationService.isSetupRequired()) {
+                    sendJsonResponse(exchange, 400, "{\"error\": \"First-run setup has already been completed\"}");
+                    return;
+                }
+                String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                String token = extractJsonField(body, "token");
+                String username = extractJsonField(body, "username");
+                String password = extractJsonField(body, "password");
+
+                if (token == null || token.isBlank() || username == null || username.isBlank() || password == null || password.isBlank()) {
+                    sendJsonResponse(exchange, 400, "{\"error\": \"Token, username, and password are required\"}");
+                    return;
+                }
+
+                try {
+                    User admin = authenticationService.completeInitialSetup(token.trim(), username.trim(), password);
+                    sendJsonResponse(exchange, 200, "{\"success\": true, \"adminId\": \"" + admin.getId() + "\"}");
+                } catch (Exception e) {
+                    sendJsonResponse(exchange, 403, "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}");
+                }
+                return;
+            }
+
+            sendJsonResponse(exchange, 404, "{\"error\": \"Not Found\"}");
+        }
+    }
+
+    private class ModelsHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendJsonResponse(exchange, 204, "");
+                return;
+            }
+
+            Optional<SecurityContext> ctx = resolveSecurityContext(exchange);
+            UserRole role = ctx.map(c -> c.user().getRole()).orElse(UserRole.USER);
+
+            if (aiModelRegistryService == null) {
+                sendJsonResponse(exchange, 200, "{\"models\": [], \"defaultModel\": \"codellama\"}");
+                return;
+            }
+
+            List<eu.kalafatic.tryst.domain.ai.AiModelRegistryService.PublishedModel> models = aiModelRegistryService.getModelsForRole(role);
+            StringBuilder sb = new StringBuilder();
+            sb.append("{\"models\": [");
+            for (int i = 0; i < models.size(); i++) {
+                eu.kalafatic.tryst.domain.ai.AiModelRegistryService.PublishedModel m = models.get(i);
+                if (i > 0) sb.append(",");
+                sb.append(String.format("{\"id\": \"%s\", \"providerId\": \"%s\", \"model\": \"%s\", \"displayName\": \"%s\", \"available\": %b, \"contextLimit\": %d}",
+                        escapeJson(m.id()), escapeJson(m.providerId()), escapeJson(m.modelIdentifier()), escapeJson(m.displayName()), m.available(), m.contextLimit()));
+            }
+            sb.append("], \"defaultModel\": \"").append(escapeJson(aiModelRegistryService.getDefaultModel())).append("\"}");
+            sendJsonResponse(exchange, 200, sb.toString());
         }
     }
 
