@@ -166,9 +166,12 @@ public class CanonicalUrlAndRoutingIntegrationTest {
     }
 
     @Test
-    void testCanonicalUrlDecoupledFromDynamicInternalPort() {
-        // Preferred port 80 collision or unprivileged simulation
-        httpServer = new TrystHttpServer("127.0.0.1", 80, null);
+    void testCanonicalUrlDecoupledFromDynamicInternalPort() throws IOException {
+        // Occupy port 80 or a test port to test collision fallback
+        ServerSocket socket = new ServerSocket(0);
+        int occupiedPort = socket.getLocalPort();
+
+        httpServer = new TrystHttpServer("127.0.0.1", occupiedPort, null);
         httpServer.setDynamicPortConfiguration(true, 8080, 8180);
         httpServer.setPhase4Dependencies(
                 authenticationService, userRepository, sessionRepository,
@@ -178,13 +181,15 @@ public class CanonicalUrlAndRoutingIntegrationTest {
         httpServer.start();
 
         int boundPort = httpServer.getPort();
-        assertNotEquals(80, boundPort, "Server should fall back from unprivileged port 80 to dynamic range");
+        assertNotEquals(occupiedPort, boundPort, "Server should fall back from occupied port to dynamic range");
 
         RuntimeEndpoint ep = configurationService.getEndpointRegistry().getCurrentEndpoint();
         assertNotNull(ep, "Runtime endpoint must be registered");
         assertEquals("http://localhost/tryst", ep.canonicalUrl(), "Canonical URL must strictly remain http://localhost/tryst");
         assertEquals("/tryst", ep.contextPath(), "Context path must be /tryst");
         assertTrue(ep.internalUrl().contains(":" + boundPort + "/tryst"), "Internal URL must reflect actual listener port and context");
+
+        socket.close();
     }
 
     @Test
