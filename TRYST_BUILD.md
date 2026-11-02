@@ -86,3 +86,43 @@ If Tycho reports unexpected p2 repository conflicts or caching anomalies:
 # Clear Tycho p2 resolver cache
 rm -rf ~/.m2/repository/.cache/tycho
 ```
+
+## Eclipse IDE Setup & Troubleshooting
+
+### 1. `Access restriction: The constructor/type '...' is not accessible (restriction on required project ...)`
+
+#### Root Cause
+In Eclipse IDE (JDT/PDE), access rules determine visibility of classes across required OSGi bundles / Eclipse projects. This compiler warning or error occurs in Eclipse IDE when:
+1. Eclipse JDT treats non-API packages or project-to-project dependencies with strict access restrictions.
+2. The project's Java Execution Environment (`JavaSE-21`) or PDE Target Platform is not set as the default active target in the Eclipse workspace.
+3. The Eclipse workspace was imported as plain Java projects rather than as **Plug-in Projects** with PDE dependency management.
+
+#### Solution in Eclipse IDE
+1. **Verify Target Platform**: Go to `Window -> Preferences -> Plug-in Development -> Target Platform` and ensure an Eclipse 2024-03 / Java 21 target platform is active.
+2. **Configure JDT Compiler Errors/Warnings**:
+   - Go to `Window -> Preferences -> Java -> Compiler -> Errors/Warnings -> Deprecated and restricted API`.
+   - Set **Forbidden reference (access rules)** from `Error` to `Warning` (or `Ignore`).
+   - Set **Discouraged reference (access rules)** from `Warning` to `Ignore`.
+3. **Update Manifest & Projects**:
+   - Right-click the project(s) -> **PDE Tools** -> **Update Classpath...**.
+   - Ensure `plugins/eu.kalafatic.tryst.infrastructure/META-INF/MANIFEST.MF` exports the package `eu.kalafatic.tryst.infrastructure.server`.
+
+### 2. `Conflicting lifecycle mapping metadata (project packaging type="eclipse-test-plugin")`
+
+#### Root Cause
+This error occurs in Eclipse m2e when two conflicting lifecycle mapping connectors are installed simultaneously in your Eclipse installation:
+- `org.eclipse.m2e.pde.connector` (Modern m2e PDE integration included with Eclipse 2024+)
+- `org.sonatype.tycho.m2e` (Legacy Tycho m2e configurator)
+
+Both plugins attempt to manage lifecycle mappings for packaging types `eclipse-test-plugin`, `eclipse-plugin`, and `eclipse-repository`.
+
+#### Solution
+1. **Uninstall Legacy Tycho Configurator**:
+   - Open Eclipse IDE and navigate to `Help -> About Eclipse IDE -> Installation Details`.
+   - In the **Installed Software** tab, search for `Tycho Project Configurator` (`org.sonatype.tycho.m2e`).
+   - Select it and click **Uninstall...**.
+   - Restart Eclipse IDE.
+2. **Update Maven Project Configuration**:
+   - In the Project Explorer, select all projects in the workspace.
+   - Right-click and choose **Maven -> Update Project...** (or press `Alt + F5`).
+   - Check **Force Update of Snapshots/Releases** and click **OK**.
