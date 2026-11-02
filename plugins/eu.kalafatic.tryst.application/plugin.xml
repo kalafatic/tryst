@@ -35,6 +35,18 @@
                name="appName"
                value="TRYST – AI Development Environment">
          </property>
+         <property
+               name="startupForegroundColor"
+               value="94A3B8">
+         </property>
+         <property
+               name="startupProgressRect"
+               value="40,240,420,15">
+         </property>
+         <property
+               name="startupMessageRect"
+               value="40,220,420,20">
+         </property>
       </product>
    </extension>
 </plugin>

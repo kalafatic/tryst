@@ -275,4 +275,8 @@ public final class TrystUiServices {
     public static AiContextManager getAiContextManager() {
         return getService(AiContextManager.class);
     }
+
+    public static eu.kalafatic.tryst.core.lifecycle.ServerReadinessService getServerReadinessService() {
+        return getService(eu.kalafatic.tryst.core.lifecycle.ServerReadinessService.class);
+    }
 }

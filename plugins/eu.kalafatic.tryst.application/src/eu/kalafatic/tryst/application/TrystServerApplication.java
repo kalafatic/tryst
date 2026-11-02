@@ -23,7 +23,12 @@ public class TrystServerApplication implements IApplication {
     @Override
     public Object start(IApplicationContext context) throws Exception {
         TrystApplicationPlugin plugin = TrystApplicationPlugin.getDefault();
-        this.coordinator = (plugin != null) ? plugin.getLifecycleCoordinator() : new ApplicationLifecycleCoordinator();
+        ApplicationLifecycleCoordinator coord = (plugin != null) ? plugin.getLifecycleCoordinator() : new ApplicationLifecycleCoordinator();
+        return runHeadless(context, coord);
+    }
+
+    public Object runHeadless(IApplicationContext context, ApplicationLifecycleCoordinator coord) throws Exception {
+        this.coordinator = coord != null ? coord : new ApplicationLifecycleCoordinator();
 
         try {
             running.set(true);
@@ -32,10 +37,11 @@ public class TrystServerApplication implements IApplication {
             coordinator.transitionTo(ApplicationLifecycleStage.CORE_SERVICE_INITIALIZATION);
             coordinator.transitionTo(ApplicationLifecycleStage.APPLICATION_READY);
 
-            TrystLog.info(TrystServerApplication.class, "TRYST Headless Server running. Awaiting shutdown signal...");
+            logDiagnostics();
 
             // Register JVM shutdown hook for graceful termination
-            Runtime.getRuntime().addShutdownHook(new Thread(this::stop, "tryst-server-shutdown-hook"));
+            Thread hook = new Thread(this::stop, "tryst-headless-shutdown-hook");
+            Runtime.getRuntime().addShutdownHook(hook);
 
             stopLatch.await();
             return IApplication.EXIT_OK;
@@ -47,6 +53,44 @@ public class TrystServerApplication implements IApplication {
             throw t;
         } finally {
             cleanup();
+        }
+    }
+
+    private void logDiagnostics() {
+        try {
+            var cfg = coordinator.getConfiguration();
+            var readiness = coordinator.getServerReadinessService();
+            var http = coordinator.getHttpService();
+            var tcp = coordinator.getTcpService();
+
+            TrystLog.info(TrystServerApplication.class, "=======================================================");
+            TrystLog.info(TrystServerApplication.class, " TRYST Autonomous Development Server (Headless Mode)   ");
+            TrystLog.info(TrystServerApplication.class, "=======================================================");
+            TrystLog.info(TrystServerApplication.class, "Java Version     : " + System.getProperty("java.version") + " (" + System.getProperty("java.vendor") + ")");
+            TrystLog.info(TrystServerApplication.class, "Config Directory : " + (cfg != null ? cfg.configurationDirectory() : "unknown"));
+            TrystLog.info(TrystServerApplication.class, "Workspace Root   : " + (cfg != null ? cfg.defaultWorkspaceDirectory() : "unknown"));
+            TrystLog.info(TrystServerApplication.class, "Database Path    : " + (coordinator.getDatabaseManager() != null ? coordinator.getDatabaseManager().getDatabasePath() : "unknown"));
+            if (http != null) {
+                TrystLog.info(TrystServerApplication.class, "HTTP Bind Port   : " + http.getPort() + " (configured: " + (cfg != null ? cfg.httpPort() : "unknown") + ")");
+            }
+            if (tcp != null) {
+                TrystLog.info(TrystServerApplication.class, "TCP Service      : 127.0.0.1:" + (cfg != null ? cfg.tcpPort() : "unknown"));
+            }
+            String canonicalUrl = (cfg != null && http != null) ? cfg.resolveEffectiveExternalUrl(http.getPort()) : "http://localhost:8080";
+            TrystLog.info(TrystServerApplication.class, "Canonical URL    : " + canonicalUrl);
+
+            if (readiness != null) {
+                var report = readiness.evaluateReadiness(coordinator.getCurrentStage());
+                TrystLog.info(TrystServerApplication.class, "Server Readiness : " + (report.ready() ? "READY" : (report.degraded() ? "DEGRADED" : "NOT READY")));
+                report.components().forEach((id, health) -> {
+                    TrystLog.info(TrystServerApplication.class, "  - Component [" + id + "]: " + health.state() + " (mandatory=" + health.mandatory() + ")"
+                            + (health.lastError() != null ? " error=" + health.lastError() : ""));
+                });
+            }
+            TrystLog.info(TrystServerApplication.class, "TRYST Headless Server running. Awaiting shutdown signal...");
+            TrystLog.info(TrystServerApplication.class, "=======================================================");
+        } catch (Exception e) {
+            TrystLog.warn(TrystServerApplication.class, "Diagnostics logging encountered non-fatal error: " + e.getMessage());
         }
     }
 

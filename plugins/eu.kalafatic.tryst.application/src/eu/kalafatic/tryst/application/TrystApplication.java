@@ -15,11 +15,43 @@ import org.eclipse.ui.PlatformUI;
  */
 public class TrystApplication implements IApplication {
 
+    private final TrystServerApplication headlessDelegate = new TrystServerApplication();
+    private volatile boolean isHeadlessMode = false;
+
+    public static boolean isHeadlessRequested(IApplicationContext context) {
+        // 1. Check system properties
+        String sysProp = System.getProperty("tryst.headless");
+        if (sysProp != null && (sysProp.equalsIgnoreCase("true") || sysProp.equalsIgnoreCase("yes") || sysProp.equals("1"))) {
+            return true;
+        }
+
+        // 2. Check application arguments from context
+        if (context != null && context.getArguments() != null) {
+            Object argsObj = context.getArguments().get(IApplicationContext.APPLICATION_ARGS);
+            if (argsObj instanceof String[] args) {
+                for (String arg : args) {
+                    if ("-headless".equalsIgnoreCase(arg) || "--headless".equalsIgnoreCase(arg)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
     @Override
     public Object start(IApplicationContext context) throws Exception {
+        this.isHeadlessMode = isHeadlessRequested(context);
+
         TrystApplicationPlugin plugin = TrystApplicationPlugin.getDefault();
         ApplicationLifecycleCoordinator coordinator = (plugin != null) ? plugin.getLifecycleCoordinator() : null;
 
+        if (isHeadlessMode) {
+            TrystLog.info(TrystApplication.class, "Startup Mode: HEADLESS (bypassing SWT Display and Workbench)");
+            return headlessDelegate.runHeadless(context, coordinator);
+        }
+
+        TrystLog.info(TrystApplication.class, "Startup Mode: STANDARD ECLIPSE RCP (initializing SWT Display and Workbench)");
         try {
             if (coordinator != null) {
                 coordinator.transitionTo(ApplicationLifecycleStage.PLATFORM_INITIALIZATION);
@@ -44,6 +76,10 @@ public class TrystApplication implements IApplication {
 
     @Override
     public void stop() {
+        if (isHeadlessMode) {
+            headlessDelegate.stop();
+            return;
+        }
         if (!PlatformUI.isWorkbenchRunning()) {
             return;
         }
