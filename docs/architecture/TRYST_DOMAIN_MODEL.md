@@ -112,6 +112,18 @@ All domain models reside in `eu.kalafatic.tryst.domain.model` and adhere to stri
 - `GitHubRepository`: Value record for discovered GitHub repositories (id, fullName, owner, name, isPrivate, defaultBranch, cloneUrl, htmlUrl).
 - `GitHubBranch`: Value record for discovered branches (name, commitSha, isProtected).
 
+### 1.7 AI Development Execution Subsystem (`eu.kalafatic.tryst.domain.ai`)
+- `AIProvider`: Transport protocol abstraction separating LLM communication (tags, chat, streaming, timeouts) from agent logic.
+- `ModelRegistry`: Contract for model lookup, provider registration, and role-filtered publication.
+- `ModelSelectionService`: Strategy service to resolve optimal AI models for tasks based on user role and availability.
+- `PromptContextBuilder`: Assembles token-budgeted prompts containing repository structure, file snippets, and conventions.
+- `TaskAnalyzer`: Analyzes user requests, identifies build systems (Maven/Gradle/npm), source files, and conventions.
+- `ImplementationPlanner`: Generates ordered implementation plan steps (`ExecutionPlan`, `PlanStep`).
+- `CodeAgent`: Coordinates execution, tool commands, streaming callbacks, timeouts, cancellations, and retries.
+- `CodeChangeExecutor`: Executes file modifications strictly bounded within authorized workspace sandboxes and tracks modified files.
+- `ResultValidator`: Verifies build compilation and test verification stages with failure classification.
+- `AiFailureClassification`: Detailed failure taxonomy (`TIMEOUT`, `CANCELLATION`, `BUILD_FAILURE`, `TEST_FAILURE`, `CONTEXT_LIMIT_EXCEEDED`, `MODEL_UNAVAILABLE`, etc.).
+
 ---
 
 ## 2. Repository Contracts (`eu.kalafatic.tryst.domain.repository`)

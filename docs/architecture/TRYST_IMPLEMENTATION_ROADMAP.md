@@ -47,12 +47,21 @@ The audit of the codebase and implementation progress tracks the following compo
        - Explicit user-authorized push gated behind approved CodeReview
        - Rest API (/api/github/*) and UI controls
 
+  P05: AI Development Execution Subsystem
+       - Clear separation between AI provider transport and agent responsibilities
+       - AIProvider abstraction & OllamaProvider (HTTP API /api/tags, /api/chat, streaming)
+       - ModelRegistry, ModelSelectionService, PromptContextBuilder
+       - TaskAnalyzer, ImplementationPlanner, CodeAgent, CodeChangeExecutor, ResultValidator
+       - 10-step autonomous development workflow integrated into TaskWorker lifecycle
+       - Timeouts, streaming diagnostics, cancellation, retries, and AiFailureClassification
+       - Mock and live Ollama automated test suites
+
 [PENDING / SUBSEQUENT PHASES]
-  P04: Structured JSON Tool Invocation Schema
+  P06: Structured JSON Tool Invocation Schema
        - Formal JSON schema tool calling for Ollama inference
        - Tool validation and hallucination resilience
 
-  P05: Web Client Asset Decoupling
+  P07: Web Client Asset Decoupling
        - Static asset separation into modular resources
        - Bundle classloader asset resolution
 ```
@@ -107,10 +116,43 @@ The audit of the codebase and implementation progress tracks the following compo
 
 ---
 
-## 5. Recommended Next Implementation Step
+## 5. Completed AI Execution Subsystem Deliverables (Phase 5)
 
-- **Target:** Structured JSON Tool Invocation Schema.
+- **Domain Contracts & Subsystem Components:**
+  - `AIProvider`: Transport abstraction decoupling AI provider communication from agent responsibilities.
+  - `ModelRegistry` & `AiModelRegistryService`: Model registration, catalog updates, role-filtered model discovery.
+  - `ModelSelectionService`: Task and role-aware model selection with fallback defaults.
+  - `PromptContextBuilder`: Assembles prioritized, token-bounded context with workspace structure and file snippets.
+  - `TaskAnalyzer`: Inspects request, detects build systems (Maven/Gradle/npm), identifies source files and conventions.
+  - `ImplementationPlanner`: Formulates ordered multi-step implementation plans.
+  - `CodeAgent`: Coordinates execution, tool commands, streaming callbacks, timeouts, cancellations, and retries.
+  - `CodeChangeExecutor`: Executes file modifications strictly bounded within authorized workspace sandboxes and tracks modified files.
+  - `ResultValidator`: Validates build compilation and test verification stages with failure classification.
+  - `AiFailureClassification`: Detailed failure taxonomy (`TIMEOUT`, `CANCELLATION`, `BUILD_FAILURE`, `TEST_FAILURE`, etc.).
+- **Infrastructure Provider:**
+  - `OllamaProvider`: Pure Java 21 `HttpClient` client for `/api/tags` and `/api/chat` (synchronous and streaming).
+  - `OllamaClient`: Backward-compatible adapter delegating to `OllamaProvider`.
+- **TaskWorker Lifecycle Integration:**
+  - Complete 10-step development workflow in `TaskWorker`:
+    1. Analyze user request (`TaskAnalyzer`).
+    2. Inspect repository structure & identify source files.
+    3. Analyze dependencies and conventions.
+    4. Generate implementation plan (`ImplementationPlanner`).
+    5. Execute changes incrementally (`CodeAgent`, `CodeChangeExecutor`).
+    6. Track every modified file.
+    7. Run build verification (`ResultValidator`).
+    8. Run relevant tests verification (`ResultValidator`).
+    9. Persist analysis, implementation plans, execution events, and result logs into `task_events` and `execution_results`.
+    10. Produce reviewable result with diff for `WAITING_FOR_REVIEW`.
+- **Automated Verification:**
+  - `AiExecutionSubsystemIntegrationTest` testing 10-step workflow, mock AI provider, model selection, timeouts, cancellations, retries, failure classifications, and Ollama HTTP endpoints.
+
+---
+
+## 6. Recommended Next Implementation Step
+
+- **Target:** Structured JSON Tool Invocation Schema (P06).
 - **Prerequisites:**
-  1. Production-grade workspace and sandbox isolation verified (P03 completed).
+  1. AI development execution subsystem operational (Phase 5 completed).
   2. Isolated `TaskExecutionContext` bound to dedicated task sandboxes and GitHub VCS integration.
-  3. Stable AI inference service and tool registry.
+  3. Established `AIProvider` and `CodeAgent` execution loops.
