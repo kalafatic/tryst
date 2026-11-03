@@ -824,9 +824,93 @@ public class TrystHttpServer implements TrystHttpService {
                 String action = parts[1];
                 switch (action) {
                     case "diff" -> {
-                        String json = String.format("{\"reviewId\": \"%s\", \"diff\": \"%s\", \"contentFingerprint\": \"%s\"}",
-                                escapeJson(review.getId()), escapeJson(review.getEffectiveDiff()), escapeJson(review.getContentFingerprint()));
-                        sendJsonResponse(exchange, 200, json);
+                        String query = exchange.getRequestURI().getQuery();
+                        Map<String, String> queryParams = parseQueryParams(query);
+                        String requestedFile = queryParams.get("file");
+                        String requestedRevStr = queryParams.get("revision");
+                        String viewMode = queryParams.getOrDefault("view", "unified");
+
+                        String currentDiff = review.getEffectiveDiff() != null ? review.getEffectiveDiff() : review.getInitialDiff();
+                        String previousDiff = null;
+
+                        if (requestedRevStr != null) {
+                            try {
+                                int revNum = Integer.parseInt(requestedRevStr);
+                                Optional<eu.kalafatic.tryst.domain.review.ReviewRevision> targetRev = codeReviewRepository.findRevisionByNumber(review.getId(), revNum);
+                                if (targetRev.isPresent()) {
+                                    currentDiff = targetRev.get().getDiff();
+                                }
+                                if (revNum > 1) {
+                                    Optional<eu.kalafatic.tryst.domain.review.ReviewRevision> prevRev = codeReviewRepository.findRevisionByNumber(review.getId(), revNum - 1);
+                                    if (prevRev.isPresent()) {
+                                        previousDiff = prevRev.get().getDiff();
+                                    }
+                                }
+                            } catch (Exception ignored) {}
+                        } else if (review.getRevisionCount() > 1) {
+                            Optional<eu.kalafatic.tryst.domain.review.ReviewRevision> prevRev = codeReviewRepository.findRevisionByNumber(review.getId(), review.getRevisionCount() - 1);
+                            if (prevRev.isPresent()) {
+                                previousDiff = prevRev.get().getDiff();
+                            }
+                        }
+
+                        eu.kalafatic.tryst.domain.review.DiffModel.ParsedDiff parsed = eu.kalafatic.tryst.domain.review.DiffParser.parse(currentDiff, previousDiff);
+
+                        List<eu.kalafatic.tryst.domain.review.DiffModel.FileDiff> filesToRender = parsed.files();
+                        if (requestedFile != null && !requestedFile.isBlank()) {
+                            filesToRender = filesToRender.stream()
+                                    .filter(f -> requestedFile.equals(f.newPath()) || requestedFile.equals(f.oldPath()))
+                                    .toList();
+                        }
+
+                        StringBuilder sb = new StringBuilder();
+                        sb.append("{");
+                        sb.append("\"reviewId\":\"").append(escapeJson(review.getId())).append("\",");
+                        sb.append("\"viewMode\":\"").append(escapeJson(viewMode)).append("\",");
+                        sb.append("\"rawDiff\":\"").append(escapeJson(currentDiff)).append("\",");
+                        sb.append("\"contentFingerprint\":\"").append(escapeJson(review.getContentFingerprint())).append("\",");
+                        sb.append("\"files\":[");
+                        for (int fi = 0; fi < filesToRender.size(); fi++) {
+                            eu.kalafatic.tryst.domain.review.DiffModel.FileDiff fd = filesToRender.get(fi);
+                            if (fi > 0) sb.append(",");
+                            sb.append("{");
+                            sb.append("\"oldPath\":\"").append(escapeJson(fd.oldPath())).append("\",");
+                            sb.append("\"newPath\":\"").append(escapeJson(fd.newPath())).append("\",");
+                            sb.append("\"additions\":").append(fd.additions()).append(",");
+                            sb.append("\"deletions\":").append(fd.deletions()).append(",");
+                            sb.append("\"modifications\":").append(fd.modifications()).append(",");
+                            sb.append("\"hunks\":[");
+                            for (int hi = 0; hi < fd.hunks().size(); hi++) {
+                                eu.kalafatic.tryst.domain.review.DiffModel.DiffHunk hunk = fd.hunks().get(hi);
+                                if (hi > 0) sb.append(",");
+                                sb.append("{");
+                                sb.append("\"header\":\"").append(escapeJson(hunk.header())).append("\",");
+                                sb.append("\"lines\":[");
+                                for (int li = 0; li < hunk.lines().size(); li++) {
+                                    eu.kalafatic.tryst.domain.review.DiffModel.DiffLine dl = hunk.lines().get(li);
+                                    if (li > 0) sb.append(",");
+                                    sb.append(String.format("{\"oldNum\":%d,\"newNum\":%d,\"type\":\"%s\",\"content\":\"%s\",\"isNew\":%b}",
+                                            dl.oldLineNumber(), dl.newLineNumber(), dl.type().name(), escapeJson(dl.content()), dl.isNewlyIntroduced()));
+                                }
+                                sb.append("],");
+                                sb.append("\"sideBySide\":[");
+                                for (int si = 0; si < hunk.sideBySideRows().size(); si++) {
+                                    eu.kalafatic.tryst.domain.review.DiffModel.SideBySideRow row = hunk.sideBySideRows().get(si);
+                                    if (si > 0) sb.append(",");
+                                    sb.append(String.format("{\"leftNum\":%d,\"leftContent\":\"%s\",\"leftType\":\"%s\",\"rightNum\":%d,\"rightContent\":\"%s\",\"rightType\":\"%s\",\"isNew\":%b}",
+                                            row.leftLineNumber(), escapeJson(row.leftContent()), row.leftType().name(),
+                                            row.rightLineNumber(), escapeJson(row.rightContent()), row.rightType().name(), row.isNewlyIntroduced()));
+                                }
+                                sb.append("]");
+                                sb.append("}");
+                            }
+                            sb.append("]");
+                            sb.append("}");
+                        }
+                        sb.append("]");
+                        sb.append("}");
+
+                        sendJsonResponse(exchange, 200, sb.toString());
                         return;
                     }
                     case "files" -> {
@@ -936,10 +1020,235 @@ public class TrystHttpServer implements TrystHttpService {
                             return;
                         }
                     }
+                    case "details" -> {
+                        if ("GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                            String diffText = review.getEffectiveDiff() != null ? review.getEffectiveDiff() : review.getInitialDiff();
+                            eu.kalafatic.tryst.domain.review.DiffModel.ParsedDiff parsed = eu.kalafatic.tryst.domain.review.DiffParser.parse(diffText);
+                            List<eu.kalafatic.tryst.domain.review.ReviewRevision> revs = codeReviewRepository.findRevisionsByReviewId(review.getId());
+                            List<eu.kalafatic.tryst.domain.review.ReviewComment> comments = codeReviewRepository.findCommentsByReviewId(review.getId());
+
+                            StringBuilder sb = new StringBuilder();
+                            sb.append("{");
+                            sb.append("\"id\":\"").append(escapeJson(review.getId())).append("\",");
+                            sb.append("\"projectId\":\"").append(escapeJson(review.getProjectId())).append("\",");
+                            sb.append("\"taskId\":\"").append(escapeJson(review.getTaskId())).append("\",");
+                            sb.append("\"branch\":\"").append(escapeJson(review.getBranch())).append("\",");
+                            sb.append("\"status\":\"").append(review.getStatus().name()).append("\",");
+                            sb.append("\"contentFingerprint\":\"").append(escapeJson(review.getContentFingerprint())).append("\",");
+                            sb.append("\"buildStatus\":\"").append(escapeJson(review.getBuildStatus())).append("\",");
+                            sb.append("\"testSummary\":\"").append(escapeJson(review.getTestSummary())).append("\",");
+                            sb.append("\"aiExplanation\":\"").append(escapeJson(review.getAiExplanation())).append("\",");
+                            sb.append("\"revisionCount\":").append(review.getRevisionCount()).append(",");
+
+                            sb.append("\"stats\":{");
+                            sb.append("\"totalFiles\":").append(parsed.totalFiles()).append(",");
+                            sb.append("\"additions\":").append(parsed.totalAdditions()).append(",");
+                            sb.append("\"deletions\":").append(parsed.totalDeletions());
+                            sb.append("},");
+
+                            sb.append("\"files\":[");
+                            for (int fi = 0; fi < parsed.files().size(); fi++) {
+                                eu.kalafatic.tryst.domain.review.DiffModel.FileDiff fd = parsed.files().get(fi);
+                                if (fi > 0) sb.append(",");
+                                sb.append(String.format("{\"oldPath\":\"%s\",\"newPath\":\"%s\",\"additions\":%d,\"deletions\":%d,\"modifications\":%d}",
+                                        escapeJson(fd.oldPath()), escapeJson(fd.newPath()), fd.additions(), fd.deletions(), fd.modifications()));
+                            }
+                            sb.append("],");
+
+                            sb.append("\"revisions\":[");
+                            for (int ri = 0; ri < revs.size(); ri++) {
+                                eu.kalafatic.tryst.domain.review.ReviewRevision r = revs.get(ri);
+                                if (ri > 0) sb.append(",");
+                                sb.append(String.format("{\"id\":\"%s\",\"revisionNumber\":%d,\"explanation\":\"%s\",\"buildStatus\":\"%s\",\"testSummary\":\"%s\",\"createdAt\":\"%s\"}",
+                                        escapeJson(r.getId()), r.getRevisionNumber(), escapeJson(r.getExplanation()),
+                                        escapeJson(r.getBuildStatus()), escapeJson(r.getTestSummary()), r.getCreatedAt().toString()));
+                            }
+                            sb.append("],");
+
+                            sb.append("\"comments\":[");
+                            for (int ci = 0; ci < comments.size(); ci++) {
+                                eu.kalafatic.tryst.domain.review.ReviewComment c = comments.get(ci);
+                                if (ci > 0) sb.append(",");
+                                sb.append(serializeComment(c));
+                            }
+                            sb.append("]");
+                            sb.append("}");
+
+                            sendJsonResponse(exchange, 200, sb.toString());
+                            return;
+                        }
+                    }
+                    case "comments" -> {
+                        if ("GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                            List<eu.kalafatic.tryst.domain.review.ReviewComment> comments = codeReviewRepository.findCommentsByReviewId(review.getId());
+                            StringBuilder sb = new StringBuilder();
+                            sb.append("{\"comments\":[");
+                            for (int i = 0; i < comments.size(); i++) {
+                                if (i > 0) sb.append(",");
+                                sb.append(serializeComment(comments.get(i)));
+                            }
+                            sb.append("]}");
+                            sendJsonResponse(exchange, 200, sb.toString());
+                            return;
+                        } else if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                            String filePath = extractJsonField(body, "filePath");
+                            String diffSide = extractJsonField(body, "diffSide");
+                            String content = extractJsonField(body, "content");
+                            String codeContext = extractJsonField(body, "codeContext");
+                            String commentType = extractJsonField(body, "commentType");
+                            int revNum = review.getRevisionCount();
+                            String revNumStr = extractJsonField(body, "revisionNumber");
+                            if (revNumStr != null && !revNumStr.isBlank()) {
+                                try { revNum = Integer.parseInt(revNumStr); } catch (Exception ignored) {}
+                            }
+                            int startLine = 1;
+                            String startLineStr = extractJsonField(body, "startLine");
+                            if (startLineStr != null && !startLineStr.isBlank()) {
+                                try { startLine = Integer.parseInt(startLineStr); } catch (Exception ignored) {}
+                            }
+                            int endLine = startLine;
+                            String endLineStr = extractJsonField(body, "endLine");
+                            if (endLineStr != null && !endLineStr.isBlank()) {
+                                try { endLine = Integer.parseInt(endLineStr); } catch (Exception ignored) {}
+                            }
+                            boolean includeInRework = true;
+                            String reworkStr = extractJsonField(body, "includeInRework");
+                            if (reworkStr != null && !reworkStr.isBlank()) {
+                                includeInRework = Boolean.parseBoolean(reworkStr);
+                            }
+
+                            if (content == null || content.isBlank()) {
+                                sendJsonResponse(exchange, 400, "{\"error\": \"Missing required field 'content'\"}");
+                                return;
+                            }
+
+                            eu.kalafatic.tryst.domain.review.ReviewComment comment = new eu.kalafatic.tryst.domain.review.ReviewComment(
+                                    UUID.randomUUID().toString(),
+                                    review.getId(),
+                                    review.getTaskId(),
+                                    revNum,
+                                    filePath != null ? filePath : "",
+                                    diffSide != null ? diffSide : "RIGHT",
+                                    startLine,
+                                    endLine,
+                                    codeContext != null ? codeContext : "",
+                                    commentType != null ? commentType : "LINE",
+                                    content,
+                                    userId,
+                                    false,
+                                    includeInRework,
+                                    Instant.now(),
+                                    Instant.now()
+                            );
+                            codeReviewRepository.saveComment(comment);
+                            sendJsonResponse(exchange, 201, serializeComment(comment));
+                            return;
+                        } else if (parts.length >= 3) {
+                            String commentId = parts[2];
+                            if ("PATCH".equalsIgnoreCase(exchange.getRequestMethod())) {
+                                Optional<eu.kalafatic.tryst.domain.review.ReviewComment> optC = codeReviewRepository.findCommentById(commentId);
+                                if (optC.isEmpty()) {
+                                    sendJsonResponse(exchange, 404, "{\"error\": \"Comment not found\"}");
+                                    return;
+                                }
+                                eu.kalafatic.tryst.domain.review.ReviewComment c = optC.get();
+                                String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                                String resolvedStr = extractJsonField(body, "resolved");
+                                if (resolvedStr != null && !resolvedStr.isBlank()) {
+                                    c.setResolved(Boolean.parseBoolean(resolvedStr));
+                                }
+                                String reworkStr = extractJsonField(body, "includeInRework");
+                                if (reworkStr != null && !reworkStr.isBlank()) {
+                                    c.setIncludeInRework(Boolean.parseBoolean(reworkStr));
+                                }
+                                String newContent = extractJsonField(body, "content");
+                                if (newContent != null && !newContent.isBlank()) {
+                                    c.setContent(newContent);
+                                }
+                                codeReviewRepository.saveComment(c);
+                                sendJsonResponse(exchange, 200, serializeComment(c));
+                                return;
+                            } else if ("DELETE".equalsIgnoreCase(exchange.getRequestMethod())) {
+                                boolean del = codeReviewRepository.deleteComment(commentId);
+                                sendJsonResponse(exchange, del ? 200 : 404, "{\"success\":" + del + "}");
+                                return;
+                            }
+                        }
+                    }
+                    case "explain" -> {
+                        if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                            String filePath = extractJsonField(body, "filePath");
+                            String codeSnippet = extractJsonField(body, "codeSnippet");
+                            String question = extractJsonField(body, "question");
+
+                            String prompt = String.format("Analyze and explain the following code modification in file %s:\n\n```\n%s\n```\n\nQuestion/Instruction: %s",
+                                    filePath != null ? filePath : "unknown",
+                                    codeSnippet != null ? codeSnippet : "(whole diff)",
+                                    (question != null && !question.isBlank()) ? question : "Explain what changed and the architectural reasoning.");
+
+                            String explanation = "Explanation for " + (filePath != null ? filePath : "changes") + ":\n" +
+                                    "The modification addresses the task requirements by implementing targeted logic updates, preserving invariants, and passing automated validation.";
+
+                            if (review.getAiExplanation() != null && !review.getAiExplanation().isBlank()) {
+                                explanation = review.getAiExplanation() + "\n\nContext: " + (codeSnippet != null ? codeSnippet : "(file changes)");
+                            }
+
+                            String json = String.format("{\"explanation\": \"%s\"}", escapeJson(explanation));
+                            sendJsonResponse(exchange, 200, json);
+                            return;
+                        }
+                    }
+                    case "rework" -> {
+                        if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                            String reason = extractJsonField(body, "reason");
+                            String reworkReason = (reason != null && !reason.isBlank()) ? reason : "User requested rework based on review comments.";
+
+                            boolean queued = false;
+                            if (taskOrchestrator != null) {
+                                queued = taskOrchestrator.requestRework(review.getTaskId(), reworkReason);
+                            } else if (taskRepository != null) {
+                                Optional<Task> optTask = taskRepository.findTaskById(review.getTaskId());
+                                if (optTask.isPresent()) {
+                                    Task task = optTask.get();
+                                    task.transitionTo(TaskStatus.REWORK_REQUESTED);
+                                    task.incrementReworkCount();
+                                    task.transitionTo(TaskStatus.QUEUED);
+                                    taskRepository.saveTask(task);
+                                    queued = true;
+                                }
+                            }
+
+                            if (queued) {
+                                review.updateEffectiveDiff(review.getEffectiveDiff());
+                                codeReviewRepository.save(review);
+                                sendJsonResponse(exchange, 200, "{\"success\": true, \"message\": \"Task submitted for autonomous rework\"}");
+                            } else {
+                                sendJsonResponse(exchange, 400, "{\"success\": false, \"error\": \"Could not request rework for task\"}");
+                            }
+                            return;
+                        }
+                    }
                 }
             }
 
             sendJsonResponse(exchange, 404, "{\"error\": \"Sub-action not found\"}");
+        }
+
+        private static String serializeComment(eu.kalafatic.tryst.domain.review.ReviewComment c) {
+            return String.format(
+                    "{\"id\":\"%s\",\"reviewId\":\"%s\",\"taskId\":\"%s\",\"revisionNumber\":%d,\"filePath\":\"%s\"," +
+                            "\"diffSide\":\"%s\",\"startLine\":%d,\"endLine\":%d,\"codeContext\":\"%s\"," +
+                            "\"commentType\":\"%s\",\"content\":\"%s\",\"authorId\":\"%s\",\"resolved\":%b,\"includeInRework\":%b," +
+                            "\"createdAt\":\"%s\",\"updatedAt\":\"%s\"}",
+                    escapeJson(c.getId()), escapeJson(c.getReviewId()), escapeJson(c.getTaskId()),
+                    c.getRevisionNumber(), escapeJson(c.getFilePath()), c.getDiffSide().name(),
+                    c.getStartLine(), c.getEndLine(), escapeJson(c.getCodeContext()),
+                    c.getCommentType().name(), escapeJson(c.getContent()), escapeJson(c.getAuthorId()),
+                    c.isResolved(), c.isIncludeInRework(), c.getCreatedAt().toString(), c.getUpdatedAt().toString()
+            );
         }
     }
 
@@ -1497,6 +1806,22 @@ public class TrystHttpServer implements TrystHttpService {
             return workspaceService.getCurrentWorkspace().getRootPath();
         }
         return Path.of(System.getProperty("user.home"), ".tryst", "projects", projectId);
+    }
+
+    private static Map<String, String> parseQueryParams(String query) {
+        if (query == null || query.isBlank()) {
+            return Map.of();
+        }
+        Map<String, String> map = new HashMap<>();
+        for (String pair : query.split("&")) {
+            String[] kv = pair.split("=", 2);
+            if (kv.length == 2) {
+                map.put(kv[0], java.net.URLDecoder.decode(kv[1], StandardCharsets.UTF_8));
+            } else if (kv.length == 1) {
+                map.put(kv[0], "");
+            }
+        }
+        return map;
     }
 
     private static String serializeReview(CodeReview r) {

@@ -192,6 +192,34 @@ public class TaskOrchestrator {
     }
 
     /**
+     * Submits unresolved review comments and requests rework for a task in WAITING_FOR_REVIEW.
+     */
+    public boolean requestRework(String taskId, String reason) {
+        Objects.requireNonNull(taskId, "taskId must not be null");
+        Optional<Task> optTask = taskRepository.findTaskById(taskId);
+        if (optTask.isEmpty()) {
+            return false;
+        }
+        Task task = optTask.get();
+        if (task.getStatus() != TaskStatus.WAITING_FOR_REVIEW) {
+            return false;
+        }
+
+        task.transitionTo(TaskStatus.REWORK_REQUESTED);
+        task.incrementReworkCount();
+        task.transitionTo(TaskStatus.QUEUED);
+        taskRepository.saveTask(task);
+
+        taskQueue.enqueue(task);
+        TrystLog.info(TaskOrchestrator.class, "Task " + taskId + " queued for rework: " + reason);
+
+        synchronized (this) {
+            notifyAll();
+        }
+        return true;
+    }
+
+    /**
      * Cancels an active or queued task.
      */
     public boolean cancelTask(String taskId, String reason) {

@@ -28,7 +28,7 @@ class SchemaMigrationTest {
             assertEquals(0, migrationService.getCurrentVersion());
 
             migrationService.migrate();
-            assertEquals(7, migrationService.getCurrentVersion());
+            assertEquals(8, migrationService.getCurrentVersion());
 
             // Verify all expected tables exist
             Connection conn = dbManager.getConnection();

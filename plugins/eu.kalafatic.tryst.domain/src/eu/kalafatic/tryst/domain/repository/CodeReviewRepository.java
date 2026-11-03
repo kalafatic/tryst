@@ -28,4 +28,20 @@ public interface CodeReviewRepository {
     List<ReviewFileEdit> findFileEditsByReviewId(String reviewId);
 
     Optional<ReviewFileEdit> findFileEdit(String reviewId, String filePath);
+
+    void saveRevision(eu.kalafatic.tryst.domain.review.ReviewRevision revision);
+
+    List<eu.kalafatic.tryst.domain.review.ReviewRevision> findRevisionsByReviewId(String reviewId);
+
+    Optional<eu.kalafatic.tryst.domain.review.ReviewRevision> findRevisionByNumber(String reviewId, int revisionNumber);
+
+    void saveComment(eu.kalafatic.tryst.domain.review.ReviewComment comment);
+
+    Optional<eu.kalafatic.tryst.domain.review.ReviewComment> findCommentById(String id);
+
+    List<eu.kalafatic.tryst.domain.review.ReviewComment> findCommentsByReviewId(String reviewId);
+
+    List<eu.kalafatic.tryst.domain.review.ReviewComment> findCommentsByTaskId(String taskId);
+
+    boolean deleteComment(String id);
 }

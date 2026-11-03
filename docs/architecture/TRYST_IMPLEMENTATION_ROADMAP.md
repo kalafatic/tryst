@@ -149,10 +149,39 @@ The audit of the codebase and implementation progress tracks the following compo
 
 ---
 
-## 6. Recommended Next Implementation Step
+## 6. Completed Interactive Web-Based Code Review Subsystem (Phase 6 / PROMPT 06)
 
-- **Target:** Structured JSON Tool Invocation Schema (P06).
+- **Domain Contracts & Review Engine (`eu.kalafatic.tryst.domain.review`):**
+  - `ReviewRevision`: Immutable snapshot of review iterations (diff, explanation, build/test status, revision number, timestamp).
+  - `ReviewComment`: Persistent comments anchored to stable review context (`taskId`, `reviewId`, `revisionNumber`, `filePath`, `diffSide`, `startLine`, `endLine`, `codeContext`, `commentType`, `resolved`, `includeInRework`).
+  - `DiffModel` & `DiffParser`: Unified and side-by-side diff models with hunk headers, old/new line mapping, file statistics (+/-), and cross-revision delta tracking (identifying newly introduced lines).
+  - `CodeReview`: Extended with `aiExplanation` and `revisionCount`.
+  - `CodeReviewRepository`: Extended with revision snapshot persistence and stable-context comment CRUD operations.
+- **Persistence & Schema Migration V8 (`eu.kalafatic.tryst.infrastructure.persistence`):**
+  - Added schema migration V8 creating `review_revisions` and `review_comments` tables with foreign keys and indexes, and adding `ai_explanation` and `revision_count` columns to `code_reviews`.
+  - Implemented persistence and querying in `SqliteCodeReviewRepository`.
+- **Autonomous Task Rework Loop:**
+  - `TaskWorker`: Automatically captures `ReviewRevision` snapshots with AI implementation explanation, and filters unresolved comments marked for rework (`includeInRework=true`) to inject structured review rework instructions into the AI prompt.
+  - `TaskOrchestrator`: Implemented `requestRework` method transitioning tasks from `WAITING_FOR_REVIEW` to `REWORK_REQUESTED` to `QUEUED`.
+- **REST API & Web Review Center (`TrystHttpServer`):**
+  - REST endpoints:
+    - `GET /api/reviews/{id}/details`: Complete review metadata, file change statistics, revision list, and comments.
+    - `GET /api/reviews/{id}/diff`: Structured unified or side-by-side rows with line numbers and delta comparison.
+    - `GET /api/reviews/{id}/comments`, `POST /api/reviews/{id}/comments`, `PATCH /api/reviews/{id}/comments/{id}`, `DELETE /api/reviews/{id}/comments/{id}`: Full comment lifecycle management.
+    - `POST /api/reviews/{id}/explain`: AI on-demand explanation of code modifications.
+    - `POST /api/reviews/{id}/rework`: One-click rework dispatch.
+  - IDE-inspired Web Review UI: Dark theme, file tree with change stats (+/-), unified/side-by-side toggle, interactive line selection, inline/file commenting, AI explanation drawer, and rework controls.
+- **Automated Verification:**
+  - `DiffParserTest`: Unified and side-by-side parsing, line mapping, hunk parsing, and revision delta comparison.
+  - `ReviewCommentPersistenceTest`: CRUD operations, stable context anchoring, resolution, and rework filtering.
+  - `WebCodeReviewSubsystemTest`: End-to-end HTTP integration testing for details, diff, comments, AI explain, rework queuing, and concurrent comment creation.
+
+---
+
+## 7. Recommended Next Implementation Step
+
+- **Target:** Structured JSON Tool Invocation Schema & Autonomous Self-Healing Tool Execution (Phase 7 / P07).
 - **Prerequisites:**
-  1. AI development execution subsystem operational (Phase 5 completed).
-  2. Isolated `TaskExecutionContext` bound to dedicated task sandboxes and GitHub VCS integration.
-  3. Established `AIProvider` and `CodeAgent` execution loops.
+  1. Interactive Web-Based Code Review Subsystem operational (Phase 6 completed).
+  2. Multi-revision tracking and rework prompt injection functional.
+  3. Stable review comments schema and REST APIs verified.

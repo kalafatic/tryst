@@ -290,6 +290,7 @@ Tasks follow an explicit lifecycle supporting asynchronous, autonomous execution
   - **V5:** Asynchronous task execution infrastructure & event logs (`tasks` columns, `task_events`).
   - **V6:** Production workspace and sandbox lifecycle isolation (`workspaces` columns).
   - **V7:** Secure GitHub credentials storage encrypted at rest (`github_credentials`).
+  - **V8:** Interactive Web Code Review Center revisions, comments, and AI explanation tracking (`review_revisions`, `review_comments`, `code_reviews` extensions).
 - **Backup and Maintenance:** Hot SQLite backups via `SqliteBackupService`, automated integrity checks (`PRAGMA integrity_check`), and compaction (`VACUUM`).
 
 ---

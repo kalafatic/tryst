@@ -493,6 +493,58 @@ public class SchemaMigrationService {
         );
         migrations.add(new Migration(7, "Secure GitHub credentials storage encrypted at rest", v7Statements));
 
+        // V8: Interactive Web Code Review Center Revisions & Comments
+        List<String> v8Statements = List.of(
+                """
+                CREATE TABLE IF NOT EXISTS review_revisions (
+                    id TEXT PRIMARY KEY,
+                    review_id TEXT NOT NULL,
+                    revision_number INTEGER NOT NULL,
+                    diff TEXT,
+                    explanation TEXT,
+                    build_status TEXT,
+                    test_summary TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (review_id) REFERENCES code_reviews(id) ON DELETE CASCADE
+                );
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_review_revisions_review_id ON review_revisions(review_id);",
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_review_revisions_rev_num ON review_revisions(review_id, revision_number);",
+
+                """
+                CREATE TABLE IF NOT EXISTS review_comments (
+                    id TEXT PRIMARY KEY,
+                    review_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    revision_number INTEGER NOT NULL,
+                    file_path TEXT,
+                    diff_side TEXT,
+                    start_line INTEGER,
+                    end_line INTEGER,
+                    code_context TEXT,
+                    comment_type TEXT,
+                    content TEXT NOT NULL,
+                    author_id TEXT,
+                    resolved INTEGER DEFAULT 0,
+                    include_in_rework INTEGER DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (review_id) REFERENCES code_reviews(id) ON DELETE CASCADE,
+                    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+                );
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_review_comments_review_id ON review_comments(review_id);",
+                "CREATE INDEX IF NOT EXISTS idx_review_comments_task_id ON review_comments(task_id);",
+
+                """
+                ALTER TABLE code_reviews ADD COLUMN ai_explanation TEXT;
+                """,
+                """
+                ALTER TABLE code_reviews ADD COLUMN revision_count INTEGER DEFAULT 1;
+                """
+        );
+        migrations.add(new Migration(8, "Interactive web code review revisions and comments", v8Statements));
+
         return migrations;
     }
 }
