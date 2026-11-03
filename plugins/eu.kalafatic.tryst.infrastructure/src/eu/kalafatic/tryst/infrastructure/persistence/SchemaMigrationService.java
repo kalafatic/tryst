@@ -446,6 +446,32 @@ public class SchemaMigrationService {
         );
         migrations.add(new Migration(5, "Asynchronous task execution infrastructure and event logs", v5Statements));
 
+        // V6: Production Workspace and Sandbox Management
+        List<String> v6Statements = List.of(
+                """
+                ALTER TABLE workspaces ADD COLUMN owner_id TEXT NOT NULL DEFAULT 'default-user';
+                """,
+                """
+                ALTER TABLE workspaces ADD COLUMN task_id TEXT;
+                """,
+                """
+                ALTER TABLE workspaces ADD COLUMN status TEXT NOT NULL DEFAULT 'ACTIVE';
+                """,
+                """
+                ALTER TABLE workspaces ADD COLUMN repository_url TEXT;
+                """,
+                """
+                ALTER TABLE workspaces ADD COLUMN branch TEXT NOT NULL DEFAULT 'main';
+                """,
+                """
+                ALTER TABLE workspaces ADD COLUMN metadata_json TEXT;
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_workspaces_owner_id ON workspaces(owner_id);",
+                "CREATE INDEX IF NOT EXISTS idx_workspaces_task_id ON workspaces(task_id);",
+                "CREATE INDEX IF NOT EXISTS idx_workspaces_status ON workspaces(status);"
+        );
+        migrations.add(new Migration(6, "Production workspace and sandbox lifecycle isolation", v6Statements));
+
         return migrations;
     }
 }

@@ -30,12 +30,14 @@ The audit of the codebase and implementation progress tracks the following compo
        - Asynchronous HTTP API (/api/tasks, cancellation, events)
        - Concurrency, cancellation, and recovery automated test suites
 
-[PENDING / SUBSEQUENT PHASES]
   P03: Workspace and Sandbox Management
-       - Project and workspace containment isolation hardening
-       - Elimination of remaining legacy workspace singletons
-       - Sandboxed environment preparation and tooling readiness checks
+       - Multi-user and multi-task workspace isolation
+       - 10-state Workspace lifecycle (ALLOCATED -> CLEANUP_PENDING -> FAILED)
+       - Strict canonical path and symlink escape validation
+       - SQLite Schema Migration V6 (workspaces metadata persistence)
+       - Non-destructive workspace cleanup and crash-restart recovery
 
+[PENDING / SUBSEQUENT PHASES]
   P04: Structured JSON Tool Invocation Schema
        - Formal JSON schema tool calling for Ollama inference
        - Tool validation and hallucination resilience
@@ -59,10 +61,33 @@ The audit of the codebase and implementation progress tracks the following compo
 
 ---
 
-## 3. Recommended Next Implementation Step (P03)
+## 3. Completed Phase 3 Deliverables (P03)
 
-- **Target:** Workspace and Sandbox Management (P03).
+- **Workspace Lifecycle & State Machine:**
+  - `WorkspaceStatus` with 10 states: `ALLOCATED`, `INITIALIZING`, `READY`, `ACTIVE`, `WAITING_FOR_REVIEW`, `REWORKING`, `COMPLETED`, `ARCHIVED`, `CLEANUP_PENDING`, `FAILED`.
+  - `WorkspaceStateTransitionValidator` enforcing valid deterministic state transitions.
+  - State mutators on `Workspace` entity (`allocate`, `initialize`, `markReady`, `activate`, `markWaitingForReview`, `rework`, `complete`, `archive`, `markCleanupPending`, `fail`).
+- **Workspace Model & Multi-Tenant Metadata:**
+  - Extended `Workspace` with `ownerId`, `taskId`, `repositoryUrl`, `branch`, and flexible `metadata`.
+- **Persistence & Migration:**
+  - SQLite Migration V6 (`workspaces` table updated with `owner_id`, `task_id`, `status`, `repository_url`, `branch`, `metadata_json`, and indexes).
+  - Enhanced `WorkspaceRepository` and `SqliteWorkspaceRepository` with `findByTaskId`, `findByOwnerId`, and `findByStatus`.
+- **Sandbox Management & Protection:**
+  - `WorkspaceService.allocateTaskWorkspace()` allocating per-task isolated sandboxes (`~/.tryst/workspace/sandboxes/<ownerId>/<taskId>`).
+  - Protected non-destructive cleanup: refusing to delete workspaces containing active or review-pending work (`ACTIVE`, `INITIALIZING`, `WAITING_FOR_REVIEW`, `REWORKING`).
+  - `WorkspaceRecoveryService` reconciling interrupted workspaces on boot while preserving `WAITING_FOR_REVIEW` work.
+  - Canonical real-path resolution, symlink traversal escape prevention, and null-byte defenses in `PermissionManager`.
+- **Orchestration Integration:**
+  - Dedicated task-scoped workspace resolution in `TaskOrchestrator` and execution state synchronization in `TaskWorker`.
+- **Automated Verification:**
+  - `WorkspaceLifecycleTest`, `WorkspacePersistenceAndRecoveryTest`, `WorkspaceSandboxIsolationTest`.
+
+---
+
+## 4. Recommended Next Implementation Step (P04)
+
+- **Target:** Structured JSON Tool Invocation Schema (P04).
 - **Prerequisites:**
-  1. Verified asynchronous task execution infrastructure (P02 completed).
-  2. Isolated `TaskExecutionContext` already receiving per-task project workspace paths.
-  3. Clean transactional persistence in SQLite (Migration V5 applied).
+  1. Production-grade workspace and sandbox isolation verified (P03 completed).
+  2. Isolated `TaskExecutionContext` bound to dedicated task sandboxes.
+  3. Stable AI inference service and tool registry.
