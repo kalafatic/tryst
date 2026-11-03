@@ -2,8 +2,11 @@ package eu.kalafatic.tryst.domain.model;
 
 /**
  * Task execution lifecycle status transitions.
- * Fully supports the complete autonomous development lifecycle:
- * QUEUED, CLAIMED, RUNNING, WAITING_FOR_REVIEW, APPROVED, REJECTED, COMMITTING, COMPLETED, FAILED, CANCELLED, RECOVERY_REQUIRED.
+ * Explicit states:
+ * CREATED, QUEUED, CLAIMED, CLONING, ANALYZING, PLANNING, IMPLEMENTING,
+ * BUILDING, TESTING, WAITING_FOR_REVIEW, REWORK_REQUESTED, REWORKING,
+ * APPROVED, REJECTED, COMMITTING, COMPLETED, FAILED, CANCELLED, RECOVERY_REQUIRED.
+ * (Also maintains PLANNED, READY, WAITING_FOR_APPROVAL, RUNNING for backward compatibility).
  */
 public enum TaskStatus {
     CREATED,
@@ -12,8 +15,16 @@ public enum TaskStatus {
     QUEUED,
     CLAIMED,
     RUNNING,
+    CLONING,
+    ANALYZING,
+    PLANNING,
+    IMPLEMENTING,
+    BUILDING,
+    TESTING,
     WAITING_FOR_APPROVAL,
     WAITING_FOR_REVIEW,
+    REWORK_REQUESTED,
+    REWORKING,
     APPROVED,
     REJECTED,
     COMMITTING,
@@ -27,5 +38,21 @@ public enum TaskStatus {
      */
     public boolean isTerminal() {
         return this == COMPLETED || this == FAILED || this == CANCELLED;
+    }
+
+    /**
+     * Checks if this state represents an active execution in progress.
+     */
+    public boolean isActive() {
+        return this == RUNNING || this == CLAIMED || this == CLONING || this == ANALYZING || this == PLANNING
+                || this == IMPLEMENTING || this == BUILDING || this == TESTING
+                || this == REWORKING || this == COMMITTING;
+    }
+
+    /**
+     * Checks if this state requires restart reconciliation if detected on startup.
+     */
+    public boolean requiresRecoveryOnRestart() {
+        return isActive() || this == QUEUED;
     }
 }

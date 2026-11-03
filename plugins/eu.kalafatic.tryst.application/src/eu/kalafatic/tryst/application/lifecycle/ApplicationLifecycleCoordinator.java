@@ -102,6 +102,10 @@ public class ApplicationLifecycleCoordinator {
     private SessionTaskOrchestrator sessionTaskOrchestrator;
     private AutonomousDevelopmentService autonomousDevelopmentService;
     private eu.kalafatic.tryst.domain.ai.AiModelRegistryService aiModelRegistryService;
+    private eu.kalafatic.tryst.domain.service.TaskLifecycleManager taskLifecycleManager;
+    private eu.kalafatic.tryst.domain.service.TaskRecoveryService taskRecoveryService;
+    private eu.kalafatic.tryst.domain.service.TaskQueue taskQueue;
+    private eu.kalafatic.tryst.domain.service.TaskOrchestrator taskOrchestrator;
     private TrystTcpService tcpService;
     private TrystHttpService httpService;
 
@@ -231,7 +235,11 @@ public class ApplicationLifecycleCoordinator {
         this.telemetryRepository = new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteTelemetryRepository(databaseManager);
 
         // 4. Startup Task Reconciliation: detect interrupted tasks and mark them RECOVERY_REQUIRED
-        reconcileInterruptedTasks();
+        this.taskLifecycleManager = new eu.kalafatic.tryst.domain.service.TaskLifecycleManager(this.taskRepository, this.eventBus);
+        this.taskRecoveryService = new eu.kalafatic.tryst.domain.service.TaskRecoveryService(this.taskRepository, this.taskLifecycleManager);
+        this.taskQueue = new eu.kalafatic.tryst.domain.service.TaskQueue(this.taskRepository, this.taskLifecycleManager);
+
+        this.taskRecoveryService.reconcileInterruptedTasks();
 
         // 5. Initialize Core domain & async services
         this.workspaceService = new WorkspaceService(configuration.defaultWorkspaceDirectory(),
@@ -314,6 +322,25 @@ public class ApplicationLifecycleCoordinator {
                 eventBus
         );
 
+        int taskConcurrency = Math.max(1, Runtime.getRuntime().availableProcessors() / 2);
+        this.taskOrchestrator = new eu.kalafatic.tryst.domain.service.TaskOrchestrator(
+                this.taskQueue,
+                this.taskRepository,
+                this.taskLifecycleManager,
+                this.workspaceService,
+                this.projectRepository,
+                this.toolRegistry,
+                this.permissionManager,
+                this.aiInferenceService,
+                this.aiContextManager,
+                this.conversationMessageRepository,
+                this.executionResultRepository,
+                this.codeReviewRepository,
+                this.codeReviewService,
+                taskConcurrency
+        );
+        this.taskOrchestrator.start();
+
         // Phase 4 Observability & Operational Services
         this.serverMonitoringService = new eu.kalafatic.tryst.domain.service.ServerMonitoringService(configuration.defaultWorkspaceDirectory());
         this.telemetryService = new eu.kalafatic.tryst.domain.service.TelemetryService(
@@ -362,6 +389,7 @@ public class ApplicationLifecycleCoordinator {
                     configuration.portRangeEnd()
             );
             server.setAiModelRegistryService(this.aiModelRegistryService);
+            server.setTaskOrchestrator(this.taskOrchestrator);
             this.httpService = server;
             this.httpService.start();
             if (serverReadinessService != null) {
@@ -409,6 +437,10 @@ public class ApplicationLifecycleCoordinator {
             registerService(CodeReviewService.class, this.codeReviewService);
             registerService(SessionTaskOrchestrator.class, this.sessionTaskOrchestrator);
             registerService(AutonomousDevelopmentService.class, this.autonomousDevelopmentService);
+            registerService(eu.kalafatic.tryst.domain.service.TaskLifecycleManager.class, this.taskLifecycleManager);
+            registerService(eu.kalafatic.tryst.domain.service.TaskRecoveryService.class, this.taskRecoveryService);
+            registerService(eu.kalafatic.tryst.domain.service.TaskQueue.class, this.taskQueue);
+            registerService(eu.kalafatic.tryst.domain.service.TaskOrchestrator.class, this.taskOrchestrator);
             registerService(eu.kalafatic.tryst.domain.repository.UserRepository.class, this.userRepository);
             registerService(eu.kalafatic.tryst.domain.repository.UserSessionRepository.class, this.userSessionRepository);
             registerService(eu.kalafatic.tryst.domain.repository.AuditEventRepository.class, this.auditEventRepository);
@@ -434,19 +466,6 @@ public class ApplicationLifecycleCoordinator {
         } else {
             TrystLog.warn(ApplicationLifecycleCoordinator.class,
                     "BundleContext unavailable; services initialized in standalone/test mode.");
-        }
-    }
-
-    private void reconcileInterruptedTasks() {
-        if (taskRepository == null) return;
-        List<AgentTask> allTasks = taskRepository.findAll();
-        for (AgentTask task : allTasks) {
-            if (task.getTaskStatus() == TaskStatus.RUNNING || task.getTaskStatus() == TaskStatus.CLAIMED || task.getTaskStatus() == TaskStatus.COMMITTING) {
-                TrystLog.warn(ApplicationLifecycleCoordinator.class,
-                        "Reconciling interrupted task " + task.getId() + " from status " + task.getTaskStatus() + " to RECOVERY_REQUIRED");
-                task.markRecoveryRequired();
-                taskRepository.save(task);
-            }
         }
     }
 
@@ -501,6 +520,16 @@ public class ApplicationLifecycleCoordinator {
                 TrystLog.error(ApplicationLifecycleCoordinator.class, "Error stopping HTTP service", e);
             }
             httpService = null;
+        }
+
+        // 2.5 Stop TaskOrchestrator cleanly
+        if (taskOrchestrator != null) {
+            try {
+                taskOrchestrator.shutdown();
+            } catch (Exception e) {
+                TrystLog.error(ApplicationLifecycleCoordinator.class, "Error shutting down TaskOrchestrator", e);
+            }
+            taskOrchestrator = null;
         }
 
         // 3. Controlled disposal of thread pool / async execution service
@@ -569,6 +598,9 @@ public class ApplicationLifecycleCoordinator {
         this.codeReviewService = null;
         this.sessionTaskOrchestrator = null;
         this.autonomousDevelopmentService = null;
+        this.taskLifecycleManager = null;
+        this.taskRecoveryService = null;
+        this.taskQueue = null;
         this.serverReadinessService = null;
 
         TrystLog.info(ApplicationLifecycleCoordinator.class, "Service disposal complete.");
@@ -701,6 +733,22 @@ public class ApplicationLifecycleCoordinator {
 
     public AutonomousDevelopmentService getAutonomousDevelopmentService() {
         return autonomousDevelopmentService;
+    }
+
+    public eu.kalafatic.tryst.domain.service.TaskLifecycleManager getTaskLifecycleManager() {
+        return taskLifecycleManager;
+    }
+
+    public eu.kalafatic.tryst.domain.service.TaskRecoveryService getTaskRecoveryService() {
+        return taskRecoveryService;
+    }
+
+    public eu.kalafatic.tryst.domain.service.TaskQueue getTaskQueue() {
+        return taskQueue;
+    }
+
+    public eu.kalafatic.tryst.domain.service.TaskOrchestrator getTaskOrchestrator() {
+        return taskOrchestrator;
     }
 
     public TrystTcpService getTcpService() {
