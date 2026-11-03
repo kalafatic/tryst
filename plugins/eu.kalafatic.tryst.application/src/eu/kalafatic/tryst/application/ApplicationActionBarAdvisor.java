@@ -58,6 +58,7 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
                 }
             }
         };
+        openWebBrowserAction.setId("eu.kalafatic.tryst.application.action.openWebBrowser");
         register(openWebBrowserAction);
 
         openMainPerspectiveAction = new Action("Switch to Main Perspective") {
@@ -70,6 +71,7 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
                 }
             }
         };
+        openMainPerspectiveAction.setId("eu.kalafatic.tryst.application.action.openMainPerspective");
         register(openMainPerspectiveAction);
 
         openAdminPerspectiveAction = new Action("Switch to Administration Perspective") {
@@ -82,6 +84,7 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
                 }
             }
         };
+        openAdminPerspectiveAction.setId("eu.kalafatic.tryst.application.action.openAdminPerspective");
         register(openAdminPerspectiveAction);
 
         dbIntegrityAction = new Action("Run Database PRAGMA Integrity Check") {
@@ -105,6 +108,7 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
                 }
             }
         };
+        dbIntegrityAction.setId("eu.kalafatic.tryst.application.action.dbIntegrity");
         register(dbIntegrityAction);
 
         dbVacuumAction = new Action("Compact Database (VACUUM)") {
@@ -126,6 +130,7 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
                 }
             }
         };
+        dbVacuumAction.setId("eu.kalafatic.tryst.application.action.dbVacuum");
         register(dbVacuumAction);
 
         refreshAllAction = new Action("Refresh System Status") {
@@ -139,6 +144,7 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
                 }
             }
         };
+        refreshAllAction.setId("eu.kalafatic.tryst.application.action.refreshAll");
         register(refreshAllAction);
     }
 
