@@ -1,7 +1,4 @@
 **/target/
 **/bin/
 *.class
-.settings/
-.project
-.classpath
 workspace/
