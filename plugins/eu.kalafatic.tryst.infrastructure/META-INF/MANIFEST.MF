@@ -14,6 +14,7 @@ Require-Bundle: org.eclipse.osgi,
  eu.kalafatic.tryst.domain;bundle-version="0.1.0"
 Export-Package: eu.kalafatic.tryst.infrastructure.ai,
  eu.kalafatic.tryst.infrastructure.build,
+ eu.kalafatic.tryst.infrastructure.github,
  eu.kalafatic.tryst.infrastructure.persistence,
  eu.kalafatic.tryst.infrastructure.persistence.repository,
  eu.kalafatic.tryst.infrastructure.server,

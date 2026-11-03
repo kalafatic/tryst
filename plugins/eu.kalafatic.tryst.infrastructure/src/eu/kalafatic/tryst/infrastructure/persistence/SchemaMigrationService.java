@@ -472,6 +472,27 @@ public class SchemaMigrationService {
         );
         migrations.add(new Migration(6, "Production workspace and sandbox lifecycle isolation", v6Statements));
 
+        // V7: GitHub Credentials Storage (Encrypted at rest)
+        List<String> v7Statements = List.of(
+                """
+                CREATE TABLE IF NOT EXISTS github_credentials (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL UNIQUE,
+                    github_username TEXT NOT NULL,
+                    encrypted_token TEXT NOT NULL,
+                    scopes TEXT,
+                    token_type TEXT NOT NULL DEFAULT 'pat',
+                    expires_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                );
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_github_credentials_user ON github_credentials(user_id);",
+                "CREATE INDEX IF NOT EXISTS idx_github_credentials_username ON github_credentials(github_username);"
+        );
+        migrations.add(new Migration(7, "Secure GitHub credentials storage encrypted at rest", v7Statements));
+
         return migrations;
     }
 }

@@ -43,6 +43,7 @@ public class TaskWorker implements Callable<ExecutionResult> {
     private final ExecutionResultRepository executionResultRepository;
     private final CodeReviewRepository codeReviewRepository;
     private final CodeReviewService codeReviewService;
+    private eu.kalafatic.tryst.domain.github.GitHubService gitHubService;
 
     public TaskWorker(
             TaskExecutionContext context,
@@ -56,6 +57,23 @@ public class TaskWorker implements Callable<ExecutionResult> {
             CodeReviewRepository codeReviewRepository,
             CodeReviewService codeReviewService
     ) {
+        this(context, lifecycleManager, toolRegistry, permissionManager, aiClient, aiContextManager,
+                messageRepository, executionResultRepository, codeReviewRepository, codeReviewService, null);
+    }
+
+    public TaskWorker(
+            TaskExecutionContext context,
+            TaskLifecycleManager lifecycleManager,
+            ToolRegistry toolRegistry,
+            PermissionManager permissionManager,
+            AiInferenceService aiClient,
+            AiContextManager aiContextManager,
+            ConversationMessageRepository messageRepository,
+            ExecutionResultRepository executionResultRepository,
+            CodeReviewRepository codeReviewRepository,
+            CodeReviewService codeReviewService,
+            eu.kalafatic.tryst.domain.github.GitHubService gitHubService
+    ) {
         this.context = Objects.requireNonNull(context, "context must not be null");
         this.lifecycleManager = Objects.requireNonNull(lifecycleManager, "lifecycleManager must not be null");
         this.toolRegistry = toolRegistry;
@@ -66,6 +84,11 @@ public class TaskWorker implements Callable<ExecutionResult> {
         this.executionResultRepository = executionResultRepository;
         this.codeReviewRepository = codeReviewRepository;
         this.codeReviewService = codeReviewService;
+        this.gitHubService = gitHubService;
+    }
+
+    public void setGitHubService(eu.kalafatic.tryst.domain.github.GitHubService gitHubService) {
+        this.gitHubService = gitHubService;
     }
 
     @Override
@@ -75,10 +98,12 @@ public class TaskWorker implements Callable<ExecutionResult> {
         StringBuilder logBuilder = new StringBuilder();
 
         try {
-            // Stage 1: CLONING / Workspace verification
+            // Stage 1: CLONING / Workspace verification & remote GitHub clone/fetch
             checkCancelled();
             lifecycleManager.transition(task, TaskStatus.CLONING, "Verifying project repository and workspace structure", null);
             logBuilder.append("[Worker ").append(context.getWorkerId()).append("] Stage: CLONING\n");
+
+            performRepositoryCloningStage(task, logBuilder);
 
             // Stage 2: ANALYZING
             checkCancelled();
@@ -170,6 +195,29 @@ public class TaskWorker implements Callable<ExecutionResult> {
     private void checkCancelled() throws TaskCancelledException {
         if (context.isCancelled() || Thread.currentThread().isInterrupted()) {
             throw new TaskCancelledException("Task execution cancelled");
+        }
+    }
+
+    private void performRepositoryCloningStage(Task task, StringBuilder log) {
+        Workspace ws = context.getWorkspace();
+        if (ws == null) {
+            log.append("[Cloning]: No workspace assigned to task; skipping git clone.\n");
+            return;
+        }
+
+        String repoUrl = ws.getRepositoryUrl();
+        if (repoUrl != null && !repoUrl.isBlank() && gitHubService != null) {
+            log.append("[Cloning]: Synchronizing remote repository ").append(repoUrl)
+               .append(" (branch: ").append(ws.getBranch()).append(") into sandbox ").append(ws.getRootPath()).append("\n");
+            try {
+                gitHubService.cloneOrFetchRepository(context.getUserId(), repoUrl, ws.getBranch(), ws.getRootPath());
+                log.append("[Cloning]: Sandbox cloned/fetched successfully.\n");
+            } catch (Exception e) {
+                log.append("[Cloning Error]: ").append(e.getMessage()).append("\n");
+                throw new IllegalStateException("Failed to clone/fetch GitHub repository: " + e.getMessage(), e);
+            }
+        } else {
+            log.append("[Cloning]: Local workspace directory verified at ").append(ws.getRootPath()).append("\n");
         }
     }
 

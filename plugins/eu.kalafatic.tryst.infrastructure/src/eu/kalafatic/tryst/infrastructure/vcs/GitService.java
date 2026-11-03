@@ -61,6 +61,146 @@ public class GitService {
         return runGit(repoDir, List.of("checkout", "-b", branchName));
     }
 
+    public GitCommandResult createBranch(Path repoDir, String branchName, String startPoint) {
+        Objects.requireNonNull(branchName, "branchName must not be null");
+        if (startPoint == null || startPoint.isBlank()) {
+            return createBranch(repoDir, branchName);
+        }
+        return runGit(repoDir, List.of("checkout", "-b", branchName, startPoint));
+    }
+
+    public GitCommandResult checkout(Path repoDir, String branchName) {
+        Objects.requireNonNull(branchName, "branchName must not be null");
+        return runGit(repoDir, List.of("checkout", branchName));
+    }
+
+    public GitCommandResult cloneOrFetch(Path targetDir, String cloneUrl, String branch, String token) {
+        Objects.requireNonNull(targetDir, "targetDir must not be null");
+        Objects.requireNonNull(cloneUrl, "cloneUrl must not be null");
+
+        String effectiveBranch = (branch != null && !branch.isBlank()) ? branch : "main";
+        String authenticatedUrl = buildAuthenticatedUrl(cloneUrl, token);
+
+        try {
+            if (isGitRepository(targetDir)) {
+                TrystLog.info(GitService.class, "Existing repository found in " + targetDir + "; fetching latest changes for branch " + effectiveBranch);
+                // Update remote origin url with authentication if token provided
+                if (token != null && !token.isBlank()) {
+                    runGit(targetDir, List.of("remote", "set-url", "origin", authenticatedUrl));
+                }
+                GitCommandResult fetchRes = runGit(targetDir, List.of("fetch", "origin", effectiveBranch));
+                if (!fetchRes.isSuccess()) {
+                    TrystLog.warn(GitService.class, "Fetch failed: " + maskOutput(fetchRes.error(), token));
+                    return new GitCommandResult(fetchRes.exitCode(), maskOutput(fetchRes.output(), token), maskOutput(fetchRes.error(), token));
+                }
+                GitCommandResult checkoutRes = runGit(targetDir, List.of("checkout", effectiveBranch));
+                return new GitCommandResult(checkoutRes.exitCode(), maskOutput(checkoutRes.output(), token), maskOutput(checkoutRes.error(), token));
+            } else {
+                // If directory exists but is incomplete (e.g., interrupted clone), clean up safely
+                if (Files.exists(targetDir)) {
+                    cleanDirectoryContents(targetDir);
+                } else {
+                    Files.createDirectories(targetDir);
+                }
+
+                TrystLog.info(GitService.class, "Cloning " + maskUrl(cloneUrl) + " (branch: " + effectiveBranch + ") into " + targetDir);
+                Path parent = targetDir.getParent() != null ? targetDir.getParent() : targetDir;
+                String dirName = targetDir.getFileName().toString();
+
+                List<String> cloneArgs = new ArrayList<>();
+                cloneArgs.add("clone");
+                cloneArgs.add("--branch");
+                cloneArgs.add(effectiveBranch);
+                cloneArgs.add(authenticatedUrl);
+                cloneArgs.add(dirName);
+
+                GitCommandResult cloneRes = runGit(parent, cloneArgs);
+                if (!cloneRes.isSuccess()) {
+                    TrystLog.error(GitService.class, "Clone failed: " + maskOutput(cloneRes.error(), token));
+                    return new GitCommandResult(cloneRes.exitCode(), maskOutput(cloneRes.output(), token), maskOutput(cloneRes.error(), token));
+                }
+                return new GitCommandResult(0, maskOutput(cloneRes.output(), token), "");
+            }
+        } catch (Exception e) {
+            TrystLog.error(GitService.class, "Failed to clone/fetch repository: " + e.getMessage(), e);
+            return new GitCommandResult(-1, "", maskOutput(e.getMessage(), token));
+        }
+    }
+
+    public boolean hasRemoteConflicts(Path repoDir, String remote, String branch, String token) {
+        if (!isGitRepository(repoDir)) return false;
+        String effRemote = (remote != null && !remote.isBlank()) ? remote : "origin";
+        String effBranch = (branch != null && !branch.isBlank()) ? branch : "main";
+
+        // Fetch remote state
+        GitCommandResult fetchRes = runGit(repoDir, List.of("fetch", effRemote, effBranch));
+        if (!fetchRes.isSuccess()) {
+            return false;
+        }
+
+        // Check if remote branch has diverged from local branch
+        GitCommandResult revListRes = runGit(repoDir, List.of("rev-list", "--count", "HEAD.." + effRemote + "/" + effBranch));
+        if (revListRes.isSuccess()) {
+            try {
+                int count = Integer.parseInt(revListRes.output().trim());
+                return count > 0;
+            } catch (NumberFormatException ignored) {}
+        }
+        return false;
+    }
+
+    public GitCommandResult push(Path repoDir, String remote, String branch, String token, boolean force) {
+        Objects.requireNonNull(repoDir, "repoDir must not be null");
+        String effRemote = (remote != null && !remote.isBlank()) ? remote : "origin";
+        String effBranch = (branch != null && !branch.isBlank()) ? branch : "main";
+
+        List<String> args = new ArrayList<>();
+        args.add("push");
+        if (force) {
+            args.add("--force");
+        }
+        args.add(effRemote);
+        args.add(effBranch);
+
+        GitCommandResult res = runGit(repoDir, args);
+        return new GitCommandResult(res.exitCode(), maskOutput(res.output(), token), maskOutput(res.error(), token));
+    }
+
+    public void cleanDirectoryContents(Path directory) {
+        if (!Files.exists(directory)) return;
+        try (var walk = Files.walk(directory)) {
+            walk.sorted(java.util.Comparator.reverseOrder())
+                .filter(p -> !p.equals(directory))
+                .map(Path::toFile)
+                .forEach(java.io.File::delete);
+        } catch (Exception ignored) {}
+    }
+
+    public static String buildAuthenticatedUrl(String cloneUrl, String token) {
+        if (token == null || token.isBlank() || cloneUrl == null) {
+            return cloneUrl;
+        }
+        String cleanUrl = cloneUrl.trim();
+        if (cleanUrl.startsWith("https://")) {
+            return "https://" + token.trim() + "@" + cleanUrl.substring("https://".length());
+        }
+        return cleanUrl;
+    }
+
+    public static String maskUrl(String url) {
+        if (url == null) return "";
+        return url.replaceAll("https://[^@]+@", "https://****@");
+    }
+
+    public static String maskOutput(String text, String token) {
+        if (text == null) return "";
+        String res = maskUrl(text);
+        if (token != null && !token.isBlank()) {
+            res = res.replace(token.trim(), "********");
+        }
+        return res;
+    }
+
     public GitCommandResult stageAll(Path repoDir) {
         return runGit(repoDir, List.of("add", "."));
     }
@@ -132,6 +272,9 @@ public class GitService {
 
         ProcessBuilder pb = new ProcessBuilder(command);
         pb.directory(repoDir.toFile());
+        // Prevent interactive terminal prompts (passwords/usernames) from hanging background workers
+        pb.environment().put("GIT_TERMINAL_PROMPT", "0");
+        pb.environment().put("GIT_ASKPASS", "echo");
 
         try {
             Process process = pb.start();

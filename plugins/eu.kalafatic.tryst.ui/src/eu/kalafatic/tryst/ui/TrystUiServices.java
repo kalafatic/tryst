@@ -172,6 +172,10 @@ public final class TrystUiServices {
         return getService(GitService.class);
     }
 
+    public static eu.kalafatic.tryst.domain.github.GitHubService getGitHubService() {
+        return getService(eu.kalafatic.tryst.domain.github.GitHubService.class);
+    }
+
     public static ServerMonitoringService getServerMonitoringService() {
         return getService(ServerMonitoringService.class);
     }

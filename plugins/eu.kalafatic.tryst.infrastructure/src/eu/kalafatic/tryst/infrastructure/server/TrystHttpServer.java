@@ -68,6 +68,9 @@ public class TrystHttpServer implements TrystHttpService {
     private AgentRepository agentRepository;
     private eu.kalafatic.tryst.domain.ai.AiModelRegistryService aiModelRegistryService;
     private TaskOrchestrator taskOrchestrator;
+    private eu.kalafatic.tryst.domain.github.GitHubService gitHubService;
+    private eu.kalafatic.tryst.domain.github.GitHubCredentialRepository gitHubCredentialRepository;
+    private eu.kalafatic.tryst.domain.github.GitHubCredentialEncryptionService gitHubCredentialEncryptionService;
 
     private HttpServer server;
     private ExecutorService httpExecutor;
@@ -145,6 +148,14 @@ public class TrystHttpServer implements TrystHttpService {
 
     public void setTaskOrchestrator(TaskOrchestrator taskOrchestrator) {
         this.taskOrchestrator = taskOrchestrator;
+    }
+
+    public void setGitHubService(eu.kalafatic.tryst.domain.github.GitHubService gitHubService,
+                                 eu.kalafatic.tryst.domain.github.GitHubCredentialRepository gitHubCredentialRepository,
+                                 eu.kalafatic.tryst.domain.github.GitHubCredentialEncryptionService gitHubCredentialEncryptionService) {
+        this.gitHubService = gitHubService;
+        this.gitHubCredentialRepository = gitHubCredentialRepository;
+        this.gitHubCredentialEncryptionService = gitHubCredentialEncryptionService;
     }
 
     @Override
@@ -244,6 +255,7 @@ public class TrystHttpServer implements TrystHttpService {
         TasksHandler tasksH = new TasksHandler();
         ReviewsHandler reviewsH = new ReviewsHandler();
         NotificationsHandler notifH = new NotificationsHandler();
+        GitHubHandler githubH = new GitHubHandler();
         AdminHandler adminH = new AdminHandler();
         StaticAssetHandler staticH = new StaticAssetHandler();
 
@@ -256,6 +268,7 @@ public class TrystHttpServer implements TrystHttpService {
         server.createContext("/api/tasks", tasksH);
         server.createContext("/api/reviews", reviewsH);
         server.createContext("/api/notifications", notifH);
+        server.createContext("/api/github", githubH);
         server.createContext("/api/admin", adminH);
 
         // Register context-path specific routes if not root
@@ -268,6 +281,7 @@ public class TrystHttpServer implements TrystHttpService {
             server.createContext(ctxPath + "/api/tasks", tasksH);
             server.createContext(ctxPath + "/api/reviews", reviewsH);
             server.createContext(ctxPath + "/api/notifications", notifH);
+            server.createContext(ctxPath + "/api/github", githubH);
             server.createContext(ctxPath + "/api/admin", adminH);
 
             server.createContext(ctxPath, staticH);
@@ -929,6 +943,168 @@ public class TrystHttpServer implements TrystHttpService {
         }
     }
 
+    private class GitHubHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendJsonResponse(exchange, 204, "");
+                return;
+            }
+
+            Optional<SecurityContext> ctx = resolveSecurityContext(exchange);
+            String userId = ctx.map(SecurityContext::getUserId).orElseGet(() -> getUserId(exchange));
+            String path = exchange.getRequestURI().getPath();
+
+            if (gitHubService == null) {
+                sendJsonResponse(exchange, 503, "{\"error\": \"GitHubService unavailable\"}");
+                return;
+            }
+
+            // Route: GET /api/github/account
+            if (path.endsWith("/account") && "GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                Optional<eu.kalafatic.tryst.domain.github.GitHubCredential> optCred = gitHubService.getCredentialForUser(userId);
+                if (optCred.isEmpty()) {
+                    sendJsonResponse(exchange, 200, "{\"connected\": false}");
+                    return;
+                }
+                eu.kalafatic.tryst.domain.github.GitHubCredential cred = optCred.get();
+                String masked = gitHubCredentialEncryptionService != null
+                        ? gitHubCredentialEncryptionService.maskToken(gitHubCredentialEncryptionService.decrypt(cred.getEncryptedToken()))
+                        : "********";
+                String json = String.format("{\"connected\": true, \"username\": \"%s\", \"maskedToken\": \"%s\", \"scopes\": \"%s\", \"tokenType\": \"%s\", \"expired\": %b, \"createdAt\": \"%s\"}",
+                        escapeJson(cred.getGithubUsername()), escapeJson(masked), escapeJson(cred.getScopes()),
+                        escapeJson(cred.getTokenType()), cred.isExpired(), cred.getCreatedAt());
+                sendJsonResponse(exchange, 200, json);
+                return;
+            }
+
+            // Route: POST /api/github/connect
+            if (path.endsWith("/connect") && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                String token = extractJsonField(body, "token");
+                if (token == null || token.isBlank()) {
+                    sendJsonResponse(exchange, 400, "{\"error\": \"Missing required field 'token'\"}");
+                    return;
+                }
+                try {
+                    eu.kalafatic.tryst.domain.github.GitHubCredential cred = gitHubService.connectAccount(userId, token.trim());
+                    String masked = gitHubCredentialEncryptionService != null ? gitHubCredentialEncryptionService.maskToken(token.trim()) : "********";
+                    String json = String.format("{\"success\": true, \"username\": \"%s\", \"maskedToken\": \"%s\"}",
+                            escapeJson(cred.getGithubUsername()), escapeJson(masked));
+                    sendJsonResponse(exchange, 200, json);
+                } catch (Exception e) {
+                    sendJsonResponse(exchange, 400, "{\"success\": false, \"error\": \"" + escapeJson(e.getMessage()) + "\"}");
+                }
+                return;
+            }
+
+            // Route: POST /api/github/disconnect
+            if (path.endsWith("/disconnect") && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                gitHubService.disconnectAccount(userId);
+                sendJsonResponse(exchange, 200, "{\"success\": true}");
+                return;
+            }
+
+            // Route: GET /api/github/repos
+            if (path.endsWith("/repos") && "GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                try {
+                    List<eu.kalafatic.tryst.domain.github.GitHubRepository> repos = gitHubService.listRepositories(userId);
+                    StringBuilder sb = new StringBuilder("{\"repositories\": [");
+                    for (int i = 0; i < repos.size(); i++) {
+                        eu.kalafatic.tryst.domain.github.GitHubRepository r = repos.get(i);
+                        if (i > 0) sb.append(",");
+                        sb.append(String.format("{\"id\": \"%s\", \"fullName\": \"%s\", \"owner\": \"%s\", \"name\": \"%s\", \"isPrivate\": %b, \"defaultBranch\": \"%s\", \"cloneUrl\": \"%s\", \"htmlUrl\": \"%s\", \"description\": \"%s\"}",
+                                escapeJson(r.id()), escapeJson(r.fullName()), escapeJson(r.owner()), escapeJson(r.name()), r.isPrivate(),
+                                escapeJson(r.defaultBranch()), escapeJson(r.cloneUrl()), escapeJson(r.htmlUrl()), escapeJson(r.description() != null ? r.description() : "")));
+                    }
+                    sb.append("]}");
+                    sendJsonResponse(exchange, 200, sb.toString());
+                } catch (Exception e) {
+                    sendJsonResponse(exchange, 400, "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}");
+                }
+                return;
+            }
+
+            // Route: GET /api/github/repos/{owner}/{repo}/branches
+            if (path.contains("/repos/") && path.endsWith("/branches") && "GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                String sub = path.substring(path.indexOf("/repos/") + "/repos/".length());
+                String repoPart = sub.substring(0, sub.indexOf("/branches"));
+                String[] parts = repoPart.split("/");
+                if (parts.length != 2) {
+                    sendJsonResponse(exchange, 400, "{\"error\": \"Invalid repository path format\"}");
+                    return;
+                }
+                String owner = parts[0];
+                String repo = parts[1];
+                try {
+                    List<eu.kalafatic.tryst.domain.github.GitHubBranch> branches = gitHubService.listBranches(userId, owner, repo);
+                    StringBuilder sb = new StringBuilder("{\"branches\": [");
+                    for (int i = 0; i < branches.size(); i++) {
+                        eu.kalafatic.tryst.domain.github.GitHubBranch b = branches.get(i);
+                        if (i > 0) sb.append(",");
+                        sb.append(String.format("{\"name\": \"%s\", \"commitSha\": \"%s\", \"isProtected\": %b}",
+                                escapeJson(b.name()), escapeJson(b.commitSha()), b.isProtected()));
+                    }
+                    sb.append("]}");
+                    sendJsonResponse(exchange, 200, sb.toString());
+                } catch (Exception e) {
+                    sendJsonResponse(exchange, 400, "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}");
+                }
+                return;
+            }
+
+            // Route: POST /api/github/push
+            if (path.endsWith("/push") && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                if (ctx.isPresent() && !ctx.get().user().hasPermission(Permission.COMMIT_APPROVED_CHANGES)) {
+                    sendJsonResponse(exchange, 403, "{\"error\": \"Permission COMMIT_APPROVED_CHANGES required to push\"}");
+                    return;
+                }
+                String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                String reviewId = extractJsonField(body, "reviewId");
+                String remote = extractJsonField(body, "remote");
+                String branch = extractJsonField(body, "branch");
+                boolean force = body.contains("\"force\":true") || body.contains("\"force\": true");
+
+                if (reviewId == null || reviewId.isBlank()) {
+                    sendJsonResponse(exchange, 400, "{\"error\": \"Missing required field 'reviewId'\"}");
+                    return;
+                }
+
+                if (codeReviewRepository == null) {
+                    sendJsonResponse(exchange, 503, "{\"error\": \"CodeReviewRepository unavailable\"}");
+                    return;
+                }
+
+                Optional<CodeReview> optRev = codeReviewRepository.findById(reviewId);
+                if (optRev.isEmpty()) {
+                    sendJsonResponse(exchange, 404, "{\"error\": \"CodeReview not found: " + reviewId + "\"}");
+                    return;
+                }
+                CodeReview review = optRev.get();
+
+                Path repoDir = resolveProjectWorkspacePath(review.getProjectId());
+                eu.kalafatic.tryst.domain.github.GitHubService.PushResult res = gitHubService.pushAuthorized(
+                        userId, repoDir, review, remote, branch, force
+                );
+
+                if (res.success()) {
+                    if (notificationService != null) {
+                        notificationService.notifyUser(userId, "PUSH_SUCCESS", "GitHub Push Succeeded",
+                                "Successfully pushed changes to " + res.remote() + "/" + res.branch(), "review", review.getId());
+                    }
+                    String json = String.format("{\"success\": true, \"remote\": \"%s\", \"branch\": \"%s\", \"commitHash\": \"%s\", \"message\": \"%s\"}",
+                            escapeJson(res.remote()), escapeJson(res.branch()), escapeJson(res.commitHash()), escapeJson(res.message()));
+                    sendJsonResponse(exchange, 200, json);
+                } else {
+                    sendJsonResponse(exchange, 400, String.format("{\"success\": false, \"error\": \"%s\"}", escapeJson(res.error())));
+                }
+                return;
+            }
+
+            sendJsonResponse(exchange, 404, "{\"error\": \"GitHub endpoint not found\"}");
+        }
+    }
+
     private class NotificationsHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
@@ -1428,6 +1604,7 @@ public class TrystHttpServer implements TrystHttpService {
                                             <button id="btnApprove" class="btn btn-success" onclick="approveReview()">Approve Review</button>
                                             <button id="btnReject" class="btn btn-danger" onclick="rejectReview()">Reject</button>
                                             <button id="btnCommit" class="btn btn-success" style="display: none;" onclick="commitReview()">Commit Approved Changes</button>
+                                            <button id="btnPush" class="btn btn-primary" style="display: none;" onclick="pushReview()">Push to GitHub</button>
                                         </div>
                                     </div>
                                 </div>
@@ -1459,6 +1636,7 @@ public class TrystHttpServer implements TrystHttpService {
                                 <div class="list-item" onclick="switchAdminSub('audit')">Audit & Security Log</div>
                                 <div class="list-item" onclick="switchAdminSub('diagnostics')">Centralized Logs</div>
                                 <div class="list-item" onclick="switchAdminSub('database')">Database & Backups</div>
+                                <div class="list-item" onclick="switchAdminSub('github')">GitHub Integration</div>
                             </div>
                         </div>
 
@@ -1579,6 +1757,8 @@ public class TrystHttpServer implements TrystHttpService {
                                     const data = await res.json();
                                     container.innerHTML = '<table><tr><th>PID</th><th>Command</th><th>Working Dir</th><th>Status</th><th>Duration</th></tr>' +
                                         data.processes.map(p => `<tr><td>${p.pid}</td><td>${p.command}</td><td>${p.workingDir}</td><td>${p.status}</td><td>${p.durationMs}ms</td></tr>`).join('') + '</table>';
+                                } else if (sub === 'github') {
+                                    loadGitHubAccountStatus(container);
                                 }
                             } catch(e) {
                                 container.innerHTML = 'Error loading ' + sub + ': ' + e;
@@ -1589,6 +1769,60 @@ public class TrystHttpServer implements TrystHttpService {
                             const res = await fetch(apiUrl('/api/admin/database/backup'), { method: 'POST' });
                             const d = await res.json();
                             alert(d.success ? 'Backup created at: ' + d.backupPath : 'Backup failed');
+                        }
+
+                        async function loadGitHubAccountStatus(container) {
+                            try {
+                                const res = await fetch(apiUrl('/api/github/account'), { headers: getAuthHeaders() });
+                                const data = await res.json();
+                                if (data.connected) {
+                                    container.innerHTML = `
+                                        <div>
+                                            <h3>GitHub Account Connected</h3>
+                                            <p><b>GitHub User:</b> @${data.username}</p>
+                                            <p><b>Token:</b> ${data.maskedToken} (Encrypted at rest)</p>
+                                            <p><b>Scopes:</b> ${data.scopes}</p>
+                                            <p><b>Connected At:</b> ${data.createdAt}</p>
+                                            <button class="btn btn-danger" onclick="disconnectGitHub()">Disconnect GitHub</button>
+                                        </div>
+                                    `;
+                                } else {
+                                    container.innerHTML = `
+                                        <div>
+                                            <h3>Connect GitHub Account</h3>
+                                            <p>Enter a GitHub Personal Access Token (classic or fine-grained) with <code>repo</code> permissions to enable cloning private and public repositories and authorized pushes.</p>
+                                            <input id="ghTokenInput" type="password" placeholder="ghp_..." style="width: 320px; padding: 8px; background: #0b1120; border: 1px solid var(--border); color: #fff; margin-bottom: 8px; border-radius: 4px;" /><br>
+                                            <button class="btn btn-primary" onclick="connectGitHub()">Connect GitHub Account</button>
+                                        </div>
+                                    `;
+                                }
+                            } catch (e) {
+                                container.innerHTML = 'Error loading GitHub status: ' + e;
+                            }
+                        }
+
+                        async function connectGitHub() {
+                            const token = document.getElementById('ghTokenInput').value;
+                            if (!token) return;
+                            const res = await fetch(apiUrl('/api/github/connect'), {
+                                method: 'POST',
+                                headers: getAuthHeaders(),
+                                body: JSON.stringify({ token })
+                            });
+                            const d = await res.json();
+                            if (d.success) {
+                                alert('Connected to GitHub as @' + d.username);
+                                switchAdminSub('github');
+                            } else {
+                                alert('Connection failed: ' + d.error);
+                            }
+                        }
+
+                        async function disconnectGitHub() {
+                            if (!confirm('Disconnect GitHub account?')) return;
+                            await fetch(apiUrl('/api/github/disconnect'), { method: 'POST', headers: getAuthHeaders() });
+                            alert('GitHub account disconnected.');
+                            switchAdminSub('github');
                         }
 
                         async function loadAdminOverview() {
@@ -1645,6 +1879,8 @@ public class TrystHttpServer implements TrystHttpService {
                             const btnCommit = document.getElementById('btnCommit');
 
                             btnCommit.style.display = (r.status === 'APPROVED') ? 'inline-block' : 'none';
+                            const btnPush = document.getElementById('btnPush');
+                            btnPush.style.display = (r.status === 'APPROVED' && r.commitHash) ? 'inline-block' : 'none';
 
                             renderDiff(r.effectiveDiff || r.initialDiff || '');
                             loadReviews();
@@ -1710,6 +1946,22 @@ public class TrystHttpServer implements TrystHttpService {
                                 selectReview(data.review);
                             } else {
                                 alert('Commit failed: ' + data.error);
+                            }
+                        }
+
+                        async function pushReview() {
+                            if (!activeReview) return;
+                            if (!confirm('Perform authorized push to GitHub repository branch?')) return;
+                            const res = await fetch(apiUrl('/api/github/push'), {
+                                method: 'POST',
+                                headers: getAuthHeaders(),
+                                body: JSON.stringify({ reviewId: activeReview.id })
+                            });
+                            const data = await res.json();
+                            if (data.success) {
+                                alert('Push succeeded! ' + data.message);
+                            } else {
+                                alert('Push failed: ' + data.error);
                             }
                         }
 

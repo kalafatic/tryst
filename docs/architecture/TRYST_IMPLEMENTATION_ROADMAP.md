@@ -37,6 +37,16 @@ The audit of the codebase and implementation progress tracks the following compo
        - SQLite Schema Migration V6 (workspaces metadata persistence)
        - Non-destructive workspace cleanup and crash-restart recovery
 
+  P04: GitHub Integration & Remote VCS Sandbox Management
+       - Secure GitHub token validation and authentication via pure Java 21 HttpClient
+       - Discovered repository (public/private) and branch management
+       - Server-side AES-256-GCM credential encryption at rest and token masking
+       - SQLite Schema Migration V7 (github_credentials table)
+       - Isolated sandbox clone, fetch, branch creation, and conflict detection
+       - Deterministic Git execution with GIT_TERMINAL_PROMPT=0
+       - Explicit user-authorized push gated behind approved CodeReview
+       - Rest API (/api/github/*) and UI controls
+
 [PENDING / SUBSEQUENT PHASES]
   P04: Structured JSON Tool Invocation Schema
        - Formal JSON schema tool calling for Ollama inference
@@ -84,10 +94,23 @@ The audit of the codebase and implementation progress tracks the following compo
 
 ---
 
-## 4. Recommended Next Implementation Step (P04)
+## 4. Completed GitHub Integration Deliverables (Phase 4 / VCS)
 
-- **Target:** Structured JSON Tool Invocation Schema (P04).
+- **Domain Models & Contracts:** `GitHubCredential`, `GitHubRepository`, `GitHubBranch`, `GitHubCredentialEncryptionService`, `GitHubService`, `GitHubCredentialRepository`.
+- **Encryption & Masking:** `DefaultGitHubCredentialEncryptionService` enforcing AES-256-GCM encryption with PBKDF2/HMAC-SHA256 key derivation at rest and strict token masking (`ghp_****...`).
+- **REST & Git Operations:** `DefaultGitHubService` implementing pure Java 21 `HttpClient` operations for discovery (public/private repos, branches) and delegation to `GitService`.
+- **Git Engine Hardening:** Extended `GitService` with `cloneOrFetch`, `checkout`, `createBranch`, `push`, remote conflict detection, interrupted clone recovery, and process argument/output sanitization with `GIT_TERMINAL_PROMPT=0`.
+- **Persistence & Migration:** SQLite Migration V7 (`github_credentials` table with foreign key cascade to `users` and indexes on `user_id` and `github_username`), `SqliteGitHubCredentialRepository`.
+- **Lifecycle & Orchestrator:** Integrated into `TaskWorker` during `CLONING` stage, wired in `TaskOrchestrator`, `ApplicationLifecycleCoordinator`, `TrystUiServices`.
+- **REST API & Presentation:** Added `/api/github` endpoints to `TrystHttpServer`, added Web dashboard connect modal & push button, updated `ProjectsAndGitView` SWT view.
+- **Verification:** Automated tests in `GitHubIntegrationTest` validating encryption, discovery, cloning, conflicts, interrupted clone recovery, and push authorization.
+
+---
+
+## 5. Recommended Next Implementation Step
+
+- **Target:** Structured JSON Tool Invocation Schema.
 - **Prerequisites:**
   1. Production-grade workspace and sandbox isolation verified (P03 completed).
-  2. Isolated `TaskExecutionContext` bound to dedicated task sandboxes.
+  2. Isolated `TaskExecutionContext` bound to dedicated task sandboxes and GitHub VCS integration.
   3. Stable AI inference service and tool registry.

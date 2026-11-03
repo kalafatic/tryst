@@ -68,3 +68,20 @@ Autonomous AI agents are strictly forbidden from committing directly to Git bran
   2. The working tree unified diff must be generated and its SHA-256 fingerprint computed.
   3. The computed fingerprint must match `review.getApprovedFingerprint()`.
 - If any file in the working tree is modified after approval, the fingerprint check fails, blocking the commit and protecting against time-of-check/time-of-use (TOCTOU) bypasses.
+
+---
+
+## 6. GitHub Credentials and Remote VCS Security
+
+1. **Token Protection at Rest:**
+   - GitHub Personal Access Tokens and OAuth tokens are NEVER stored in plaintext in memory or in the database.
+   - Tokens are encrypted at rest using server-side AES-256-GCM (`DefaultGitHubCredentialEncryptionService`) with 100,000-iteration PBKDF2 key derivation.
+2. **Token Masking:**
+   - Tokens are NEVER rendered in plaintext in web responses, API payloads, Eclipse RCP views, process execution logs, or diagnostic dumps.
+   - Masking ensures only prefixes and non-sensitive trailing characters are shown (e.g., `ghp_****a1b2`).
+3. **Least-Privilege and Push Authorization:**
+   - Remote pushes to GitHub branches require explicit human authorization via `GitHubService.pushAuthorized`.
+   - Pushes are strictly blocked unless an associated `CodeReview` is in `APPROVED` status with matching cryptographic content fingerprint.
+   - Remote change conflicts are proactively checked prior to pushing (`hasRemoteConflicts`).
+4. **Execution Boundaries:**
+   - Background Git processes run non-interactively with `GIT_TERMINAL_PROMPT=0` and `GIT_ASKPASS=echo` to prevent malicious or accidental credential prompting and worker thread starvation.
