@@ -370,6 +370,9 @@ public class ApplicationLifecycleCoordinator {
         this.processExecutionManager = new eu.kalafatic.tryst.domain.service.ProcessExecutionManager();
         this.notificationService = new eu.kalafatic.tryst.domain.service.NotificationService(this.notificationRepository, this.eventBus);
         this.logDiagnosticService = new eu.kalafatic.tryst.domain.service.LogDiagnosticService();
+        if (this.taskOrchestrator != null) {
+            this.taskOrchestrator.setNotificationService(this.notificationService);
+        }
 
         // 7. Initialize and start TCP and HTTP communication services
         try {

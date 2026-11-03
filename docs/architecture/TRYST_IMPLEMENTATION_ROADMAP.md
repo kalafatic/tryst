@@ -56,8 +56,18 @@ The audit of the codebase and implementation progress tracks the following compo
        - Timeouts, streaming diagnostics, cancellation, retries, and AiFailureClassification
        - Mock and live Ollama automated test suites
 
+  P06: Interactive Web Code Review & Autonomous AI Rework Workflow
+       - Multi-revision tracking and immutable ReviewRevision snapshots
+       - Anchored ReviewComments with stable line/block/file context and resolution states
+       - Web diff line selection and inline/global feedback composer with code context
+       - Context-aware on-demand AI code change explanations
+       - Scope-constrained iterative AI rework loop preserving public APIs and history
+       - Cross-revision delta comparisons (arbitrary revision vs base revision)
+       - In-app notification delivery on rework completion
+       - Synchronized Workspace lifecycle (WAITING_FOR_REVIEW -> REWORKING -> WAITING_FOR_REVIEW)
+
 [PENDING / SUBSEQUENT PHASES]
-  P06: Structured JSON Tool Invocation Schema
+  P07: Structured JSON Tool Invocation Schema
        - Formal JSON schema tool calling for Ollama inference
        - Tool validation and hallucination resilience
 
@@ -178,10 +188,24 @@ The audit of the codebase and implementation progress tracks the following compo
 
 ---
 
-## 7. Recommended Next Implementation Step
+## 7. Completed Iterative Review and AI Rework Workflow Deliverables (P06 / Current Protocol)
 
-- **Target:** Structured JSON Tool Invocation Schema & Autonomous Self-Healing Tool Execution (Phase 7 / P07).
-- **Prerequisites:**
-  1. Interactive Web-Based Code Review Subsystem operational (Phase 6 completed).
-  2. Multi-revision tracking and rework prompt injection functional.
-  3. Stable review comments schema and REST APIs verified.
+- **Completed Requirements:**
+  - Full feedback loop inside the web diff interface: line range selection (e.g. 120–135), code context anchoring, and inline/global instruction composition.
+  - Multi-comment persistence per file and review with resolution/reopening toggles and rework inclusion flags (`includeInRework`).
+  - Scoped prompt formatting in `TaskWorker` passing active review comments, line ranges, and strict scope constraints (avoid duplicate DB queries, preserve existing public APIs, keep unrelated code untouched).
+  - Traceable revision history: every rework cycle increments revision count and creates a new immutable `ReviewRevision` without overwriting history.
+  - Dynamic revision comparison: `/api/reviews/{id}/diff` supports comparing any target revision against any base revision via `revision` and `baseRevision` query parameters.
+  - User notifications: `NotificationService` automatically notifies the project owner when rework completes and a new revision is published.
+  - Workspace lifecycle synchronization: `Workspace` transitions through `WAITING_FOR_REVIEW -> REWORKING -> WAITING_FOR_REVIEW` with persistent state preservation.
+- **Modified Modules:**
+  - `eu.kalafatic.tryst.domain`: `TaskWorker`, `TaskOrchestrator`.
+  - `eu.kalafatic.tryst.infrastructure`: `TrystHttpServer`.
+  - `eu.kalafatic.tryst.application`: `ApplicationLifecycleCoordinator`.
+  - `eu.kalafatic.tryst.tests`: Added `IterativeReviewAndReworkWorkflowTest`.
+- **New Interfaces and Dependencies:**
+  - Integrated `NotificationService` into `TaskOrchestrator` and `TaskWorker`.
+- **Known Deviations:**
+  - None. All architectural constraints, PDE configurations, and SQLite schema migrations are preserved.
+- **Recommended Next Implementation Step:**
+  - Structured JSON Tool Invocation Schema & Autonomous Self-Healing Tool Execution (P07).

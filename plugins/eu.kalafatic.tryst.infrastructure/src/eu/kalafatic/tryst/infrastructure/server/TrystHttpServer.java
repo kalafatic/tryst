@@ -828,27 +828,33 @@ public class TrystHttpServer implements TrystHttpService {
                         Map<String, String> queryParams = parseQueryParams(query);
                         String requestedFile = queryParams.get("file");
                         String requestedRevStr = queryParams.get("revision");
+                        String baseRevStr = queryParams.get("baseRevision");
                         String viewMode = queryParams.getOrDefault("view", "unified");
 
                         String currentDiff = review.getEffectiveDiff() != null ? review.getEffectiveDiff() : review.getInitialDiff();
                         String previousDiff = null;
 
+                        int targetRevNum = review.getRevisionCount();
                         if (requestedRevStr != null) {
                             try {
-                                int revNum = Integer.parseInt(requestedRevStr);
-                                Optional<eu.kalafatic.tryst.domain.review.ReviewRevision> targetRev = codeReviewRepository.findRevisionByNumber(review.getId(), revNum);
+                                targetRevNum = Integer.parseInt(requestedRevStr);
+                                Optional<eu.kalafatic.tryst.domain.review.ReviewRevision> targetRev = codeReviewRepository.findRevisionByNumber(review.getId(), targetRevNum);
                                 if (targetRev.isPresent()) {
                                     currentDiff = targetRev.get().getDiff();
                                 }
-                                if (revNum > 1) {
-                                    Optional<eu.kalafatic.tryst.domain.review.ReviewRevision> prevRev = codeReviewRepository.findRevisionByNumber(review.getId(), revNum - 1);
-                                    if (prevRev.isPresent()) {
-                                        previousDiff = prevRev.get().getDiff();
-                                    }
+                            } catch (Exception ignored) {}
+                        }
+
+                        if (baseRevStr != null) {
+                            try {
+                                int baseRevNum = Integer.parseInt(baseRevStr);
+                                Optional<eu.kalafatic.tryst.domain.review.ReviewRevision> baseRev = codeReviewRepository.findRevisionByNumber(review.getId(), baseRevNum);
+                                if (baseRev.isPresent()) {
+                                    previousDiff = baseRev.get().getDiff();
                                 }
                             } catch (Exception ignored) {}
-                        } else if (review.getRevisionCount() > 1) {
-                            Optional<eu.kalafatic.tryst.domain.review.ReviewRevision> prevRev = codeReviewRepository.findRevisionByNumber(review.getId(), review.getRevisionCount() - 1);
+                        } else if (targetRevNum > 1) {
+                            Optional<eu.kalafatic.tryst.domain.review.ReviewRevision> prevRev = codeReviewRepository.findRevisionByNumber(review.getId(), targetRevNum - 1);
                             if (prevRev.isPresent()) {
                                 previousDiff = prevRev.get().getDiff();
                             }
@@ -1872,16 +1878,24 @@ public class TrystHttpServer implements TrystHttpService {
                         .badge-success { background: rgba(34, 197, 94, 0.2); color: var(--green); border: 1px solid var(--green); }
                         .badge-warning { background: rgba(234, 179, 8, 0.2); color: var(--yellow); border: 1px solid var(--yellow); }
                         .badge-error { background: rgba(239, 68, 68, 0.2); color: var(--red); border: 1px solid var(--red); }
+                        .badge-info { background: rgba(56, 189, 248, 0.2); color: var(--primary); border: 1px solid var(--primary); }
                         .btn { padding: 8px 16px; border-radius: 6px; font-weight: 600; cursor: pointer; border: none; font-size: 13px; }
                         .btn-primary { background: #0284c7; color: white; }
                         .btn-success { background: #16a34a; color: white; }
                         .btn-danger { background: #dc2626; color: white; }
+                        .btn-warning { background: #d97706; color: white; }
+                        .btn-sm { padding: 4px 8px; font-size: 11px; border-radius: 4px; }
                         .btn:hover { opacity: 0.9; }
-                        pre.diff-view { background: #0b1120; border: 1px solid var(--border); border-radius: 6px; padding: 12px; font-family: monospace; font-size: 13px; overflow-x: auto; line-height: 1.5; }
-                        .diff-add { color: #4ade80; background: rgba(34, 197, 94, 0.15); display: block; }
-                        .diff-del { color: #f87171; background: rgba(239, 68, 68, 0.15); display: block; }
-                        .diff-hdr { color: #94a3b8; font-weight: bold; display: block; }
-                        textarea.code-editor { width: 100%; height: 200px; background: #090d16; border: 1px solid var(--border); color: #e2e8f0; font-family: monospace; font-size: 13px; padding: 12px; border-radius: 6px; resize: vertical; }
+                        pre.diff-view { background: #0b1120; border: 1px solid var(--border); border-radius: 6px; padding: 12px; font-family: monospace; font-size: 13px; overflow-x: auto; line-height: 1.5; margin: 0; }
+                        .diff-line { display: flex; cursor: pointer; user-select: none; }
+                        .diff-line:hover { background: rgba(56, 189, 248, 0.15); }
+                        .diff-line.selected { background: rgba(234, 179, 8, 0.25) !important; border-left: 3px solid var(--yellow); }
+                        .diff-line-num { width: 50px; text-align: right; padding-right: 12px; color: var(--muted); border-right: 1px solid var(--border); user-select: none; font-size: 12px; }
+                        .diff-line-code { padding-left: 12px; flex: 1; white-space: pre-wrap; font-family: monospace; }
+                        .diff-add { color: #4ade80; background: rgba(34, 197, 94, 0.12); }
+                        .diff-del { color: #f87171; background: rgba(239, 68, 68, 0.12); }
+                        .diff-hdr { color: #94a3b8; font-weight: bold; background: #131d2e; }
+                        textarea.code-editor { width: 100%; height: 140px; background: #090d16; border: 1px solid var(--border); color: #e2e8f0; font-family: monospace; font-size: 13px; padding: 12px; border-radius: 6px; resize: vertical; }
                         table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
                         th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); }
                         th { color: var(--muted); }
@@ -1889,6 +1903,9 @@ public class TrystHttpServer implements TrystHttpService {
                         .stat-card { background: #182234; border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
                         .stat-val { font-size: 24px; font-weight: bold; color: var(--primary); margin-top: 4px; }
                         .flex-row { display: flex; gap: 12px; align-items: center; }
+                        .comment-box { background: #131d2e; border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-top: 8px; }
+                        .comment-box.resolved { opacity: 0.6; border-color: var(--green); }
+                        select.input-ctrl, input.input-ctrl { background: #0b1120; border: 1px solid var(--border); color: #fff; padding: 6px 10px; border-radius: 4px; }
                     </style>
                 </head>
                 <body>
@@ -1926,19 +1943,79 @@ public class TrystHttpServer implements TrystHttpService {
                                         </div>
                                         <div class="flex-row">
                                             <button id="btnBuildTest" class="btn btn-primary" onclick="reRunBuildTest()">Re-run Tests</button>
+                                            <button id="btnRework" class="btn btn-warning" onclick="requestRework()">Request AI Rework</button>
                                             <button id="btnApprove" class="btn btn-success" onclick="approveReview()">Approve Review</button>
                                             <button id="btnReject" class="btn btn-danger" onclick="rejectReview()">Reject</button>
                                             <button id="btnCommit" class="btn btn-success" style="display: none;" onclick="commitReview()">Commit Approved Changes</button>
                                             <button id="btnPush" class="btn btn-primary" style="display: none;" onclick="pushReview()">Push to GitHub</button>
                                         </div>
                                     </div>
+                                    <!-- Revision Comparison Selector -->
+                                    <div class="flex-row" style="margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 13px;">
+                                        <label><b>Revision:</b></label>
+                                        <select id="selRevision" class="input-ctrl" onchange="onRevisionChanged()"></select>
+                                        <label style="margin-left: 12px;"><b>Compare With Base:</b></label>
+                                        <select id="selBaseRevision" class="input-ctrl" onchange="onRevisionChanged()">
+                                            <option value="">Previous Revision</option>
+                                        </select>
+                                        <button class="btn btn-sm btn-primary" onclick="loadReviewDiff()">Refresh Diff</button>
+                                        <span id="diffStatsBadge" style="margin-left: auto;" class="badge badge-info">Files: 0 | +0 -0</span>
+                                    </div>
                                 </div>
-                                <div class="card">
-                                    <div class="section-title">Diff View</div>
-                                    <pre id="diffViewer" class="diff-view"></pre>
+
+                                <!-- AI Explanation Drawer / Card -->
+                                <div class="card" id="aiExplanationCard" style="display: none;">
+                                    <div class="section-title">AI Change Explanation & Architectural Reasoning</div>
+                                    <div id="aiExplanationText" style="font-size: 13px; line-height: 1.5; color: #cbd5e1; white-space: pre-wrap;"></div>
                                 </div>
+
+                                <!-- Interactive Diff Viewer -->
                                 <div class="card">
-                                    <div class="section-title">Edit Proposed Changes</div>
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                        <div class="section-title" style="margin: 0;">Interactive Code Diff (Click or select lines to comment or ask AI)</div>
+                                        <div class="flex-row">
+                                            <button class="btn btn-sm btn-primary" onclick="openCommentModal(null, null, null)">+ Add Global Comment</button>
+                                        </div>
+                                    </div>
+                                    <div id="diffContainer" style="max-height: 480px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px;">
+                                        <pre id="diffViewer" class="diff-view"></pre>
+                                    </div>
+                                </div>
+
+                                <!-- Inline Feedback & Commenting Modal/Drawer -->
+                                <div class="card" id="commentComposerCard">
+                                    <div class="section-title">Feedback & Rework Instructions Composer</div>
+                                    <div id="selectedCodeSnippetContainer" style="display: none; margin-bottom: 10px;">
+                                        <label style="font-size: 12px; color: var(--muted);">Selected Code Context:</label>
+                                        <pre id="selectedCodeSnippet" style="background: #090d16; border: 1px solid var(--border); padding: 8px; font-size: 12px; border-radius: 4px; margin-top: 4px; max-height: 120px; overflow-y: auto;"></pre>
+                                    </div>
+                                    <div class="flex-row" style="margin-bottom: 8px; flex-wrap: wrap;">
+                                        <input id="commentFilePath" class="input-ctrl" type="text" placeholder="File path (optional for global instructions)..." style="flex: 2; min-width: 200px;" />
+                                        <input id="commentStartLine" class="input-ctrl" type="number" placeholder="Start line" style="width: 90px;" />
+                                        <input id="commentEndLine" class="input-ctrl" type="number" placeholder="End line" style="width: 90px;" />
+                                        <select id="commentDiffSide" class="input-ctrl" style="width: 100px;">
+                                            <option value="RIGHT">RIGHT</option>
+                                            <option value="LEFT">LEFT</option>
+                                        </select>
+                                        <label style="font-size: 12px; display: flex; align-items: center; gap: 4px; cursor: pointer;">
+                                            <input id="commentIncludeInRework" type="checkbox" checked /> Include in AI Rework
+                                        </label>
+                                    </div>
+                                    <textarea id="commentContent" class="code-editor" placeholder="Write feedback instructions for the AI agent (e.g. 'Refactor this method. Avoid duplicated database queries and preserve the existing public API')..."></textarea>
+                                    <div class="flex-row" style="margin-top: 8px; justify-content: flex-end;">
+                                        <button class="btn btn-primary" onclick="askAiToExplainSnippet()">Ask AI to Explain Snippet</button>
+                                        <button class="btn btn-success" onclick="postReviewComment()">Save Instruction</button>
+                                    </div>
+                                </div>
+
+                                <!-- Persistent Review Comments List -->
+                                <div class="card">
+                                    <div class="section-title">Review Comments & Rework Tasks (<span id="commentCount">0</span>)</div>
+                                    <div id="commentsList">No comments posted yet.</div>
+                                </div>
+
+                                <div class="card">
+                                    <div class="section-title">Manual Edit Proposed Changes (Alternative)</div>
                                     <input id="editFilePath" type="text" placeholder="Relative file path..." style="width: 100%; padding: 8px; background: #0b1120; border: 1px solid var(--border); color: #fff; margin-bottom: 8px; border-radius: 4px;" />
                                     <textarea id="fileEditor" class="code-editor" placeholder="Adjust proposed content..."></textarea>
                                     <div style="margin-top: 8px; text-align: right;">
@@ -2207,24 +2284,294 @@ public class TrystHttpServer implements TrystHttpService {
                             const btnPush = document.getElementById('btnPush');
                             btnPush.style.display = (r.status === 'APPROVED' && r.commitHash) ? 'inline-block' : 'none';
 
-                            renderDiff(r.effectiveDiff || r.initialDiff || '');
-                            loadReviews();
+                            await loadReviewDetails();
+                            await loadReviewDiff();
                         }
 
-                        function renderDiff(diffText) {
+                        async function loadReviewDetails() {
+                            if (!activeReview) return;
+                            try {
+                                const res = await fetch(apiUrl(`/api/reviews/${activeReview.id}/details`));
+                                activeDetails = await res.json();
+
+                                if (activeDetails.aiExplanation && activeDetails.aiExplanation.trim()) {
+                                    document.getElementById('aiExplanationCard').style.display = 'block';
+                                    document.getElementById('aiExplanationText').textContent = activeDetails.aiExplanation;
+                                } else {
+                                    document.getElementById('aiExplanationCard').style.display = 'none';
+                                }
+
+                                populateRevisionSelectors(activeDetails.revisions, activeDetails.revisionCount);
+                                renderCommentsList(activeDetails.comments);
+                            } catch(e) {
+                                console.error('Failed to load review details', e);
+                            }
+                        }
+
+                        function populateRevisionSelectors(revisions, count) {
+                            const selRev = document.getElementById('selRevision');
+                            const selBase = document.getElementById('selBaseRevision');
+                            selRev.innerHTML = '';
+                            selBase.innerHTML = '<option value="">Previous Revision</option>';
+
+                            const revs = revisions || [];
+                            for (let i = 1; i <= count; i++) {
+                                const opt = document.createElement('option');
+                                opt.value = i;
+                                opt.textContent = `Revision ${i}` + (i === count ? ' (Latest)' : '');
+                                if (i === count) opt.selected = true;
+                                selRev.appendChild(opt);
+
+                                const optBase = document.createElement('option');
+                                optBase.value = i;
+                                optBase.textContent = `Revision ${i}`;
+                                selBase.appendChild(optBase);
+                            }
+                        }
+
+                        function onRevisionChanged() {
+                            loadReviewDiff();
+                        }
+
+                        async function loadReviewDiff() {
+                            if (!activeReview) return;
+                            const rev = document.getElementById('selRevision').value;
+                            const base = document.getElementById('selBaseRevision').value;
+                            let url = `/api/reviews/${activeReview.id}/diff?view=unified`;
+                            if (rev) url += `&revision=${rev}`;
+                            if (base) url += `&baseRevision=${base}`;
+
+                            try {
+                                const res = await fetch(apiUrl(url));
+                                const diffData = await res.json();
+                                renderInteractiveDiff(diffData);
+                            } catch(e) {
+                                console.error('Failed to load diff', e);
+                            }
+                        }
+
+                        function renderInteractiveDiff(diffData) {
                             const viewer = document.getElementById('diffViewer');
-                            if (!diffText.trim()) {
-                                viewer.innerHTML = '<span style="color: var(--muted);">No modified lines</span>';
+                            viewer.innerHTML = '';
+                            selectedLines = [];
+
+                            if (!diffData.files || diffData.files.length === 0) {
+                                viewer.innerHTML = '<div style="color:var(--muted); padding:12px;">No modifications found between chosen revisions.</div>';
                                 return;
                             }
-                            const lines = diffText.split('\\n');
-                            viewer.innerHTML = lines.map(line => {
-                                const esc = escapeHtml(line);
-                                if (line.startsWith('+') && !line.startsWith('+++')) return `<span class="diff-add">${esc}</span>`;
-                                if (line.startsWith('-') && !line.startsWith('---')) return `<span class="diff-del">${esc}</span>`;
-                                if (line.startsWith('@@') || line.startsWith('diff --git')) return `<span class="diff-hdr">${esc}</span>`;
-                                return esc;
-                            }).join('\\n');
+
+                            let totAdd = 0, totDel = 0;
+                            diffData.files.forEach(f => {
+                                totAdd += f.additions;
+                                totDel += f.deletions;
+                            });
+                            document.getElementById('diffStatsBadge').textContent = `Files: ${diffData.files.length} | +${totAdd} -${totDel}`;
+
+                            diffData.files.forEach(f => {
+                                const fHdr = document.createElement('div');
+                                fHdr.className = 'diff-line diff-hdr';
+                                fHdr.innerHTML = `<span class="diff-line-code" style="font-weight:bold; color:var(--primary); padding:6px 12px;">📄 ${escapeHtml(f.newPath || f.oldPath)} (+${f.additions} -${f.deletions})</span>`;
+                                fHdr.onclick = () => openCommentModal(f.newPath || f.oldPath, null, null);
+                                viewer.appendChild(fHdr);
+
+                                f.hunks.forEach(h => {
+                                    const hHdr = document.createElement('div');
+                                    hHdr.className = 'diff-line diff-hdr';
+                                    hHdr.innerHTML = `<span class="diff-line-code" style="color:var(--muted); padding:4px 12px;">${escapeHtml(h.header)}</span>`;
+                                    viewer.appendChild(hHdr);
+
+                                    h.lines.forEach(l => {
+                                        const lineEl = document.createElement('div');
+                                        let cls = 'diff-line';
+                                        if (l.type === 'ADD') cls += ' diff-add';
+                                        else if (l.type === 'DELETE') cls += ' diff-del';
+                                        lineEl.className = cls;
+
+                                        const lineNum = l.newNum > 0 ? l.newNum : (l.oldNum > 0 ? l.oldNum : '');
+                                        const side = l.type === 'DELETE' ? 'LEFT' : 'RIGHT';
+                                        const filePath = f.newPath || f.oldPath;
+
+                                        lineEl.innerHTML = `<div class="diff-line-num">${lineNum}</div><div class="diff-line-code">${escapeHtml(l.content)}</div>`;
+                                        lineEl.onclick = (e) => onLineClicked(filePath, lineNum, side, l.content, lineEl, e.shiftKey);
+                                        viewer.appendChild(lineEl);
+                                    });
+                                });
+                            });
+                        }
+
+                        function onLineClicked(filePath, lineNum, side, code, element, isShift) {
+                            if (!lineNum) return;
+                            if (!isShift) {
+                                document.querySelectorAll('.diff-line.selected').forEach(el => el.classList.remove('selected'));
+                                selectedLines = [{ file: filePath, line: parseInt(lineNum), side, code }];
+                                element.classList.add('selected');
+                            } else {
+                                selectedLines.push({ file: filePath, line: parseInt(lineNum), side, code });
+                                element.classList.add('selected');
+                            }
+                            selectedLines.sort((a,b) => a.line - b.line);
+
+                            const minLine = selectedLines[0].line;
+                            const maxLine = selectedLines[selectedLines.length - 1].line;
+                            const combinedCode = selectedLines.map(s => s.code).join('\\n');
+
+                            openCommentModal(filePath, minLine, maxLine, side, combinedCode);
+                        }
+
+                        function openCommentModal(filePath, startLine, endLine, side, codeContext) {
+                            document.getElementById('commentFilePath').value = filePath || '';
+                            document.getElementById('commentStartLine').value = startLine || '';
+                            document.getElementById('commentEndLine').value = endLine || startLine || '';
+                            if (side) document.getElementById('commentDiffSide').value = side;
+
+                            const snippetBox = document.getElementById('selectedCodeSnippetContainer');
+                            if (codeContext) {
+                                snippetBox.style.display = 'block';
+                                document.getElementById('selectedCodeSnippet').textContent = codeContext;
+                            } else {
+                                snippetBox.style.display = 'none';
+                                document.getElementById('selectedCodeSnippet').textContent = '';
+                            }
+                            document.getElementById('commentContent').focus();
+                        }
+
+                        async function postReviewComment() {
+                            if (!activeReview) return;
+                            const filePath = document.getElementById('commentFilePath').value;
+                            const startLine = document.getElementById('commentStartLine').value;
+                            const endLine = document.getElementById('commentEndLine').value;
+                            const diffSide = document.getElementById('commentDiffSide').value;
+                            const includeInRework = document.getElementById('commentIncludeInRework').checked;
+                            const content = document.getElementById('commentContent').value;
+                            const codeContext = document.getElementById('selectedCodeSnippet').textContent;
+                            const rev = document.getElementById('selRevision').value || activeReview.revisionCount;
+
+                            if (!content.trim()) {
+                                alert('Please enter comment instructions.');
+                                return;
+                            }
+
+                            const payload = {
+                                filePath: filePath || '',
+                                revisionNumber: parseInt(rev) || 1,
+                                startLine: startLine ? parseInt(startLine) : 1,
+                                endLine: endLine ? parseInt(endLine) : (startLine ? parseInt(startLine) : 1),
+                                diffSide: diffSide || 'RIGHT',
+                                commentType: (startLine ? 'LINE' : (filePath ? 'FILE' : 'GENERAL')),
+                                content: content.trim(),
+                                codeContext: codeContext || '',
+                                includeInRework: includeInRework
+                            };
+
+                            const res = await fetch(apiUrl(`/api/reviews/${activeReview.id}/comments`), {
+                                method: 'POST',
+                                headers: getAuthHeaders(),
+                                body: JSON.stringify(payload)
+                            });
+
+                            if (res.status === 201) {
+                                document.getElementById('commentContent').value = '';
+                                await loadReviewDetails();
+                                alert('Review comment instruction saved.');
+                            } else {
+                                const err = await res.json();
+                                alert('Failed to save comment: ' + (err.error || 'Unknown error'));
+                            }
+                        }
+
+                        function renderCommentsList(comments) {
+                            const container = document.getElementById('commentsList');
+                            const list = comments || [];
+                            document.getElementById('commentCount').textContent = list.length;
+
+                            if (list.length === 0) {
+                                container.innerHTML = '<span style="color:var(--muted); font-size:13px;">No feedback comments recorded yet.</span>';
+                                return;
+                            }
+
+                            container.innerHTML = list.map(c => {
+                                const badgeClass = c.resolved ? 'badge-success' : 'badge-warning';
+                                const reworkBadge = c.includeInRework ? '<span class="badge badge-info" style="margin-left:6px;">In Rework</span>' : '';
+                                return `
+                                    <div class="comment-box ${c.resolved ? 'resolved' : ''}">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                                            <div>
+                                                <strong>${escapeHtml(c.filePath || 'Global Instruction')}</strong>
+                                                ${c.commentType === 'LINE' ? `<small style="color:var(--muted);"> [Lines ${c.startLine}–${c.endLine} (${c.diffSide})]</small>` : ''}
+                                                <span class="badge ${badgeClass}" style="margin-left: 6px;">${c.resolved ? 'Resolved' : 'Active'}</span>
+                                                ${reworkBadge}
+                                            </div>
+                                            <div class="flex-row">
+                                                <button class="btn btn-sm ${c.resolved ? 'btn-primary' : 'btn-success'}" onclick="toggleCommentResolve('${c.id}', ${!c.resolved})">
+                                                    ${c.resolved ? 'Reopen' : 'Resolve'}
+                                                </button>
+                                                <button class="btn btn-sm btn-danger" onclick="deleteComment('${c.id}')">Delete</button>
+                                            </div>
+                                        </div>
+                                        ${c.codeContext ? `<pre style="background:#090d16; border:1px solid var(--border); padding:6px; font-size:11px; border-radius:4px; margin:4px 0;">${escapeHtml(c.codeContext)}</pre>` : ''}
+                                        <div style="font-size: 13px; color: #f1f5f9; margin-top: 6px; white-space: pre-wrap;">${escapeHtml(c.content)}</div>
+                                        <div style="font-size: 11px; color: var(--muted); margin-top: 4px;">Rev: ${c.revisionNumber} | Author: ${escapeHtml(c.authorId)} | ${c.createdAt}</div>
+                                    </div>
+                                `;
+                            }).join('');
+                        }
+
+                        async function toggleCommentResolve(commentId, resolved) {
+                            if (!activeReview) return;
+                            await fetch(apiUrl(`/api/reviews/${activeReview.id}/comments/${commentId}`), {
+                                method: 'PATCH',
+                                headers: getAuthHeaders(),
+                                body: JSON.stringify({ resolved: resolved })
+                            });
+                            loadReviewDetails();
+                        }
+
+                        async function deleteComment(commentId) {
+                            if (!activeReview || !confirm('Delete this comment?')) return;
+                            await fetch(apiUrl(`/api/reviews/${activeReview.id}/comments/${commentId}`), {
+                                method: 'DELETE',
+                                headers: getAuthHeaders()
+                            });
+                            loadReviewDetails();
+                        }
+
+                        async function askAiToExplainSnippet() {
+                            if (!activeReview) return;
+                            const filePath = document.getElementById('commentFilePath').value;
+                            const codeSnippet = document.getElementById('selectedCodeSnippet').textContent || document.getElementById('commentContent').value;
+                            const question = document.getElementById('commentContent').value;
+
+                            const res = await fetch(apiUrl(`/api/reviews/${activeReview.id}/explain`), {
+                                method: 'POST',
+                                headers: getAuthHeaders(),
+                                body: JSON.stringify({ filePath, codeSnippet, question })
+                            });
+                            const data = await res.json();
+                            if (data.explanation) {
+                                document.getElementById('aiExplanationCard').style.display = 'block';
+                                document.getElementById('aiExplanationText').textContent = data.explanation;
+                                document.getElementById('aiExplanationCard').scrollIntoView({ behavior: 'smooth' });
+                            }
+                        }
+
+                        async function requestRework() {
+                            if (!activeReview) return;
+                            const reason = prompt('Rework instructions / overall goal summary for AI agent:', 'Refactor according to review comments');
+                            if (reason === null) return;
+
+                            const res = await fetch(apiUrl(`/api/reviews/${activeReview.id}/rework`), {
+                                method: 'POST',
+                                headers: getAuthHeaders(),
+                                body: JSON.stringify({ reason })
+                            });
+                            const data = await res.json();
+                            if (data.success) {
+                                alert('Task successfully queued for autonomous AI rework iteration!');
+                                loadReviews();
+                                selectReview(activeReview);
+                            } else {
+                                alert('Failed to request rework: ' + (data.error || 'Unknown error'));
+                            }
                         }
 
                         async function saveFileEdit() {
@@ -2343,10 +2690,17 @@ public class TrystHttpServer implements TrystHttpService {
 
     private static String extractJsonField(String json, String field) {
         if (json == null) return null;
-        String pattern = "\"" + field + "\"\\s*:\\s*\"([^\"]*)\"";
-        java.util.regex.Matcher m = java.util.regex.Pattern.compile(pattern).matcher(json);
+        // Match string: "field": "value"
+        String strPattern = "\"" + field + "\"\\s*:\\s*\"([^\"]*)\"";
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile(strPattern).matcher(json);
         if (m.find()) {
             return m.group(1).replace("\\\"", "\"").replace("\\\\", "\\");
+        }
+        // Match number, boolean or literal: "field": 123 or "field": true
+        String literalPattern = "\"" + field + "\"\\s*:\\s*([0-9a-zA-Z_\\.\\-]+)";
+        java.util.regex.Matcher m2 = java.util.regex.Pattern.compile(literalPattern).matcher(json);
+        if (m2.find()) {
+            return m2.group(1).trim();
         }
         return null;
     }
