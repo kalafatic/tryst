@@ -108,6 +108,9 @@ All domain models reside in `eu.kalafatic.tryst.domain.model` and adhere to stri
 - `Notification`: In-app alert dispatched to specific users.
 - `TelemetrySnapshot`: Machine performance metrics (CPU, RAM, Disk, Active Tasks).
 - `ManagedProcessRecord`: Tracking for background child processes (Maven, Git).
+- `GitHubCredential`: User-owned encrypted GitHub credentials at rest (id, userId, githubUsername, encryptedToken, scopes, tokenType, expiresAt).
+- `GitHubRepository`: Value record for discovered GitHub repositories (id, fullName, owner, name, isPrivate, defaultBranch, cloneUrl, htmlUrl).
+- `GitHubBranch`: Value record for discovered branches (name, commitSha, isProtected).
 
 ---
 

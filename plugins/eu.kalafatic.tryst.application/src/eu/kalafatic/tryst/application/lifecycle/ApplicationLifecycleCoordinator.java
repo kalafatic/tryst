@@ -109,6 +109,11 @@ public class ApplicationLifecycleCoordinator {
     private TrystTcpService tcpService;
     private TrystHttpService httpService;
 
+    // GitHub Integration Services & Repositories
+    private eu.kalafatic.tryst.domain.github.GitHubCredentialRepository gitHubCredentialRepository;
+    private eu.kalafatic.tryst.domain.github.GitHubCredentialEncryptionService gitHubCredentialEncryptionService;
+    private eu.kalafatic.tryst.domain.github.GitHubService gitHubService;
+
     // Phase 4 Services & Repositories
     private eu.kalafatic.tryst.domain.repository.UserRepository userRepository;
     private eu.kalafatic.tryst.domain.repository.UserSessionRepository userSessionRepository;
@@ -297,6 +302,15 @@ public class ApplicationLifecycleCoordinator {
         this.buildAndTestService = new BuildAndTestService();
         this.codeReviewService = new CodeReviewService();
 
+        // GitHub Integration
+        this.gitHubCredentialRepository = new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteGitHubCredentialRepository(databaseManager);
+        this.gitHubCredentialEncryptionService = new eu.kalafatic.tryst.infrastructure.github.DefaultGitHubCredentialEncryptionService();
+        this.gitHubService = new eu.kalafatic.tryst.infrastructure.github.DefaultGitHubService(
+                this.gitHubCredentialRepository,
+                this.gitHubCredentialEncryptionService,
+                this.gitService
+        );
+
         this.sessionTaskOrchestrator = new SessionTaskOrchestrator(
                 sessionRepository,
                 taskRepository,
@@ -339,6 +353,7 @@ public class ApplicationLifecycleCoordinator {
                 this.codeReviewService,
                 taskConcurrency
         );
+        this.taskOrchestrator.setGitHubService(this.gitHubService);
         this.taskOrchestrator.start();
 
         // Phase 4 Observability & Operational Services
@@ -390,6 +405,7 @@ public class ApplicationLifecycleCoordinator {
             );
             server.setAiModelRegistryService(this.aiModelRegistryService);
             server.setTaskOrchestrator(this.taskOrchestrator);
+            server.setGitHubService(this.gitHubService, this.gitHubCredentialRepository, this.gitHubCredentialEncryptionService);
             this.httpService = server;
             this.httpService.start();
             if (serverReadinessService != null) {
@@ -435,6 +451,9 @@ public class ApplicationLifecycleCoordinator {
             registerService(GitService.class, this.gitService);
             registerService(BuildAndTestService.class, this.buildAndTestService);
             registerService(CodeReviewService.class, this.codeReviewService);
+            registerService(eu.kalafatic.tryst.domain.github.GitHubCredentialRepository.class, this.gitHubCredentialRepository);
+            registerService(eu.kalafatic.tryst.domain.github.GitHubCredentialEncryptionService.class, this.gitHubCredentialEncryptionService);
+            registerService(eu.kalafatic.tryst.domain.github.GitHubService.class, this.gitHubService);
             registerService(SessionTaskOrchestrator.class, this.sessionTaskOrchestrator);
             registerService(AutonomousDevelopmentService.class, this.autonomousDevelopmentService);
             registerService(eu.kalafatic.tryst.domain.service.TaskLifecycleManager.class, this.taskLifecycleManager);
@@ -602,6 +621,9 @@ public class ApplicationLifecycleCoordinator {
         this.taskRecoveryService = null;
         this.taskQueue = null;
         this.serverReadinessService = null;
+        this.gitHubService = null;
+        this.gitHubCredentialRepository = null;
+        this.gitHubCredentialEncryptionService = null;
 
         TrystLog.info(ApplicationLifecycleCoordinator.class, "Service disposal complete.");
     }
@@ -713,6 +735,18 @@ public class ApplicationLifecycleCoordinator {
 
     public eu.kalafatic.tryst.domain.ai.AiModelRegistryService getAiModelRegistryService() {
         return aiModelRegistryService;
+    }
+
+    public eu.kalafatic.tryst.domain.github.GitHubService getGitHubService() {
+        return gitHubService;
+    }
+
+    public eu.kalafatic.tryst.domain.github.GitHubCredentialRepository getGitHubCredentialRepository() {
+        return gitHubCredentialRepository;
+    }
+
+    public eu.kalafatic.tryst.domain.github.GitHubCredentialEncryptionService getGitHubCredentialEncryptionService() {
+        return gitHubCredentialEncryptionService;
     }
 
     public GitService getGitService() {

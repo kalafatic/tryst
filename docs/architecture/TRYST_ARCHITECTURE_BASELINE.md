@@ -136,9 +136,9 @@ Furthermore, TRYST Core is completely decoupled from EVO, permitting future inte
 ### 4.3 `eu.kalafatic.tryst.infrastructure`
 - **Responsibility:** Technology-specific implementations of domain contracts: SQLite persistence, schema migrations, Git command execution, isolated Maven build/test runners, embedded HTTP/TCP servers, and Ollama AI inference.
 - **Public Interfaces / Types:**
-  - Persistence: `SqliteDatabaseManager`, `SchemaMigrationService`, `SqliteBackupService`, and SQLite repository implementations (`SqliteProjectRepository`, `SqliteTaskRepository`, `SqliteCodeReviewRepository`, `SqliteUserRepository`, etc.).
+  - Persistence: `SqliteDatabaseManager`, `SchemaMigrationService`, `SqliteBackupService`, and SQLite repository implementations (`SqliteProjectRepository`, `SqliteTaskRepository`, `SqliteCodeReviewRepository`, `SqliteUserRepository`, `SqliteGitHubCredentialRepository`, etc.).
   - AI: `OllamaClient`.
-  - VCS & Build: `GitService`, `BuildAndTestService`.
+  - VCS & Build: `GitService`, `BuildAndTestService`, `DefaultGitHubService`, `DefaultGitHubCredentialEncryptionService`.
   - Server: `TrystHttpServer`, `TrystHttpService`, `TrystTcpServer`, `TrystTcpService`.
 - **Dependencies:** `eu.kalafatic.tryst.core`, `eu.kalafatic.tryst.domain`, `org.sqlite.JDBC`, `slf4j.api`.
 - **Lifecycle Ownership:** HTTP and TCP servers, database connections, and background backup tasks are managed and shutdown cleanly by `ApplicationLifecycleCoordinator`.
@@ -287,6 +287,9 @@ Tasks follow an explicit lifecycle supporting asynchronous, autonomous execution
   - **V2:** Project isolation & Code Review Center (`code_reviews`, `review_file_edits`).
   - **V3:** Security & operational intelligence (`users`, `user_sessions`, `audit_events`, `telemetry_snapshots`, `notifications`, `managed_processes`).
   - **V4:** AI provider catalog and model publication (`ai_providers`, `ai_models`).
+  - **V5:** Asynchronous task execution infrastructure & event logs (`tasks` columns, `task_events`).
+  - **V6:** Production workspace and sandbox lifecycle isolation (`workspaces` columns).
+  - **V7:** Secure GitHub credentials storage encrypted at rest (`github_credentials`).
 - **Backup and Maintenance:** Hot SQLite backups via `SqliteBackupService`, automated integrity checks (`PRAGMA integrity_check`), and compaction (`VACUUM`).
 
 ---

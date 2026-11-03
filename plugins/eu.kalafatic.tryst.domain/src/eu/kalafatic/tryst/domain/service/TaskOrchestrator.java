@@ -49,6 +49,7 @@ public class TaskOrchestrator {
     private final ExecutionResultRepository executionResultRepository;
     private final CodeReviewRepository codeReviewRepository;
     private final CodeReviewService codeReviewService;
+    private eu.kalafatic.tryst.domain.github.GitHubService gitHubService;
 
     private final int concurrency;
     private final ExecutorService workerExecutor;
@@ -206,6 +207,10 @@ public class TaskOrchestrator {
         return taskQueue.getQueueDepth();
     }
 
+    public void setGitHubService(eu.kalafatic.tryst.domain.github.GitHubService gitHubService) {
+        this.gitHubService = gitHubService;
+    }
+
     public int getConcurrency() {
         return concurrency;
     }
@@ -296,7 +301,8 @@ public class TaskOrchestrator {
                 messageRepository,
                 executionResultRepository,
                 codeReviewRepository,
-                codeReviewService
+                codeReviewService,
+                gitHubService
         );
 
         Future<?> future = workerExecutor.submit(() -> {

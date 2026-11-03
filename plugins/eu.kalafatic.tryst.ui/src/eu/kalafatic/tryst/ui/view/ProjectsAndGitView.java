@@ -55,11 +55,43 @@ public class ProjectsAndGitView extends ViewPart {
             @Override public void removeListener(ILabelProviderListener listener) {}
         });
 
-        Button btnRefresh = new Button(parent, SWT.PUSH);
+        Composite buttonBar = new Composite(parent, SWT.NONE);
+        buttonBar.setLayout(new GridLayout(2, false));
+
+        Button btnRefresh = new Button(buttonBar, SWT.PUSH);
         btnRefresh.setText("Refresh Projects");
         btnRefresh.addListener(SWT.Selection, e -> refreshData());
 
+        Button btnGitHub = new Button(buttonBar, SWT.PUSH);
+        btnGitHub.setText("GitHub Account Status");
+        btnGitHub.addListener(SWT.Selection, e -> showGitHubStatus(parent.getShell()));
+
         refreshData();
+    }
+
+    private void showGitHubStatus(Shell shell) {
+        var ghService = TrystUiServices.getGitHubService();
+        if (ghService == null) {
+            MessageBox mb = new MessageBox(shell, SWT.ICON_WARNING | SWT.OK);
+            mb.setText("GitHub Integration");
+            mb.setMessage("GitHubService is not active or unavailable.");
+            mb.open();
+            return;
+        }
+
+        var optCred = ghService.getCredentialForUser("default-user");
+        MessageBox mb = new MessageBox(shell, SWT.ICON_INFORMATION | SWT.OK);
+        mb.setText("GitHub Connection Status");
+        if (optCred.isPresent()) {
+            var cred = optCred.get();
+            mb.setMessage("Connected GitHub Account: @" + cred.getGithubUsername() +
+                    "\nType: " + cred.getTokenType() +
+                    "\nScopes: " + cred.getScopes() +
+                    "\nStatus: " + (cred.isExpired() ? "EXPIRED" : "ACTIVE"));
+        } else {
+            mb.setMessage("No GitHub account connected for current user.\nConnect via Web Review Center or REST API (/api/github/connect).");
+        }
+        mb.open();
     }
 
     private void createColumn(String title, int width) {
