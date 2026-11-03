@@ -57,6 +57,45 @@ public class TaskWorker implements Callable<ExecutionResult> {
     private final CodeReviewRepository codeReviewRepository;
     private final CodeReviewService codeReviewService;
     private GitHubService gitHubService;
+    private NotificationService notificationService;
+
+    public TaskWorker(
+            TaskExecutionContext context,
+            TaskLifecycleManager lifecycleManager,
+            ToolRegistry toolRegistry,
+            PermissionManager permissionManager,
+            AIProvider aiProvider,
+            PromptContextBuilder promptContextBuilder,
+            TaskAnalyzer taskAnalyzer,
+            ImplementationPlanner implementationPlanner,
+            CodeChangeExecutor codeChangeExecutor,
+            ResultValidator resultValidator,
+            CodeAgent codeAgent,
+            ConversationMessageRepository messageRepository,
+            ExecutionResultRepository executionResultRepository,
+            CodeReviewRepository codeReviewRepository,
+            CodeReviewService codeReviewService,
+            GitHubService gitHubService,
+            NotificationService notificationService
+    ) {
+        this.context = Objects.requireNonNull(context, "context must not be null");
+        this.lifecycleManager = Objects.requireNonNull(lifecycleManager, "lifecycleManager must not be null");
+        this.toolRegistry = toolRegistry;
+        this.permissionManager = permissionManager != null ? permissionManager : new PermissionManager();
+        this.aiProvider = aiProvider;
+        this.promptContextBuilder = promptContextBuilder != null ? promptContextBuilder : new PromptContextBuilder();
+        this.taskAnalyzer = taskAnalyzer != null ? taskAnalyzer : new TaskAnalyzer(this.permissionManager);
+        this.implementationPlanner = implementationPlanner != null ? implementationPlanner : new ImplementationPlanner();
+        this.codeChangeExecutor = codeChangeExecutor != null ? codeChangeExecutor : new CodeChangeExecutor(this.toolRegistry, this.permissionManager);
+        this.resultValidator = resultValidator != null ? resultValidator : new ResultValidator(this.toolRegistry, this.permissionManager);
+        this.codeAgent = codeAgent != null ? codeAgent : new CodeAgent(this.aiProvider, this.promptContextBuilder, this.codeChangeExecutor);
+        this.messageRepository = messageRepository;
+        this.executionResultRepository = executionResultRepository;
+        this.codeReviewRepository = codeReviewRepository;
+        this.codeReviewService = codeReviewService;
+        this.gitHubService = gitHubService;
+        this.notificationService = notificationService;
+    }
 
     public TaskWorker(
             TaskExecutionContext context,
@@ -76,22 +115,10 @@ public class TaskWorker implements Callable<ExecutionResult> {
             CodeReviewService codeReviewService,
             GitHubService gitHubService
     ) {
-        this.context = Objects.requireNonNull(context, "context must not be null");
-        this.lifecycleManager = Objects.requireNonNull(lifecycleManager, "lifecycleManager must not be null");
-        this.toolRegistry = toolRegistry;
-        this.permissionManager = permissionManager != null ? permissionManager : new PermissionManager();
-        this.aiProvider = aiProvider;
-        this.promptContextBuilder = promptContextBuilder != null ? promptContextBuilder : new PromptContextBuilder();
-        this.taskAnalyzer = taskAnalyzer != null ? taskAnalyzer : new TaskAnalyzer(this.permissionManager);
-        this.implementationPlanner = implementationPlanner != null ? implementationPlanner : new ImplementationPlanner();
-        this.codeChangeExecutor = codeChangeExecutor != null ? codeChangeExecutor : new CodeChangeExecutor(this.toolRegistry, this.permissionManager);
-        this.resultValidator = resultValidator != null ? resultValidator : new ResultValidator(this.toolRegistry, this.permissionManager);
-        this.codeAgent = codeAgent != null ? codeAgent : new CodeAgent(this.aiProvider, this.promptContextBuilder, this.codeChangeExecutor);
-        this.messageRepository = messageRepository;
-        this.executionResultRepository = executionResultRepository;
-        this.codeReviewRepository = codeReviewRepository;
-        this.codeReviewService = codeReviewService;
-        this.gitHubService = gitHubService;
+        this(context, lifecycleManager, toolRegistry, permissionManager, aiProvider, promptContextBuilder,
+                taskAnalyzer, implementationPlanner, codeChangeExecutor, resultValidator, codeAgent,
+                messageRepository, executionResultRepository, codeReviewRepository, codeReviewService,
+                gitHubService, null);
     }
 
     /**
@@ -150,6 +177,10 @@ public class TaskWorker implements Callable<ExecutionResult> {
         this.gitHubService = gitHubService;
     }
 
+    public void setNotificationService(NotificationService notificationService) {
+        this.notificationService = notificationService;
+    }
+
     @Override
     public ExecutionResult call() {
         Task task = context.getTask();
@@ -158,9 +189,20 @@ public class TaskWorker implements Callable<ExecutionResult> {
         AiFailureClassification failureClass = AiFailureClassification.NONE;
 
         try {
+            Workspace ws = context.getWorkspace();
+            if (ws != null) {
+                if (task.getReworkCount() > 0 && ws.getStatus() == eu.kalafatic.tryst.domain.model.WorkspaceStatus.WAITING_FOR_REVIEW) {
+                    ws.rework();
+                } else if (ws.getStatus() == eu.kalafatic.tryst.domain.model.WorkspaceStatus.READY) {
+                    ws.activate();
+                }
+            }
+
             // Stage 1: CLONING / Workspace verification & remote GitHub clone/fetch
             checkCancelled();
-            lifecycleManager.transition(task, TaskStatus.CLONING, "Verifying project repository and workspace structure", null);
+            if (task.getStatus() == TaskStatus.QUEUED || task.getStatus() == TaskStatus.CLAIMED) {
+                lifecycleManager.transition(task, TaskStatus.CLONING, "Verifying project repository and workspace structure", null);
+            }
             logBuilder.append("[Worker ").append(context.getWorkerId()).append("] Stage: CLONING\n");
 
             performRepositoryCloningStage(task, logBuilder);
@@ -233,10 +275,10 @@ public class TaskWorker implements Callable<ExecutionResult> {
                     .append(diff.length()).append(" chars)\n");
 
             CodeReview review = null;
+            int revCount = 1;
             if (codeReviewRepository != null) {
                 String projectId = context.getProjectId() != null ? context.getProjectId() : "default-project";
                 Optional<CodeReview> existingReviewOpt = codeReviewRepository.findByTaskId(task.getId());
-                int revCount = 1;
                 String explanation = "Implemented proposed changes: " + task.getTitle() + "\n" + plan.goal();
 
                 if (existingReviewOpt.isPresent()) {
@@ -275,12 +317,31 @@ public class TaskWorker implements Callable<ExecutionResult> {
                 task.setReviewId(review.getId());
             }
 
+            if (context.getWorkspace() != null) {
+                context.getWorkspace().markWaitingForReview();
+            }
+
             lifecycleManager.transition(
                     task,
                     TaskStatus.WAITING_FOR_REVIEW,
                     "Code changes complete; awaiting user review in Code Review Center",
                     review != null ? ("Review ID: " + review.getId()) : null
             );
+
+            if (notificationService != null && context.getUserId() != null) {
+                String title = (task.getReworkCount() > 0)
+                        ? "Rework Complete (Rev " + revCount + "): " + task.getTitle()
+                        : "Review Ready: " + task.getTitle();
+                String message = "Task " + task.getId() + " has produced revision " + revCount + " ready for review.";
+                notificationService.notifyUser(
+                        context.getUserId(),
+                        "REVIEW_READY",
+                        title,
+                        message,
+                        "review",
+                        review != null ? review.getId() : task.getId()
+                );
+            }
 
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -374,16 +435,33 @@ public class TaskWorker implements Callable<ExecutionResult> {
                     .toList();
 
             if (!reworkComments.isEmpty()) {
-                promptBuilder.append("\n\n--- REVIEW REWORK INSTRUCTIONS ---\n");
-                promptBuilder.append("Address the following user review comments in this rework revision:\n");
-                for (eu.kalafatic.tryst.domain.review.ReviewComment c : reworkComments) {
-                    promptBuilder.append("- File: ").append(c.getFilePath())
-                            .append(", Lines: ").append(c.getStartLine()).append("-").append(c.getEndLine())
-                            .append(" (Side: ").append(c.getDiffSide()).append(")\n");
-                    if (!c.getCodeContext().isBlank()) {
-                        promptBuilder.append("  Code Context:\n").append("    ").append(c.getCodeContext().replace("\n", "\n    ")).append("\n");
+                promptBuilder.append("\n\n=== MANDATORY ITERATIVE REVIEW REWORK INSTRUCTIONS ===\n");
+                promptBuilder.append("This is rework iteration #").append(task.getReworkCount()).append(".\n");
+                promptBuilder.append("CRITICAL EXECUTION CONSTRAINTS:\n");
+                promptBuilder.append("1. Address every requested modification described below precisely.\n");
+                promptBuilder.append("2. Restrict modifications strictly to the relevant scope of the comments unless additional changes are strictly justified.\n");
+                promptBuilder.append("3. Preserve all existing public APIs and keep unrelated files/modifications completely intact.\n");
+                promptBuilder.append("4. Do not duplicate database queries or introduce redundant operations.\n");
+                promptBuilder.append("5. Ensure all project code compiles cleanly and automated tests continue to pass.\n\n");
+
+                promptBuilder.append("ACTIVE USER REVIEW FEEDBACK:\n");
+                for (int ci = 0; ci < reworkComments.size(); ci++) {
+                    eu.kalafatic.tryst.domain.review.ReviewComment c = reworkComments.get(ci);
+                    promptBuilder.append("[").append(ci + 1).append("] Type: ").append(c.getCommentType());
+                    if (c.getFilePath() != null && !c.getFilePath().isBlank()) {
+                        promptBuilder.append(" | File: ").append(c.getFilePath());
                     }
-                    promptBuilder.append("  Comment: ").append(c.getContent()).append("\n\n");
+                    if (c.getCommentType() == eu.kalafatic.tryst.domain.review.ReviewComment.CommentType.LINE) {
+                        promptBuilder.append(" | Lines: ").append(c.getStartLine()).append("–").append(c.getEndLine())
+                                .append(" (Side: ").append(c.getDiffSide()).append(")");
+                    }
+                    promptBuilder.append("\n");
+                    if (!c.getCodeContext().isBlank()) {
+                        promptBuilder.append("   Selected Code Context:\n   ```\n   ")
+                                .append(c.getCodeContext().replace("\n", "\n   "))
+                                .append("\n   ```\n");
+                    }
+                    promptBuilder.append("   User Instructions: ").append(c.getContent()).append("\n\n");
                 }
             }
         }
