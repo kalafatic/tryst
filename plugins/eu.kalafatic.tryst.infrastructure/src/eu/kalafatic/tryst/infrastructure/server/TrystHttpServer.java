@@ -67,6 +67,7 @@ public class TrystHttpServer implements TrystHttpService {
     private SqliteBackupService backupService;
     private AgentRepository agentRepository;
     private eu.kalafatic.tryst.domain.ai.AiModelRegistryService aiModelRegistryService;
+    private TaskOrchestrator taskOrchestrator;
 
     private HttpServer server;
     private ExecutorService httpExecutor;
@@ -140,6 +141,10 @@ public class TrystHttpServer implements TrystHttpService {
 
     public void setAiModelRegistryService(eu.kalafatic.tryst.domain.ai.AiModelRegistryService aiModelRegistryService) {
         this.aiModelRegistryService = aiModelRegistryService;
+    }
+
+    public void setTaskOrchestrator(TaskOrchestrator taskOrchestrator) {
+        this.taskOrchestrator = taskOrchestrator;
     }
 
     @Override
@@ -636,6 +641,47 @@ public class TrystHttpServer implements TrystHttpService {
             }
             Optional<SecurityContext> ctx = resolveSecurityContext(exchange);
 
+            String path = exchange.getRequestURI().getPath();
+
+            // Task cancellation: POST /api/tasks/{id}/cancel
+            if (path.contains("/cancel") && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                String sub = path.substring(path.indexOf("/api/tasks/") + "/api/tasks/".length());
+                String taskId = sub.substring(0, sub.indexOf("/cancel"));
+                boolean cancelled = false;
+                if (taskOrchestrator != null) {
+                    cancelled = taskOrchestrator.cancelTask(taskId, "User request via HTTP API");
+                } else if (taskRepository != null) {
+                    cancelled = taskRepository.findTaskById(taskId).map(t -> {
+                        t.transitionTo(TaskStatus.CANCELLED);
+                        taskRepository.saveTask(t);
+                        return true;
+                    }).orElse(false);
+                }
+                if (cancelled) {
+                    sendJsonResponse(exchange, 200, "{\"success\": true, \"taskId\": \"" + escapeJson(taskId) + "\"}");
+                } else {
+                    sendJsonResponse(exchange, 400, "{\"success\": false, \"error\": \"Task could not be cancelled or not found\"}");
+                }
+                return;
+            }
+
+            // Task events: GET /api/tasks/{id}/events
+            if (path.contains("/events") && "GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                String sub = path.substring(path.indexOf("/api/tasks/") + "/api/tasks/".length());
+                String taskId = sub.substring(0, sub.indexOf("/events"));
+                List<TaskEvent> events = (taskRepository != null) ? taskRepository.findEventsByTaskId(taskId) : List.of();
+                StringBuilder sb = new StringBuilder("{\"events\": [");
+                for (int i = 0; i < events.size(); i++) {
+                    TaskEvent ev = events.get(i);
+                    if (i > 0) sb.append(",");
+                    sb.append(String.format("{\"id\": \"%s\", \"taskId\": \"%s\", \"timestamp\": \"%s\", \"status\": \"%s\", \"message\": \"%s\", \"details\": \"%s\"}",
+                            ev.getId(), ev.getTaskId(), ev.getTimestamp(), ev.getStatus().name(), escapeJson(ev.getMessage()), escapeJson(ev.getDetails() != null ? ev.getDetails() : "")));
+                }
+                sb.append("]}");
+                sendJsonResponse(exchange, 200, sb.toString());
+                return;
+            }
+
             if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
                 if (ctx.isPresent() && !ctx.get().user().hasPermission(Permission.EXECUTE_TASKS)) {
                     sendJsonResponse(exchange, 403, "{\"error\": \"Permission EXECUTE_TASKS required\"}");
@@ -645,24 +691,46 @@ public class TrystHttpServer implements TrystHttpService {
                 String title = extractJsonField(body, "title");
                 String description = extractJsonField(body, "description");
                 String projectId = extractJsonField(body, "projectId");
+                String priorityStr = extractJsonField(body, "priority");
+                TaskPriority priority = TaskPriority.NORMAL;
+                if (priorityStr != null) {
+                    try { priority = TaskPriority.valueOf(priorityStr.toUpperCase()); } catch (Exception ignored) {}
+                }
+
                 if (title == null || title.isBlank()) {
                     sendJsonResponse(exchange, 400, "{\"error\": \"Missing required field 'title'\"}");
                     return;
                 }
-                AgentTask t = workspaceService.createTask(projectId, title, description);
+
+                String taskId;
+                String statusName;
+                if (taskOrchestrator != null) {
+                    String userId = ctx.map(SecurityContext::getUserId).orElseGet(() -> getUserId(exchange));
+                    Task task = taskOrchestrator.submitTask(projectId, null, title, description, priority, userId, null);
+                    taskId = task.getId();
+                    statusName = task.getStatus().name();
+                } else if (workspaceService != null) {
+                    AgentTask t = workspaceService.createTask(projectId, title, description);
+                    taskId = t.getId();
+                    statusName = t.getTaskStatus().name();
+                } else {
+                    sendJsonResponse(exchange, 503, "{\"error\": \"Task execution service unavailable\"}");
+                    return;
+                }
+
                 String json = String.format("{\"id\": \"%s\", \"projectId\": \"%s\", \"title\": \"%s\", \"status\": \"%s\"}",
-                        escapeJson(t.getId()), escapeJson(t.getProjectId() != null ? t.getProjectId() : ""),
-                        escapeJson(t.getTitle()), t.getTaskStatus().name());
+                        escapeJson(taskId), escapeJson(projectId != null ? projectId : ""),
+                        escapeJson(title), statusName);
                 sendJsonResponse(exchange, 201, json);
                 return;
             }
 
             // GET
-            List<AgentTask> tasks;
+            List<Task> tasks;
             if (taskRepository != null) {
-                tasks = taskRepository.findAll();
+                tasks = taskRepository.findAllTasks();
             } else if (workspaceService != null && workspaceService.getCurrentWorkspace() != null) {
-                tasks = workspaceService.getCurrentWorkspace().getTasks();
+                tasks = workspaceService.getCurrentWorkspace().getTasks().stream().map(Task::fromAgentTask).toList();
             } else {
                 tasks = List.of();
             }
@@ -670,11 +738,14 @@ public class TrystHttpServer implements TrystHttpService {
             StringBuilder sb = new StringBuilder();
             sb.append("{\"tasks\": [");
             for (int i = 0; i < tasks.size(); i++) {
-                AgentTask t = tasks.get(i);
+                Task t = tasks.get(i);
                 if (i > 0) sb.append(",");
-                sb.append(String.format("{\"id\": \"%s\", \"projectId\": \"%s\", \"title\": \"%s\", \"status\": \"%s\", \"reviewId\": \"%s\"}",
+                sb.append(String.format("{\"id\": \"%s\", \"projectId\": \"%s\", \"title\": \"%s\", \"status\": \"%s\", \"reviewId\": \"%s\", \"workerId\": \"%s\", \"priority\": \"%s\"}",
                         escapeJson(t.getId()), escapeJson(t.getProjectId() != null ? t.getProjectId() : ""),
-                        escapeJson(t.getTitle()), t.getTaskStatus().name(), escapeJson(t.getReviewId() != null ? t.getReviewId() : "")));
+                        escapeJson(t.getTitle()), t.getStatus().name(),
+                        escapeJson(t.getReviewId() != null ? t.getReviewId() : ""),
+                        escapeJson(t.getWorkerId() != null ? t.getWorkerId() : ""),
+                        t.getPriority().name()));
             }
             sb.append("]}");
             sendJsonResponse(exchange, 200, sb.toString());

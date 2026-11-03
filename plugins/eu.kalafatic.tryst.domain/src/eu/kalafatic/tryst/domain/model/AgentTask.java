@@ -1,6 +1,7 @@
 package eu.kalafatic.tryst.domain.model;
 
 import eu.kalafatic.tryst.core.error.TrystDomainException;
+import eu.kalafatic.tryst.domain.service.TaskStateTransitionValidator;
 
 import java.time.Instant;
 import java.util.Objects;
@@ -20,32 +21,42 @@ public class AgentTask {
     private TaskStatus status;
     private TaskPriority priority;
     private String agentId;
+    private String workerId;
     private String executionResultId;
     private String reviewId;
+    private int reworkCount;
+    private String failureReason;
     private final Instant createdAt;
     private Instant completedAt;
 
     public AgentTask(String title, String description) {
-        this(UUID.randomUUID().toString(), null, null, title, description, TaskStatus.CREATED, TaskPriority.NORMAL, null, null, null, Instant.now(), null);
+        this(UUID.randomUUID().toString(), null, null, title, description, TaskStatus.CREATED, TaskPriority.NORMAL, null, null, null, null, 0, null, Instant.now(), null);
     }
 
     public AgentTask(String id, String title, String description, ExecutionStatus status, Instant createdAt, Instant completedAt) {
-        this(id, null, null, title, description, fromExecutionStatus(status), TaskPriority.NORMAL, null, null, null, createdAt, completedAt);
+        this(id, null, null, title, description, fromExecutionStatus(status), TaskPriority.NORMAL, null, null, null, null, 0, null, createdAt, completedAt);
     }
 
     public AgentTask(String id, String projectId, String sessionId, String title, String description, ExecutionStatus status, Instant createdAt, Instant completedAt) {
-        this(id, projectId, sessionId, title, description, fromExecutionStatus(status), TaskPriority.NORMAL, null, null, null, createdAt, completedAt);
+        this(id, projectId, sessionId, title, description, fromExecutionStatus(status), TaskPriority.NORMAL, null, null, null, null, 0, null, createdAt, completedAt);
     }
 
     public AgentTask(String id, String projectId, String sessionId, String title, String description,
                      TaskStatus status, TaskPriority priority, String agentId, String executionResultId,
                      Instant createdAt, Instant completedAt) {
-        this(id, projectId, sessionId, title, description, status, priority, agentId, executionResultId, null, createdAt, completedAt);
+        this(id, projectId, sessionId, title, description, status, priority, agentId, null, executionResultId, null, 0, null, createdAt, completedAt);
     }
 
     public AgentTask(String id, String projectId, String sessionId, String title, String description,
                      TaskStatus status, TaskPriority priority, String agentId, String executionResultId,
                      String reviewId, Instant createdAt, Instant completedAt) {
+        this(id, projectId, sessionId, title, description, status, priority, agentId, null, executionResultId, reviewId, 0, null, createdAt, completedAt);
+    }
+
+    public AgentTask(String id, String projectId, String sessionId, String title, String description,
+                     TaskStatus status, TaskPriority priority, String agentId, String workerId,
+                     String executionResultId, String reviewId, int reworkCount, String failureReason,
+                     Instant createdAt, Instant completedAt) {
         if (title == null || title.trim().isEmpty()) {
             throw new TrystDomainException("Task title must not be null or blank");
         }
@@ -57,8 +68,11 @@ public class AgentTask {
         this.status = Objects.requireNonNull(status, "status must not be null");
         this.priority = priority != null ? priority : TaskPriority.NORMAL;
         this.agentId = agentId != null && !agentId.trim().isEmpty() ? agentId.trim() : null;
+        this.workerId = workerId != null && !workerId.trim().isEmpty() ? workerId.trim() : null;
         this.executionResultId = executionResultId != null && !executionResultId.trim().isEmpty() ? executionResultId.trim() : null;
         this.reviewId = reviewId != null && !reviewId.trim().isEmpty() ? reviewId.trim() : null;
+        this.reworkCount = reworkCount;
+        this.failureReason = failureReason;
         this.createdAt = Objects.requireNonNull(createdAt, "createdAt must not be null");
         this.completedAt = completedAt;
     }
@@ -88,8 +102,8 @@ public class AgentTask {
             case CREATED, PLANNED, READY, WAITING_FOR_APPROVAL -> ExecutionStatus.IDLE;
             case QUEUED -> ExecutionStatus.QUEUED;
             case CLAIMED -> ExecutionStatus.CLAIMED;
-            case RUNNING -> ExecutionStatus.RUNNING;
-            case WAITING_FOR_REVIEW -> ExecutionStatus.WAITING_FOR_REVIEW;
+            case RUNNING, CLONING, ANALYZING, PLANNING, IMPLEMENTING, BUILDING, TESTING, REWORKING -> ExecutionStatus.RUNNING;
+            case WAITING_FOR_REVIEW, REWORK_REQUESTED -> ExecutionStatus.WAITING_FOR_REVIEW;
             case APPROVED -> ExecutionStatus.APPROVED;
             case REJECTED -> ExecutionStatus.REJECTED;
             case COMMITTING -> ExecutionStatus.COMMITTING;
@@ -120,162 +134,168 @@ public class AgentTask {
         return description;
     }
 
-    public TaskStatus getTaskStatus() {
+    public synchronized TaskStatus getTaskStatus() {
         return status;
     }
 
-    public ExecutionStatus getStatus() {
+    public synchronized ExecutionStatus getStatus() {
         return toExecutionStatus(status);
     }
 
-    public TaskPriority getPriority() {
+    public synchronized TaskPriority getPriority() {
         return priority;
     }
 
-    public void setPriority(TaskPriority priority) {
+    public synchronized void setPriority(TaskPriority priority) {
         if (this.status.isTerminal()) {
             throw new TrystDomainException("Cannot change priority of terminal task in status: " + this.status);
         }
         this.priority = Objects.requireNonNull(priority, "priority must not be null");
     }
 
-    public String getAgentId() {
+    public synchronized String getAgentId() {
         return agentId;
     }
 
-    public void assignAgent(String agentId) {
+    public synchronized void assignAgent(String agentId) {
         if (this.status.isTerminal()) {
             throw new TrystDomainException("Cannot assign agent to terminal task in status: " + this.status);
         }
         this.agentId = agentId;
     }
 
-    public String getExecutionResultId() {
+    public synchronized String getWorkerId() {
+        return workerId;
+    }
+
+    public synchronized void setWorkerId(String workerId) {
+        this.workerId = workerId;
+    }
+
+    public synchronized String getExecutionResultId() {
         return executionResultId;
     }
 
-    public void setExecutionResultId(String executionResultId) {
+    public synchronized void setExecutionResultId(String executionResultId) {
         this.executionResultId = executionResultId;
     }
 
-    public String getReviewId() {
+    public synchronized String getReviewId() {
         return reviewId;
     }
 
-    public void setReviewId(String reviewId) {
+    public synchronized void setReviewId(String reviewId) {
         this.reviewId = reviewId;
+    }
+
+    public synchronized int getReworkCount() {
+        return reworkCount;
+    }
+
+    public synchronized void incrementReworkCount() {
+        this.reworkCount++;
+    }
+
+    public synchronized String getFailureReason() {
+        return failureReason;
+    }
+
+    public synchronized void setFailureReason(String failureReason) {
+        this.failureReason = failureReason;
     }
 
     public Instant getCreatedAt() {
         return createdAt;
     }
 
-    public Instant getCompletedAt() {
+    public synchronized Instant getCompletedAt() {
         return completedAt;
     }
 
-    public void plan() {
-        if (this.status != TaskStatus.CREATED) {
-            throw new TrystDomainException("Cannot plan task from status: " + this.status);
-        }
-        this.status = TaskStatus.PLANNED;
+    public synchronized void transitionTo(TaskStatus target) {
+        transitionTo(target, null);
     }
 
-    public void markReady() {
-        if (this.status != TaskStatus.CREATED && this.status != TaskStatus.PLANNED) {
-            throw new TrystDomainException("Cannot mark task ready from status: " + this.status);
+    public synchronized void transitionTo(TaskStatus target, String reason) {
+        TaskStateTransitionValidator.validateTransition(this.status, target);
+        this.status = target;
+        if (target == TaskStatus.FAILED) {
+            this.failureReason = reason;
+            this.completedAt = Instant.now();
+        } else if (target == TaskStatus.COMPLETED || target == TaskStatus.CANCELLED) {
+            this.completedAt = Instant.now();
         }
-        this.status = TaskStatus.READY;
     }
 
-    public void queue() {
-        if (this.status != TaskStatus.CREATED && this.status != TaskStatus.PLANNED && this.status != TaskStatus.READY && this.status != TaskStatus.REJECTED) {
-            throw new TrystDomainException("Cannot queue task from status: " + this.status);
-        }
-        this.status = TaskStatus.QUEUED;
+    public synchronized void plan() {
+        transitionTo(TaskStatus.PLANNED);
     }
 
-    public void claim(String agentId) {
-        if (this.status != TaskStatus.QUEUED && this.status != TaskStatus.READY && this.status != TaskStatus.CREATED) {
-            throw new TrystDomainException("Cannot claim task from status: " + this.status);
-        }
-        this.status = TaskStatus.CLAIMED;
-        this.agentId = agentId;
+    public synchronized void markReady() {
+        transitionTo(TaskStatus.READY);
     }
 
-    public void start() {
-        if (this.status != TaskStatus.CREATED && this.status != TaskStatus.PLANNED && this.status != TaskStatus.READY
-                && this.status != TaskStatus.QUEUED && this.status != TaskStatus.CLAIMED && this.status != TaskStatus.APPROVED) {
-            throw new TrystDomainException("Cannot start task in status: " + this.status);
-        }
-        this.status = TaskStatus.RUNNING;
+    public synchronized void queue() {
+        transitionTo(TaskStatus.QUEUED);
     }
 
-    public void requestApproval() {
-        if (this.status != TaskStatus.RUNNING) {
-            throw new TrystDomainException("Cannot request approval for task not running: " + this.status);
-        }
-        this.status = TaskStatus.WAITING_FOR_APPROVAL;
+    public synchronized void claim(String agentOrWorkerId) {
+        transitionTo(TaskStatus.CLAIMED);
+        this.workerId = agentOrWorkerId;
+        this.agentId = agentOrWorkerId;
     }
 
-    public void waitForReview(String reviewId) {
-        if (this.status != TaskStatus.RUNNING && this.status != TaskStatus.WAITING_FOR_APPROVAL) {
-            throw new TrystDomainException("Cannot transition to WAITING_FOR_REVIEW from status: " + this.status);
-        }
-        this.status = TaskStatus.WAITING_FOR_REVIEW;
+    public synchronized void start() {
+        transitionTo(TaskStatus.RUNNING);
+    }
+
+    public synchronized void requestApproval() {
+        transitionTo(TaskStatus.WAITING_FOR_APPROVAL);
+    }
+
+    public synchronized void waitForReview(String reviewId) {
+        transitionTo(TaskStatus.WAITING_FOR_REVIEW);
         this.reviewId = reviewId;
     }
 
-    public void approve() {
-        if (this.status != TaskStatus.WAITING_FOR_APPROVAL && this.status != TaskStatus.WAITING_FOR_REVIEW) {
-            throw new TrystDomainException("Cannot approve task not waiting for review/approval: " + this.status);
-        }
+    public synchronized void requestRework(String reason) {
+        transitionTo(TaskStatus.REWORK_REQUESTED, reason);
+        incrementReworkCount();
+    }
+
+    public synchronized void approve() {
         if (this.status == TaskStatus.WAITING_FOR_APPROVAL) {
-            this.status = TaskStatus.RUNNING;
+            transitionTo(TaskStatus.RUNNING);
         } else {
-            this.status = TaskStatus.APPROVED;
+            transitionTo(TaskStatus.APPROVED);
         }
     }
 
-    public void reject() {
-        if (this.status != TaskStatus.WAITING_FOR_APPROVAL && this.status != TaskStatus.WAITING_FOR_REVIEW && this.status != TaskStatus.APPROVED) {
-            throw new TrystDomainException("Cannot reject task from status: " + this.status);
-        }
-        this.status = TaskStatus.REJECTED;
+    public synchronized void reject() {
+        transitionTo(TaskStatus.REJECTED);
     }
 
-    public void startCommitting() {
-        if (this.status != TaskStatus.APPROVED) {
-            throw new TrystDomainException("Cannot commit task unless approved: " + this.status);
-        }
-        this.status = TaskStatus.COMMITTING;
+    public synchronized void startCommitting() {
+        transitionTo(TaskStatus.COMMITTING);
     }
 
-    public void complete() {
-        if (this.status != TaskStatus.RUNNING && this.status != TaskStatus.COMMITTING && this.status != TaskStatus.APPROVED) {
-            throw new TrystDomainException("Cannot complete task in status: " + this.status);
-        }
-        this.status = TaskStatus.COMPLETED;
-        this.completedAt = Instant.now();
+    public synchronized void complete() {
+        transitionTo(TaskStatus.COMPLETED);
     }
 
-    public void fail() {
-        if (this.status.isTerminal()) {
-            throw new TrystDomainException("Cannot fail terminal task: " + this.status);
-        }
-        this.status = TaskStatus.FAILED;
-        this.completedAt = Instant.now();
+    public synchronized void fail() {
+        fail(null);
     }
 
-    public void cancel() {
-        if (this.status.isTerminal()) {
-            throw new TrystDomainException("Cannot cancel terminal task: " + this.status);
-        }
-        this.status = TaskStatus.CANCELLED;
-        this.completedAt = Instant.now();
+    public synchronized void fail(String reason) {
+        transitionTo(TaskStatus.FAILED, reason);
     }
 
-    public void markRecoveryRequired() {
+    public synchronized void cancel() {
+        transitionTo(TaskStatus.CANCELLED);
+    }
+
+    public synchronized void markRecoveryRequired() {
         if (this.status.isTerminal()) {
             return;
         }
@@ -302,6 +322,7 @@ public class AgentTask {
                 ", status=" + status +
                 ", priority=" + priority +
                 ", agentId='" + agentId + '\'' +
+                ", workerId='" + workerId + '\'' +
                 '}';
     }
 }

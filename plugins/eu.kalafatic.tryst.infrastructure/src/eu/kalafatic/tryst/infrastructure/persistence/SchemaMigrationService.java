@@ -404,6 +404,48 @@ public class SchemaMigrationService {
         );
         migrations.add(new Migration(4, "AI providers and model publication catalog", v4Statements));
 
+        // V5: Asynchronous Task Execution Infrastructure & Event Audit
+        List<String> v5Statements = List.of(
+                """
+                ALTER TABLE tasks ADD COLUMN priority TEXT NOT NULL DEFAULT 'NORMAL';
+                """,
+                """
+                ALTER TABLE tasks ADD COLUMN agent_id TEXT;
+                """,
+                """
+                ALTER TABLE tasks ADD COLUMN worker_id TEXT;
+                """,
+                """
+                ALTER TABLE tasks ADD COLUMN execution_result_id TEXT;
+                """,
+                """
+                ALTER TABLE tasks ADD COLUMN review_id TEXT;
+                """,
+                """
+                ALTER TABLE tasks ADD COLUMN rework_count INTEGER NOT NULL DEFAULT 0;
+                """,
+                """
+                ALTER TABLE tasks ADD COLUMN failure_reason TEXT;
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_tasks_worker_id ON tasks(worker_id);",
+                "CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);",
+
+                """
+                CREATE TABLE IF NOT EXISTS task_events (
+                    id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    details TEXT,
+                    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+                );
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_task_events_task ON task_events(task_id);",
+                "CREATE INDEX IF NOT EXISTS idx_task_events_timestamp ON task_events(timestamp);"
+        );
+        migrations.add(new Migration(5, "Asynchronous task execution infrastructure and event logs", v5Statements));
+
         return migrations;
     }
 }

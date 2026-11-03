@@ -8,57 +8,61 @@
 
 ## 1. Prioritized Defect and Architectural Debt Inventory
 
-The audit of the existing codebase identified the following architectural improvements, prioritized for subsequent feature implementations:
+The audit of the codebase and implementation progress tracks the following components:
 
 ```
-[CRITICAL / HIGH]
-  P1. Structured JSON Tool Invocation Schema
-      Issue: Agent loop uses prefix string format "TOOL:<name> PARAM:<key>=<value>".
-      Impact: Susceptible to hallucinations or parsing drifts on smaller Ollama models.
-      Target: Structured JSON payload and formal tool schema validation.
+[COMPLETED]
+  P01: Architecture Baseline & Governance Alignment
+       - Unified namespace (eu.kalafatic.tryst)
+       - Clean MVC and Equinox OSGi modularity
+       - Authoritative target platform and PDE configuration
+       - Database schema migrations V1-V4
+       - Embedded review center and administrative perspectives
 
-  P2. Decouple Web Client Static Assets
-      Issue: HTML/CSS/JS is stored as inline multiline String constants in TrystHttpServer.java.
-      Impact: Hampers independent frontend asset editing, caching, and frontend linting.
-      Target: Extract assets into /resources/web/ and load via OSGi Bundle classloader.
+  P02: Production-Grade Asynchronous Execution Infrastructure
+       - Deterministic multi-stage lifecycle (TaskStatus, TaskStateTransitionValidator)
+       - Canonical Task aggregate and backward-compatible AgentTask
+       - Isolated TaskExecutionContext (no shared mutable currentTask or workspace)
+       - Persistent priority TaskQueue and atomic claiming
+       - Controlled TaskWorker and central TaskOrchestrator
+       - TaskLifecycleManager with persistent TaskEvent auditing (Schema Migration V5)
+       - Server restart recovery via TaskRecoveryService
+       - Asynchronous HTTP API (/api/tasks, cancellation, events)
+       - Concurrency, cancellation, and recovery automated test suites
 
-[MEDIUM]
-  P3. Workspace Scoping Refactor
-      Issue: WorkspaceService maintains in-memory currentWorkspace pointer.
-      Impact: Potential state collision if concurrent multi-user tasks target different projects.
-      Target: Deprecate global currentWorkspace; pass explicit Project/Workspace context.
+[PENDING / SUBSEQUENT PHASES]
+  P03: Workspace and Sandbox Management
+       - Project and workspace containment isolation hardening
+       - Elimination of remaining legacy workspace singletons
+       - Sandboxed environment preparation and tooling readiness checks
 
-  P4. Host Tooling Readiness Checks
-      Issue: Git and Maven rely on host PATH binaries via ProcessBuilder.
-      Impact: Unclear failure message if Git or Maven is missing or incompatible.
-      Target: Add explicit executable health checks in ServerReadinessService.
+  P04: Structured JSON Tool Invocation Schema
+       - Formal JSON schema tool calling for Ollama inference
+       - Tool validation and hallucination resilience
+
+  P05: Web Client Asset Decoupling
+       - Static asset separation into modular resources
+       - Bundle classloader asset resolution
 ```
 
 ---
 
-## 2. Incremental Implementation Phases
+## 2. Completed Phase 2 Deliverables (P02)
 
-### Phase 1: Tooling and Protocol Robustness
-- **Goal:** Replace string parsing with formal JSON tool schemas.
-- **Components:** `AiContextManager`, `SessionTaskOrchestrator`, `ToolRegistry`.
-- **Validation:** Automated JUnit tests with mock LLM outputs simulating tool calls.
+- **Entities & Events:** `Task`, `AgentTask`, `TaskStatus`, `TaskEvent`, `TaskPriority`.
+- **Validation & Isolation:** `TaskStateTransitionValidator`, `TaskExecutionContext`.
+- **Execution & Queue:** `TaskQueue`, `TaskWorker`, `TaskOrchestrator`.
+- **Lifecycle & Recovery:** `TaskLifecycleManager`, `TaskRecoveryService`.
+- **Persistence:** SQLite Migration V5 (`task_events`, task execution columns, priority indexes), `SqliteTaskRepository`.
+- **Application & API Integration:** `ApplicationLifecycleCoordinator` (OSGi services, startup recovery, graceful shutdown) and `TrystHttpServer`.
+- **Testing:** `TaskLifecycleTransitionTest`, `TaskQueueConcurrencyTest`, `TaskOrchestratorIntegrationTest`, `AsynchronousTaskExecutionHttpE2ETest`.
 
-### Phase 2: Web Client Asset Decoupling
-- **Goal:** Move HTML, CSS, and vanilla JavaScript into clean modular bundle files.
-- **Components:** `plugins/eu.kalafatic.tryst.infrastructure/resources/web/`, `StaticAssetHandler`.
-- **Validation:** HTTP E2E tests validating MIME types, gzip/content encoding, and status codes.
+---
 
-### Phase 3: Multi-Workspace Concurrency Hardening
-- **Goal:** Eliminate singleton workspace assumptions in domain services.
-- **Components:** `WorkspaceService`, `SessionTaskOrchestrator`, `AutonomousDevelopmentService`.
-- **Validation:** Parallel multi-tenant execution tests ensuring concurrent tasks do not collide.
+## 3. Recommended Next Implementation Step (P03)
 
-### Phase 4: Pluggable AI Provider SPI
-- **Goal:** Formalize AI provider SPI allowing additional local or remote inference backends while keeping Ollama default.
-- **Components:** `AiInferenceService`, `AiModelRegistryService`.
-- **Validation:** Multi-provider registration and role-filtered model discovery tests.
-
-### Phase 5: Optional EVO Adapter Bundle
-- **Goal:** Provide seamless EVO integration without coupling TRYST Core to EVO.
-- **Components:** Separate OSGi bundle `eu.kalafatic.tryst.evo.adapter`.
-- **Validation:** Standalone verification confirms TRYST runs identically with or without the adapter.
+- **Target:** Workspace and Sandbox Management (P03).
+- **Prerequisites:**
+  1. Verified asynchronous task execution infrastructure (P02 completed).
+  2. Isolated `TaskExecutionContext` already receiving per-task project workspace paths.
+  3. Clean transactional persistence in SQLite (Migration V5 applied).
