@@ -235,15 +235,43 @@ public class TaskWorker implements Callable<ExecutionResult> {
             CodeReview review = null;
             if (codeReviewRepository != null) {
                 String projectId = context.getProjectId() != null ? context.getProjectId() : "default-project";
-                review = new CodeReview(
-                        projectId,
-                        task.getId(),
-                        context.getWorkspace() != null ? context.getWorkspace().getBranch() : "main",
+                Optional<CodeReview> existingReviewOpt = codeReviewRepository.findByTaskId(task.getId());
+                int revCount = 1;
+                String explanation = "Implemented proposed changes: " + task.getTitle() + "\n" + plan.goal();
+
+                if (existingReviewOpt.isPresent()) {
+                    review = existingReviewOpt.get();
+                    review.incrementRevisionCount();
+                    revCount = review.getRevisionCount();
+                    review.updateEffectiveDiff(diff);
+                    review.updateBuildAndTestStatus("SUCCESS", "Automated build and tests passed successfully");
+                    review.setAiExplanation(explanation);
+                    codeReviewRepository.save(review);
+                } else {
+                    review = new CodeReview(
+                            projectId,
+                            task.getId(),
+                            context.getWorkspace() != null ? context.getWorkspace().getBranch() : "main",
+                            diff,
+                            "SUCCESS",
+                            "Automated build and tests passed successfully"
+                    );
+                    review.setAiExplanation(explanation);
+                    review.setRevisionCount(1);
+                    codeReviewRepository.save(review);
+                }
+
+                eu.kalafatic.tryst.domain.review.ReviewRevision rev = new eu.kalafatic.tryst.domain.review.ReviewRevision(
+                        UUID.randomUUID().toString(),
+                        review.getId(),
+                        revCount,
                         diff,
+                        explanation,
                         "SUCCESS",
-                        "Automated build and tests passed successfully"
+                        "Automated build and tests passed successfully",
+                        java.time.Instant.now()
                 );
-                codeReviewRepository.save(review);
+                codeReviewRepository.saveRevision(rev);
                 task.setReviewId(review.getId());
             }
 
@@ -336,7 +364,31 @@ public class TaskWorker implements Callable<ExecutionResult> {
         String toolHelp = toolRegistry != null ? toolRegistry.generateToolHelp() : "";
         String instructions = promptContextBuilder.buildSystemInstructions(ws, proj, toolHelp);
 
-        String prompt = task.getTitle() + "\n" + (task.getDescription() != null ? task.getDescription() : "");
+        StringBuilder promptBuilder = new StringBuilder();
+        promptBuilder.append(task.getTitle()).append("\n").append(task.getDescription() != null ? task.getDescription() : "");
+
+        if (codeReviewRepository != null && task.getReworkCount() > 0) {
+            List<eu.kalafatic.tryst.domain.review.ReviewComment> comments = codeReviewRepository.findCommentsByTaskId(task.getId());
+            List<eu.kalafatic.tryst.domain.review.ReviewComment> reworkComments = comments.stream()
+                    .filter(c -> !c.isResolved() && c.isIncludeInRework())
+                    .toList();
+
+            if (!reworkComments.isEmpty()) {
+                promptBuilder.append("\n\n--- REVIEW REWORK INSTRUCTIONS ---\n");
+                promptBuilder.append("Address the following user review comments in this rework revision:\n");
+                for (eu.kalafatic.tryst.domain.review.ReviewComment c : reworkComments) {
+                    promptBuilder.append("- File: ").append(c.getFilePath())
+                            .append(", Lines: ").append(c.getStartLine()).append("-").append(c.getEndLine())
+                            .append(" (Side: ").append(c.getDiffSide()).append(")\n");
+                    if (!c.getCodeContext().isBlank()) {
+                        promptBuilder.append("  Code Context:\n").append("    ").append(c.getCodeContext().replace("\n", "\n    ")).append("\n");
+                    }
+                    promptBuilder.append("  Comment: ").append(c.getContent()).append("\n\n");
+                }
+            }
+        }
+
+        String prompt = promptBuilder.toString();
 
         CodeAgent.AgentExecutionResult res = codeAgent.runStep(
                 task,

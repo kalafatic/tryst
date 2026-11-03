@@ -32,6 +32,8 @@ public class CodeReview {
     private String rejectionReason;
     private String buildStatus;
     private String testSummary;
+    private String aiExplanation;
+    private int revisionCount;
     private final Instant createdAt;
     private Instant updatedAt;
 
@@ -60,6 +62,34 @@ public class CodeReview {
         this.rejectionReason = rejectionReason;
         this.buildStatus = buildStatus != null ? buildStatus : "SUCCESS";
         this.testSummary = testSummary != null ? testSummary : "";
+        this.aiExplanation = "";
+        this.revisionCount = 1;
+        this.createdAt = Objects.requireNonNull(createdAt, "createdAt must not be null");
+        this.updatedAt = Objects.requireNonNull(updatedAt, "updatedAt must not be null");
+    }
+
+    public CodeReview(String id, String projectId, String taskId, String branch, ReviewStatus status,
+                      String initialDiff, String effectiveDiff, String contentFingerprint, String approvedFingerprint,
+                      String commitHash, String approvedBy, String rejectedBy, String rejectionReason,
+                      String buildStatus, String testSummary, String aiExplanation, int revisionCount,
+                      Instant createdAt, Instant updatedAt) {
+        this.id = Objects.requireNonNull(id, "id must not be null");
+        this.projectId = Objects.requireNonNull(projectId, "projectId must not be null");
+        this.taskId = Objects.requireNonNull(taskId, "taskId must not be null");
+        this.branch = branch != null && !branch.isBlank() ? branch : "main";
+        this.status = Objects.requireNonNull(status, "status must not be null");
+        this.initialDiff = initialDiff != null ? initialDiff : "";
+        this.effectiveDiff = effectiveDiff != null ? effectiveDiff : this.initialDiff;
+        this.contentFingerprint = contentFingerprint != null ? contentFingerprint : calculateFingerprint(this.effectiveDiff);
+        this.approvedFingerprint = approvedFingerprint;
+        this.commitHash = commitHash;
+        this.approvedBy = approvedBy;
+        this.rejectedBy = rejectedBy;
+        this.rejectionReason = rejectionReason;
+        this.buildStatus = buildStatus != null ? buildStatus : "SUCCESS";
+        this.testSummary = testSummary != null ? testSummary : "";
+        this.aiExplanation = aiExplanation != null ? aiExplanation : "";
+        this.revisionCount = Math.max(1, revisionCount);
         this.createdAt = Objects.requireNonNull(createdAt, "createdAt must not be null");
         this.updatedAt = Objects.requireNonNull(updatedAt, "updatedAt must not be null");
     }
@@ -94,8 +124,25 @@ public class CodeReview {
     public String getRejectionReason() { return rejectionReason; }
     public String getBuildStatus() { return buildStatus; }
     public String getTestSummary() { return testSummary; }
+    public String getAiExplanation() { return aiExplanation; }
+    public int getRevisionCount() { return revisionCount; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
+
+    public synchronized void setAiExplanation(String aiExplanation) {
+        this.aiExplanation = aiExplanation != null ? aiExplanation : "";
+        this.updatedAt = Instant.now();
+    }
+
+    public synchronized void setRevisionCount(int revisionCount) {
+        this.revisionCount = revisionCount;
+        this.updatedAt = Instant.now();
+    }
+
+    public synchronized void incrementRevisionCount() {
+        this.revisionCount++;
+        this.updatedAt = Instant.now();
+    }
 
     /**
      * Updates the effective diff when a user or tool modifies files in review.

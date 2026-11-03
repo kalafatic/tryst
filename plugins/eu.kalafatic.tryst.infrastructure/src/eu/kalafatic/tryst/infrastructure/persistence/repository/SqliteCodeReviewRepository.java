@@ -3,7 +3,9 @@ package eu.kalafatic.tryst.infrastructure.persistence.repository;
 import eu.kalafatic.tryst.core.error.TrystInfrastructureException;
 import eu.kalafatic.tryst.domain.repository.CodeReviewRepository;
 import eu.kalafatic.tryst.domain.review.CodeReview;
+import eu.kalafatic.tryst.domain.review.ReviewComment;
 import eu.kalafatic.tryst.domain.review.ReviewFileEdit;
+import eu.kalafatic.tryst.domain.review.ReviewRevision;
 import eu.kalafatic.tryst.infrastructure.persistence.SqliteDatabaseManager;
 
 import java.sql.Connection;
@@ -35,8 +37,9 @@ public class SqliteCodeReviewRepository implements CodeReviewRepository {
             INSERT INTO code_reviews (
                 id, project_id, task_id, branch, status, initial_diff, effective_diff,
                 content_fingerprint, approved_fingerprint, commit_hash, approved_by,
-                rejected_by, rejection_reason, build_status, test_summary, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                rejected_by, rejection_reason, build_status, test_summary, ai_explanation,
+                revision_count, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 status = excluded.status,
                 effective_diff = excluded.effective_diff,
@@ -48,6 +51,8 @@ public class SqliteCodeReviewRepository implements CodeReviewRepository {
                 rejection_reason = excluded.rejection_reason,
                 build_status = excluded.build_status,
                 test_summary = excluded.test_summary,
+                ai_explanation = excluded.ai_explanation,
+                revision_count = excluded.revision_count,
                 updated_at = excluded.updated_at;
         """;
 
@@ -69,8 +74,10 @@ public class SqliteCodeReviewRepository implements CodeReviewRepository {
                 setOrNull(pstmt, 13, review.getRejectionReason());
                 pstmt.setString(14, review.getBuildStatus());
                 pstmt.setString(15, review.getTestSummary());
-                pstmt.setString(16, review.getCreatedAt().toString());
-                pstmt.setString(17, review.getUpdatedAt().toString());
+                setOrNull(pstmt, 16, review.getAiExplanation());
+                pstmt.setInt(17, review.getRevisionCount());
+                pstmt.setString(18, review.getCreatedAt().toString());
+                pstmt.setString(19, review.getUpdatedAt().toString());
                 pstmt.executeUpdate();
             } catch (SQLException e) {
                 throw new TrystInfrastructureException("Failed to save code review: " + review.getId(), e);
@@ -250,6 +257,13 @@ public class SqliteCodeReviewRepository implements CodeReviewRepository {
     }
 
     private CodeReview mapResultSetToCodeReview(ResultSet rs) throws SQLException {
+        String aiExp = null;
+        int revCount = 1;
+        try {
+            aiExp = rs.getString("ai_explanation");
+            revCount = rs.getInt("revision_count");
+        } catch (SQLException ignored) {}
+
         return new CodeReview(
                 rs.getString("id"),
                 rs.getString("project_id"),
@@ -278,6 +292,234 @@ public class SqliteCodeReviewRepository implements CodeReviewRepository {
                 rs.getString("file_path"),
                 rs.getString("original_content"),
                 rs.getString("modified_content"),
+                Instant.parse(rs.getString("updated_at"))
+        );
+    }
+
+    @Override
+    public void saveRevision(ReviewRevision revision) {
+        Objects.requireNonNull(revision, "revision must not be null");
+        String sql = """
+            INSERT INTO review_revisions (id, review_id, revision_number, diff, explanation, build_status, test_summary, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(review_id, revision_number) DO UPDATE SET
+                diff = excluded.diff,
+                explanation = excluded.explanation,
+                build_status = excluded.build_status,
+                test_summary = excluded.test_summary;
+        """;
+        synchronized (databaseManager.getLock()) {
+            Connection conn = databaseManager.getConnection();
+            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                pstmt.setString(1, revision.getId());
+                pstmt.setString(2, revision.getReviewId());
+                pstmt.setInt(3, revision.getRevisionNumber());
+                pstmt.setString(4, revision.getDiff());
+                pstmt.setString(5, revision.getExplanation());
+                pstmt.setString(6, revision.getBuildStatus());
+                pstmt.setString(7, revision.getTestSummary());
+                pstmt.setString(8, revision.getCreatedAt().toString());
+                pstmt.executeUpdate();
+            } catch (SQLException e) {
+                throw new TrystInfrastructureException("Failed to save review revision: " + revision.getId(), e);
+            }
+        }
+    }
+
+    @Override
+    public List<ReviewRevision> findRevisionsByReviewId(String reviewId) {
+        Objects.requireNonNull(reviewId, "reviewId must not be null");
+        String sql = "SELECT * FROM review_revisions WHERE review_id = ? ORDER BY revision_number ASC;";
+        List<ReviewRevision> list = new ArrayList<>();
+        synchronized (databaseManager.getLock()) {
+            Connection conn = databaseManager.getConnection();
+            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                pstmt.setString(1, reviewId);
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    while (rs.next()) {
+                        list.add(new ReviewRevision(
+                                rs.getString("id"),
+                                rs.getString("review_id"),
+                                rs.getInt("revision_number"),
+                                rs.getString("diff"),
+                                rs.getString("explanation"),
+                                rs.getString("build_status"),
+                                rs.getString("test_summary"),
+                                Instant.parse(rs.getString("created_at"))
+                        ));
+                    }
+                    return list;
+                }
+            } catch (SQLException e) {
+                throw new TrystInfrastructureException("Failed to find revisions for review: " + reviewId, e);
+            }
+        }
+    }
+
+    @Override
+    public Optional<ReviewRevision> findRevisionByNumber(String reviewId, int revisionNumber) {
+        Objects.requireNonNull(reviewId, "reviewId must not be null");
+        String sql = "SELECT * FROM review_revisions WHERE review_id = ? AND revision_number = ? LIMIT 1;";
+        synchronized (databaseManager.getLock()) {
+            Connection conn = databaseManager.getConnection();
+            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                pstmt.setString(1, reviewId);
+                pstmt.setInt(2, revisionNumber);
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    if (rs.next()) {
+                        return Optional.of(new ReviewRevision(
+                                rs.getString("id"),
+                                rs.getString("review_id"),
+                                rs.getInt("revision_number"),
+                                rs.getString("diff"),
+                                rs.getString("explanation"),
+                                rs.getString("build_status"),
+                                rs.getString("test_summary"),
+                                Instant.parse(rs.getString("created_at"))
+                        ));
+                    }
+                    return Optional.empty();
+                }
+            } catch (SQLException e) {
+                throw new TrystInfrastructureException("Failed to find revision " + revisionNumber + " for review: " + reviewId, e);
+            }
+        }
+    }
+
+    @Override
+    public void saveComment(ReviewComment comment) {
+        Objects.requireNonNull(comment, "comment must not be null");
+        String sql = """
+            INSERT INTO review_comments (
+                id, review_id, task_id, revision_number, file_path, diff_side, start_line, end_line,
+                code_context, comment_type, content, author_id, resolved, include_in_rework, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                content = excluded.content,
+                resolved = excluded.resolved,
+                include_in_rework = excluded.include_in_rework,
+                updated_at = excluded.updated_at;
+        """;
+        synchronized (databaseManager.getLock()) {
+            Connection conn = databaseManager.getConnection();
+            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                pstmt.setString(1, comment.getId());
+                pstmt.setString(2, comment.getReviewId());
+                pstmt.setString(3, comment.getTaskId());
+                pstmt.setInt(4, comment.getRevisionNumber());
+                pstmt.setString(5, comment.getFilePath());
+                pstmt.setString(6, comment.getDiffSide().name());
+                pstmt.setInt(7, comment.getStartLine());
+                pstmt.setInt(8, comment.getEndLine());
+                pstmt.setString(9, comment.getCodeContext());
+                pstmt.setString(10, comment.getCommentType().name());
+                pstmt.setString(11, comment.getContent());
+                pstmt.setString(12, comment.getAuthorId());
+                pstmt.setInt(13, comment.isResolved() ? 1 : 0);
+                pstmt.setInt(14, comment.isIncludeInRework() ? 1 : 0);
+                pstmt.setString(15, comment.getCreatedAt().toString());
+                pstmt.setString(16, comment.getUpdatedAt().toString());
+                pstmt.executeUpdate();
+            } catch (SQLException e) {
+                throw new TrystInfrastructureException("Failed to save review comment: " + comment.getId(), e);
+            }
+        }
+    }
+
+    @Override
+    public Optional<ReviewComment> findCommentById(String id) {
+        Objects.requireNonNull(id, "id must not be null");
+        String sql = "SELECT * FROM review_comments WHERE id = ?;";
+        synchronized (databaseManager.getLock()) {
+            Connection conn = databaseManager.getConnection();
+            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                pstmt.setString(1, id);
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    if (rs.next()) {
+                        return Optional.of(mapResultSetToReviewComment(rs));
+                    }
+                    return Optional.empty();
+                }
+            } catch (SQLException e) {
+                throw new TrystInfrastructureException("Failed to find review comment by id: " + id, e);
+            }
+        }
+    }
+
+    @Override
+    public List<ReviewComment> findCommentsByReviewId(String reviewId) {
+        Objects.requireNonNull(reviewId, "reviewId must not be null");
+        String sql = "SELECT * FROM review_comments WHERE review_id = ? ORDER BY created_at ASC;";
+        List<ReviewComment> list = new ArrayList<>();
+        synchronized (databaseManager.getLock()) {
+            Connection conn = databaseManager.getConnection();
+            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                pstmt.setString(1, reviewId);
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    while (rs.next()) {
+                        list.add(mapResultSetToReviewComment(rs));
+                    }
+                    return list;
+                }
+            } catch (SQLException e) {
+                throw new TrystInfrastructureException("Failed to find review comments for review: " + reviewId, e);
+            }
+        }
+    }
+
+    @Override
+    public List<ReviewComment> findCommentsByTaskId(String taskId) {
+        Objects.requireNonNull(taskId, "taskId must not be null");
+        String sql = "SELECT * FROM review_comments WHERE task_id = ? ORDER BY created_at ASC;";
+        List<ReviewComment> list = new ArrayList<>();
+        synchronized (databaseManager.getLock()) {
+            Connection conn = databaseManager.getConnection();
+            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                pstmt.setString(1, taskId);
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    while (rs.next()) {
+                        list.add(mapResultSetToReviewComment(rs));
+                    }
+                    return list;
+                }
+            } catch (SQLException e) {
+                throw new TrystInfrastructureException("Failed to find review comments for task: " + taskId, e);
+            }
+        }
+    }
+
+    @Override
+    public boolean deleteComment(String id) {
+        Objects.requireNonNull(id, "id must not be null");
+        String sql = "DELETE FROM review_comments WHERE id = ?;";
+        synchronized (databaseManager.getLock()) {
+            Connection conn = databaseManager.getConnection();
+            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                pstmt.setString(1, id);
+                return pstmt.executeUpdate() > 0;
+            } catch (SQLException e) {
+                throw new TrystInfrastructureException("Failed to delete review comment: " + id, e);
+            }
+        }
+    }
+
+    private ReviewComment mapResultSetToReviewComment(ResultSet rs) throws SQLException {
+        return new ReviewComment(
+                rs.getString("id"),
+                rs.getString("review_id"),
+                rs.getString("task_id"),
+                rs.getInt("revision_number"),
+                rs.getString("file_path"),
+                rs.getString("diff_side"),
+                rs.getInt("start_line"),
+                rs.getInt("end_line"),
+                rs.getString("code_context"),
+                rs.getString("comment_type"),
+                rs.getString("content"),
+                rs.getString("author_id"),
+                rs.getInt("resolved") == 1,
+                rs.getInt("include_in_rework") == 1,
+                Instant.parse(rs.getString("created_at")),
                 Instant.parse(rs.getString("updated_at"))
         );
     }
