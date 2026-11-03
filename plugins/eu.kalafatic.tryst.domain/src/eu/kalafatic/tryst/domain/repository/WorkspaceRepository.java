@@ -1,6 +1,9 @@
 package eu.kalafatic.tryst.domain.repository;
 
 import eu.kalafatic.tryst.domain.model.Workspace;
+import eu.kalafatic.tryst.domain.model.WorkspaceStatus;
+
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -13,6 +16,14 @@ public interface WorkspaceRepository {
     Optional<Workspace> findById(String id);
 
     Optional<Workspace> findActive();
+
+    Optional<Workspace> findByTaskId(String taskId);
+
+    List<Workspace> findByOwnerId(String ownerId);
+
+    List<Workspace> findByStatus(WorkspaceStatus status);
+
+    List<Workspace> findAll();
 
     boolean delete(String id);
 }

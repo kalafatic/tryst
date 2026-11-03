@@ -27,13 +27,18 @@ All domain models reside in `eu.kalafatic.tryst.domain.model` and adhere to stri
 - **Domain Operations:** `activate()`, `deactivate()`, `updateLocation()`.
 
 ### 1.2 Workspace
-- **Responsibility:** Encapsulates the disk boundary, containment rules, and active working directory for one or more projects.
+- **Responsibility:** Encapsulates the disk boundary, containment rules, active working directory, and isolated sandbox for tasks and projects.
 - **Fields:**
   - `id`: UUID String
   - `rootPath`: Path (normalized)
-  - `activeProjectId`: UUID String
+  - `ownerId`: String (references `User.id`)
+  - `taskId`: String (references `Task.id` when allocated for a task)
+  - `repositoryUrl`: String
+  - `branch`: String
+  - `status`: `WorkspaceStatus` (`ALLOCATED`, `INITIALIZING`, `READY`, `ACTIVE`, `WAITING_FOR_REVIEW`, `REWORKING`, `COMPLETED`, `ARCHIVED`, `CLEANUP_PENDING`, `FAILED`)
+  - `metadata`: Map<String, String>
   - `createdAt`, `updatedAt`: Instant
-- **Domain Operations:** `setActiveProject(Project)`, `containsPath(Path)`.
+- **Domain Operations:** `allocate()`, `initialize()`, `markReady()`, `activate()`, `markWaitingForReview()`, `rework()`, `complete()`, `archive()`, `markCleanupPending()`, `fail()`, `transitionTo()`.
 
 ### 1.3 AgentTask
 - **Responsibility:** A discrete unit of autonomous software development work requested by a user or planner.

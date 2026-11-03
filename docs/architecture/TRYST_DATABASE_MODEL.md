@@ -76,3 +76,17 @@ TRYST uses SQLite 3 via standard JDBC (`org.sqlite.JDBC`) without ORM overhead:
 - **`ai_models`**
   - `id` (TEXT PRIMARY KEY), `provider_id` (TEXT NOT NULL, FK -> `ai_providers.id`), `model_identifier` (TEXT NOT NULL), `display_name` (TEXT NOT NULL), `capabilities_json` (TEXT), `context_limit` (INTEGER DEFAULT 4096), `available` (INTEGER DEFAULT 1), `published` (INTEGER DEFAULT 1), `min_role` (TEXT DEFAULT 'USER'), `last_verified_at` (TEXT), `created_at` (TEXT NOT NULL), `updated_at` (TEXT NOT NULL)
   - Indexes: `idx_ai_models_provider`, `idx_ai_models_available`, `idx_ai_models_published`
+
+### 2.5 Version 6: Production Workspace and Sandbox Management (`V6`)
+- **`workspaces`**
+  - Updated with columns:
+    - `owner_id` (TEXT NOT NULL DEFAULT 'default-user')
+    - `task_id` (TEXT)
+    - `status` (TEXT NOT NULL DEFAULT 'ACTIVE')
+    - `repository_url` (TEXT)
+    - `branch` (TEXT NOT NULL DEFAULT 'main')
+    - `metadata_json` (TEXT)
+  - Indexes:
+    - `idx_workspaces_owner_id`
+    - `idx_workspaces_task_id`
+    - `idx_workspaces_status`
