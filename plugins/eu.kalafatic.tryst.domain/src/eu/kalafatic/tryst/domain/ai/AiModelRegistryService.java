@@ -15,7 +15,7 @@ import java.util.function.Consumer;
  * Manages provider health checks, model discovery, role-based visibility filtering,
  * and session-level model resolution.
  */
-public class AiModelRegistryService {
+public class AiModelRegistryService implements ModelRegistry {
 
     public enum ProviderHealth {
         UNKNOWN,
@@ -113,6 +113,52 @@ public class AiModelRegistryService {
 
     public void setDefaultModel(String modelId) {
         this.defaultModelId = modelId;
+    }
+
+    @Override
+    public CompletableFuture<Void> discoverModelsFromProvider(String providerId, AIProvider provider) {
+        if (provider == null) {
+            updateProviderHealth(providerId, ProviderHealth.OFFLINE);
+            return CompletableFuture.completedFuture(null);
+        }
+
+        return provider.checkConnection().thenCompose(connected -> {
+            if (!connected) {
+                updateProviderHealth(providerId, ProviderHealth.OFFLINE);
+                models.values().stream()
+                        .filter(m -> m.providerId().equals(providerId))
+                        .forEach(m -> models.put(m.id(), new PublishedModel(
+                                m.id(), m.providerId(), m.modelIdentifier(), m.displayName(),
+                                m.contextLimit(), false, m.published(), m.minRole(), Instant.now()
+                        )));
+                notifyListeners();
+                return CompletableFuture.completedFuture(null);
+            }
+
+            updateProviderHealth(providerId, ProviderHealth.ONLINE);
+            return provider.listAvailableModels().thenAccept(metas -> {
+                for (AIProvider.ProviderModelMetadata meta : metas) {
+                    String id = providerId + ":" + meta.name();
+                    PublishedModel pm = new PublishedModel(
+                            id,
+                            providerId,
+                            meta.name(),
+                            meta.name(),
+                            4096,
+                            true,
+                            true,
+                            UserRole.USER,
+                            Instant.now()
+                    );
+                    models.put(id, pm);
+                }
+                notifyListeners();
+            }).exceptionally(t -> {
+                TrystLog.warn(AiModelRegistryService.class, "Failed listing models from " + providerId + ": " + t.getMessage());
+                updateProviderHealth(providerId, ProviderHealth.DEGRADED);
+                return null;
+            });
+        });
     }
 
     public CompletableFuture<Void> discoverModelsFromInferenceService(String providerId, AiInferenceService inferenceService) {

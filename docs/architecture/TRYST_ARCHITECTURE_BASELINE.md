@@ -307,7 +307,8 @@ TRYST Core has **zero compile-time and zero runtime dependencies on EVO**.
 
 | Priority | Issue / Debt Description | Architectural Impact | Target Resolution |
 |---|---|---|---|
-| **P1** | Tool execution uses string prefix parsing (`TOOL:name PARAM:...`) rather than structured JSON. | Can cause prompt drift or formatting parsing failures with smaller LLM models. | Adopt structured JSON tool calling schema in `AiContextManager` and `SessionTaskOrchestrator`. |
+| **P1** | Tool execution uses string prefix parsing (`TOOL:name PARAM:...`) rather than structured JSON. | Can cause prompt drift or formatting parsing failures with smaller LLM models. | Adopt structured JSON tool calling schema in `AiContextManager` and `CodeAgent`. |
 | **P2** | Static HTML/JS UI is embedded as multiline Java String literals in `TrystHttpServer`. | Limits modular development of web client assets and automated web linting. | Extract HTML/CSS/JS into bundle resources served via classloader stream in `StaticAssetHandler`. |
 | **P3** | In-memory `workspaceService.getCurrentWorkspace()` persists as legacy state. | Potential race condition if multiple users operate different projects simultaneously. | RESOLVED (Phase 3): WorkspaceService allocates dedicated isolated task sandboxes (`allocateTaskWorkspace`), project-scoped roots, and enforces non-destructive cleanup rules. |
 | **P4** | Git operations spawn external processes via `ProcessBuilder`. | Dependent on system `git` executable installed on the host. | Add startup check in `ServerReadinessService` verifying host `git` presence and version. |
+| **P5** | AI provider transport coupled directly with domain logic. | Difficult to mock or switch AI engines cleanly. | RESOLVED (Phase 5): Segregated `AIProvider` transport from agent logic, introducing `TaskAnalyzer`, `ImplementationPlanner`, `CodeAgent`, `CodeChangeExecutor`, `ResultValidator`, and `OllamaProvider`. |

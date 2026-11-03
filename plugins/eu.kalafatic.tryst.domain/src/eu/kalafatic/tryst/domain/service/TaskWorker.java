@@ -1,8 +1,8 @@
 package eu.kalafatic.tryst.domain.service;
 
 import eu.kalafatic.tryst.core.log.TrystLog;
-import eu.kalafatic.tryst.domain.ai.AiContextManager;
-import eu.kalafatic.tryst.domain.ai.AiInferenceService;
+import eu.kalafatic.tryst.domain.ai.*;
+import eu.kalafatic.tryst.domain.github.GitHubService;
 import eu.kalafatic.tryst.domain.model.ConversationMessage;
 import eu.kalafatic.tryst.domain.model.ExecutionResult;
 import eu.kalafatic.tryst.domain.model.Project;
@@ -18,18 +18,26 @@ import eu.kalafatic.tryst.domain.security.PermissionManager;
 import eu.kalafatic.tryst.domain.tool.Tool;
 import eu.kalafatic.tryst.domain.tool.ToolRegistry;
 
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Optional;
+import java.nio.file.Path;
+import java.util.*;
 import java.util.concurrent.Callable;
 
 /**
  * Worker execution engine executing long-running autonomous development tasks.
- * Advances tasks through explicit lifecycle stages:
- * CLONING -> ANALYZING -> PLANNING -> IMPLEMENTING -> BUILDING -> TESTING -> WAITING_FOR_REVIEW.
- * Respects cancellation tokens and workspace isolation.
+ * Follows the 10-step autonomous development workflow:
+ * 1. Analyze the user request (TaskAnalyzer).
+ * 2. Inspect repository structure & identify source files.
+ * 3. Analyze dependencies and existing conventions.
+ * 4. Generate an implementation plan (ImplementationPlanner).
+ * 5. Execute changes incrementally (CodeAgent, CodeChangeExecutor).
+ * 6. Track every modified file.
+ * 7. Run build verification (ResultValidator).
+ * 8. Run relevant test verification (ResultValidator).
+ * 9. Persist analysis, implementation plans, execution events and results.
+ * 10. Produce a reviewable result with diff for WAITING_FOR_REVIEW.
+ *
+ * Enforces workspace isolation, timeouts, streaming diagnostics, cancellation,
+ * and retry policies.
  */
 public class TaskWorker implements Callable<ExecutionResult> {
 
@@ -37,13 +45,90 @@ public class TaskWorker implements Callable<ExecutionResult> {
     private final TaskLifecycleManager lifecycleManager;
     private final ToolRegistry toolRegistry;
     private final PermissionManager permissionManager;
-    private final AiInferenceService aiClient;
-    private final AiContextManager aiContextManager;
+    private final AIProvider aiProvider;
+    private final PromptContextBuilder promptContextBuilder;
+    private final TaskAnalyzer taskAnalyzer;
+    private final ImplementationPlanner implementationPlanner;
+    private final CodeChangeExecutor codeChangeExecutor;
+    private final ResultValidator resultValidator;
+    private final CodeAgent codeAgent;
     private final ConversationMessageRepository messageRepository;
     private final ExecutionResultRepository executionResultRepository;
     private final CodeReviewRepository codeReviewRepository;
     private final CodeReviewService codeReviewService;
-    private eu.kalafatic.tryst.domain.github.GitHubService gitHubService;
+    private GitHubService gitHubService;
+
+    public TaskWorker(
+            TaskExecutionContext context,
+            TaskLifecycleManager lifecycleManager,
+            ToolRegistry toolRegistry,
+            PermissionManager permissionManager,
+            AIProvider aiProvider,
+            PromptContextBuilder promptContextBuilder,
+            TaskAnalyzer taskAnalyzer,
+            ImplementationPlanner implementationPlanner,
+            CodeChangeExecutor codeChangeExecutor,
+            ResultValidator resultValidator,
+            CodeAgent codeAgent,
+            ConversationMessageRepository messageRepository,
+            ExecutionResultRepository executionResultRepository,
+            CodeReviewRepository codeReviewRepository,
+            CodeReviewService codeReviewService,
+            GitHubService gitHubService
+    ) {
+        this.context = Objects.requireNonNull(context, "context must not be null");
+        this.lifecycleManager = Objects.requireNonNull(lifecycleManager, "lifecycleManager must not be null");
+        this.toolRegistry = toolRegistry;
+        this.permissionManager = permissionManager != null ? permissionManager : new PermissionManager();
+        this.aiProvider = aiProvider;
+        this.promptContextBuilder = promptContextBuilder != null ? promptContextBuilder : new PromptContextBuilder();
+        this.taskAnalyzer = taskAnalyzer != null ? taskAnalyzer : new TaskAnalyzer(this.permissionManager);
+        this.implementationPlanner = implementationPlanner != null ? implementationPlanner : new ImplementationPlanner();
+        this.codeChangeExecutor = codeChangeExecutor != null ? codeChangeExecutor : new CodeChangeExecutor(this.toolRegistry, this.permissionManager);
+        this.resultValidator = resultValidator != null ? resultValidator : new ResultValidator(this.toolRegistry, this.permissionManager);
+        this.codeAgent = codeAgent != null ? codeAgent : new CodeAgent(this.aiProvider, this.promptContextBuilder, this.codeChangeExecutor);
+        this.messageRepository = messageRepository;
+        this.executionResultRepository = executionResultRepository;
+        this.codeReviewRepository = codeReviewRepository;
+        this.codeReviewService = codeReviewService;
+        this.gitHubService = gitHubService;
+    }
+
+    /**
+     * Backward-compatible constructor for existing callers and legacy tests.
+     */
+    public TaskWorker(
+            TaskExecutionContext context,
+            TaskLifecycleManager lifecycleManager,
+            ToolRegistry toolRegistry,
+            PermissionManager permissionManager,
+            AiInferenceService aiClient,
+            AiContextManager aiContextManager,
+            ConversationMessageRepository messageRepository,
+            ExecutionResultRepository executionResultRepository,
+            CodeReviewRepository codeReviewRepository,
+            CodeReviewService codeReviewService,
+            GitHubService gitHubService
+    ) {
+        this(
+                context,
+                lifecycleManager,
+                toolRegistry,
+                permissionManager,
+                (aiClient instanceof AIProvider provider) ? provider : (aiClient != null ? new LegacyAiProviderAdapter(aiClient) : null),
+                aiContextManager != null ? new PromptContextBuilder(4096) : null,
+                new TaskAnalyzer(permissionManager != null ? permissionManager : new PermissionManager()),
+                new ImplementationPlanner(),
+                new CodeChangeExecutor(toolRegistry, permissionManager != null ? permissionManager : new PermissionManager()),
+                new ResultValidator(toolRegistry, permissionManager != null ? permissionManager : new PermissionManager()),
+                null,
+                messageRepository,
+                executionResultRepository,
+                codeReviewRepository,
+                codeReviewService,
+                gitHubService
+        );
+    }
 
     public TaskWorker(
             TaskExecutionContext context,
@@ -61,33 +146,7 @@ public class TaskWorker implements Callable<ExecutionResult> {
                 messageRepository, executionResultRepository, codeReviewRepository, codeReviewService, null);
     }
 
-    public TaskWorker(
-            TaskExecutionContext context,
-            TaskLifecycleManager lifecycleManager,
-            ToolRegistry toolRegistry,
-            PermissionManager permissionManager,
-            AiInferenceService aiClient,
-            AiContextManager aiContextManager,
-            ConversationMessageRepository messageRepository,
-            ExecutionResultRepository executionResultRepository,
-            CodeReviewRepository codeReviewRepository,
-            CodeReviewService codeReviewService,
-            eu.kalafatic.tryst.domain.github.GitHubService gitHubService
-    ) {
-        this.context = Objects.requireNonNull(context, "context must not be null");
-        this.lifecycleManager = Objects.requireNonNull(lifecycleManager, "lifecycleManager must not be null");
-        this.toolRegistry = toolRegistry;
-        this.permissionManager = permissionManager;
-        this.aiClient = aiClient;
-        this.aiContextManager = aiContextManager;
-        this.messageRepository = messageRepository;
-        this.executionResultRepository = executionResultRepository;
-        this.codeReviewRepository = codeReviewRepository;
-        this.codeReviewService = codeReviewService;
-        this.gitHubService = gitHubService;
-    }
-
-    public void setGitHubService(eu.kalafatic.tryst.domain.github.GitHubService gitHubService) {
+    public void setGitHubService(GitHubService gitHubService) {
         this.gitHubService = gitHubService;
     }
 
@@ -96,6 +155,7 @@ public class TaskWorker implements Callable<ExecutionResult> {
         Task task = context.getTask();
         long startTime = System.currentTimeMillis();
         StringBuilder logBuilder = new StringBuilder();
+        AiFailureClassification failureClass = AiFailureClassification.NONE;
 
         try {
             // Stage 1: CLONING / Workspace verification & remote GitHub clone/fetch
@@ -105,45 +165,72 @@ public class TaskWorker implements Callable<ExecutionResult> {
 
             performRepositoryCloningStage(task, logBuilder);
 
-            // Stage 2: ANALYZING
+            // Stage 2: ANALYZING (Analyze request, inspect repo, identify relevant source files, analyze conventions)
             checkCancelled();
             lifecycleManager.transition(task, TaskStatus.ANALYZING, "Analyzing project code base and requirements", null);
             logBuilder.append("[Worker ").append(context.getWorkerId()).append("] Stage: ANALYZING\n");
 
-            // Stage 3: PLANNING
+            TaskAnalyzer.AnalysisResult analysis = taskAnalyzer.analyze(task, context.getWorkspace());
+            logBuilder.append("[Analysis]: ").append(analysis.summary()).append("\n");
+            for (String conv : analysis.discoveredConventions()) {
+                logBuilder.append("  - Convention: ").append(conv).append("\n");
+            }
+            for (Path rel : analysis.identifiedFiles()) {
+                logBuilder.append("  - Identified file: ").append(rel).append("\n");
+            }
+
+            // Stage 3: PLANNING (Generate structured implementation plan)
             checkCancelled();
             lifecycleManager.transition(task, TaskStatus.PLANNING, "Formulating autonomous execution plan", null);
             logBuilder.append("[Worker ").append(context.getWorkerId()).append("] Stage: PLANNING\n");
 
-            // Stage 4: IMPLEMENTING
+            ImplementationPlanner.ExecutionPlan plan = implementationPlanner.createPlan(task, analysis, context.getWorkspace());
+            logBuilder.append("[Plan Goal]: ").append(plan.goal()).append("\n");
+            for (ImplementationPlanner.PlanStep step : plan.steps()) {
+                logBuilder.append("  Step ").append(step.order()).append(": ").append(step.description()).append("\n");
+            }
+
+            // Stage 4: IMPLEMENTING (Execute changes incrementally and track modified files)
             checkCancelled();
             lifecycleManager.transition(task, TaskStatus.IMPLEMENTING, "Executing AI inference and modifying files", null);
             logBuilder.append("[Worker ").append(context.getWorkerId()).append("] Stage: IMPLEMENTING\n");
 
-            executeAgentImplementationLoop(task, logBuilder);
+            executeAgentImplementationLoop(task, analysis, plan, logBuilder);
 
-            // Stage 5: BUILDING
+            Set<Path> modified = codeChangeExecutor.getModifiedFiles();
+            logBuilder.append("[Tracked Modifications]: ").append(modified.size()).append(" files modified\n");
+            for (Path p : modified) {
+                logBuilder.append("  * ").append(p).append("\n");
+            }
+
+            // Stage 5: BUILDING (Run build verification)
             checkCancelled();
             lifecycleManager.transition(task, TaskStatus.BUILDING, "Compiling modified codebase", null);
             logBuilder.append("[Worker ").append(context.getWorkerId()).append("] Stage: BUILDING\n");
-            boolean buildPassed = executeBuildStage(logBuilder);
-            if (!buildPassed) {
-                throw new IllegalStateException("Build failed during task execution");
-            }
 
-            // Stage 6: TESTING
+            ResultValidator.ValidationReport validation = resultValidator.validate(context.getWorkspace());
+            if (!validation.buildSuccess()) {
+                failureClass = AiFailureClassification.BUILD_FAILURE;
+                throw new IllegalStateException("Build failed during task execution: " + validation.details());
+            }
+            logBuilder.append("[Build Passed]: Compiler verified successfully.\n");
+
+            // Stage 6: TESTING (Run test verification)
             checkCancelled();
             lifecycleManager.transition(task, TaskStatus.TESTING, "Executing project tests and verification", null);
             logBuilder.append("[Worker ").append(context.getWorkerId()).append("] Stage: TESTING\n");
-            boolean testsPassed = executeTestStage(logBuilder);
-            if (!testsPassed) {
-                throw new IllegalStateException("Tests failed during task verification");
-            }
 
-            // Stage 7: Produce diff and transition to WAITING_FOR_REVIEW
+            if (!validation.testSuccess()) {
+                failureClass = AiFailureClassification.TEST_FAILURE;
+                throw new IllegalStateException("Tests failed during task verification: " + validation.details());
+            }
+            logBuilder.append("[Tests Passed]: Test suite verified successfully.\n");
+
+            // Stage 7: Produce reviewable result with diff for WAITING_FOR_REVIEW
             checkCancelled();
             String diff = extractWorkspaceDiff();
-            logBuilder.append("[Worker ").append(context.getWorkerId()).append("] Extracted workspace diff (").append(diff.length()).append(" chars)\n");
+            logBuilder.append("[Worker ").append(context.getWorkerId()).append("] Extracted workspace diff (")
+                    .append(diff.length()).append(" chars)\n");
 
             CodeReview review = null;
             if (codeReviewRepository != null) {
@@ -151,7 +238,7 @@ public class TaskWorker implements Callable<ExecutionResult> {
                 review = new CodeReview(
                         projectId,
                         task.getId(),
-                        "main",
+                        context.getWorkspace() != null ? context.getWorkspace().getBranch() : "main",
                         diff,
                         "SUCCESS",
                         "Automated build and tests passed successfully"
@@ -169,20 +256,27 @@ public class TaskWorker implements Callable<ExecutionResult> {
 
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            failureClass = AiFailureClassification.CANCELLATION;
             lifecycleManager.transition(task, TaskStatus.CANCELLED, "Worker thread interrupted", e.getMessage());
             logBuilder.append("\n[Execution Interrupted/Cancelled]\n");
         } catch (TaskCancelledException e) {
+            failureClass = AiFailureClassification.CANCELLATION;
             lifecycleManager.transition(task, TaskStatus.CANCELLED, "Execution cancelled by user", e.getMessage());
             logBuilder.append("\n[Execution Cancelled by User]\n");
         } catch (Exception e) {
             TrystLog.error(TaskWorker.class, "Task " + task.getId() + " failed: " + e.getMessage(), e);
-            lifecycleManager.transition(task, TaskStatus.FAILED, "Execution error: " + e.getMessage(), e.toString());
-            logBuilder.append("\n[Execution Failure]: ").append(e.getMessage()).append("\n");
+            if (failureClass == AiFailureClassification.NONE) {
+                failureClass = AiFailureClassification.UNCLASSIFIED_ERROR;
+            }
+            lifecycleManager.transition(task, TaskStatus.FAILED, "Execution error: " + e.getMessage(),
+                    "Classification: " + failureClass + "\n" + e.toString());
+            logBuilder.append("\n[Execution Failure - ").append(failureClass).append("]: ").append(e.getMessage()).append("\n");
         }
 
         long duration = System.currentTimeMillis() - startTime;
         int exitCode = (task.getStatus() == TaskStatus.WAITING_FOR_REVIEW || task.getStatus() == TaskStatus.COMPLETED) ? 0 : 1;
-        ExecutionResult result = new ExecutionResult(task.getId(), exitCode, logBuilder.toString(), "", duration);
+        ExecutionResult result = new ExecutionResult(task.getId(), exitCode, logBuilder.toString(),
+                failureClass != AiFailureClassification.NONE ? failureClass.name() : "", duration);
 
         if (executionResultRepository != null) {
             executionResultRepository.save(result);
@@ -221,9 +315,14 @@ public class TaskWorker implements Callable<ExecutionResult> {
         }
     }
 
-    private void executeAgentImplementationLoop(Task task, StringBuilder log) throws Exception {
-        if (aiClient == null || aiContextManager == null) {
-            log.append("No AI inference service configured; skipping simulated prompt loop.\n");
+    private void executeAgentImplementationLoop(
+            Task task,
+            TaskAnalyzer.AnalysisResult analysis,
+            ImplementationPlanner.ExecutionPlan plan,
+            StringBuilder log
+    ) throws Exception {
+        if (aiProvider == null) {
+            log.append("No AI provider configured; skipping simulated prompt loop.\n");
             return;
         }
 
@@ -234,97 +333,34 @@ public class TaskWorker implements Callable<ExecutionResult> {
         Workspace ws = context.getWorkspace();
         Project proj = context.getProject();
 
-        String instructions = aiContextManager.buildSystemInstructions(ws, proj) +
-                (toolRegistry != null ? "\n" + toolRegistry.generateToolHelp() : "");
+        String toolHelp = toolRegistry != null ? toolRegistry.generateToolHelp() : "";
+        String instructions = promptContextBuilder.buildSystemInstructions(ws, proj, toolHelp);
 
-        List<AiInferenceService.ChatMessage> prompt = aiContextManager.assembleConversationContext(
+        String prompt = task.getTitle() + "\n" + (task.getDescription() != null ? task.getDescription() : "");
+
+        CodeAgent.AgentExecutionResult res = codeAgent.runStep(
+                task,
+                ws,
                 instructions,
                 history,
-                task.getTitle() + "\n" + task.getDescription(),
-                proj
+                prompt,
+                context.getModelName(),
+                chunk -> log.append(chunk),
+                () -> {
+                    try {
+                        checkCancelled();
+                    } catch (TaskCancelledException e) {
+                        throw new java.util.concurrent.CancellationException(e.getMessage());
+                    }
+                }
         );
 
-        AiInferenceService.InferenceRequest req = new AiInferenceService.InferenceRequest(context.getModelName(), prompt);
-        try {
-            AiInferenceService.InferenceResponse resp = aiClient.generateResponse(req).join();
-            String content = resp.content();
-            log.append(content).append("\n");
-
-            // Execute tools if requested
-            if (toolRegistry != null && ws != null) {
-                for (String line : content.split("\n")) {
-                    if (line.trim().startsWith("TOOL:")) {
-                        checkCancelled();
-                        executeToolCommand(line.trim().substring("TOOL:".length()).trim(), ws, log);
-                    }
-                }
+        if (!res.success()) {
+            if (res.failureClassification() == AiFailureClassification.CANCELLATION) {
+                throw new TaskCancelledException("Task was cancelled during AI inference");
             }
-        } catch (Exception e) {
-            log.append("AI prompt execution error: ").append(e.getMessage()).append("\n");
+            log.append("[Agent step issue]: ").append(res.errorMessage()).append("\n");
         }
-    }
-
-    private void executeToolCommand(String toolCommand, Workspace ws, StringBuilder log) {
-        int space = toolCommand.indexOf(' ');
-        String name = space > 0 ? toolCommand.substring(0, space) : toolCommand;
-        Optional<Tool> optTool = toolRegistry.getTool(name);
-        if (optTool.isEmpty()) {
-            log.append("[Tool not found: ").append(name).append("]\n");
-            return;
-        }
-
-        Map<String, String> params = new HashMap<>();
-        if (space > 0) {
-            String remainder = toolCommand.substring(space + 1);
-            String[] tokens = remainder.split("(?=PARAM:)");
-            for (String tok : tokens) {
-                tok = tok.trim();
-                if (tok.startsWith("PARAM:")) {
-                    String kv = tok.substring("PARAM:".length());
-                    int eq = kv.indexOf('=');
-                    if (eq > 0) {
-                        params.put(kv.substring(0, eq).trim(), kv.substring(eq + 1).trim());
-                    }
-                }
-            }
-        }
-
-        Tool.ToolResult res = optTool.get().execute(params, ws, permissionManager);
-        if (res.success()) {
-            log.append("[Tool ").append(name).append(" Result]: ").append(res.output()).append("\n");
-        } else {
-            log.append("[Tool ").append(name).append(" Failed]: ").append(res.error()).append("\n");
-        }
-    }
-
-    private boolean executeBuildStage(StringBuilder log) {
-        if (context.getWorkspace() == null) {
-            log.append("[Build]: No active workspace to compile; build stage skipped successfully.\n");
-            return true;
-        }
-        Optional<Tool> mvnTool = (toolRegistry != null) ? toolRegistry.getTool("maven_compile") : Optional.empty();
-        if (mvnTool.isPresent()) {
-            Tool.ToolResult res = mvnTool.get().execute(Map.of(), context.getWorkspace(), permissionManager);
-            log.append("[Build output]: ").append(res.output()).append("\n");
-            return res.success();
-        }
-        log.append("[Build]: Compiler verified.\n");
-        return true;
-    }
-
-    private boolean executeTestStage(StringBuilder log) {
-        if (context.getWorkspace() == null) {
-            log.append("[Test]: No active workspace to test; verification stage skipped successfully.\n");
-            return true;
-        }
-        Optional<Tool> testTool = (toolRegistry != null) ? toolRegistry.getTool("maven_test") : Optional.empty();
-        if (testTool.isPresent()) {
-            Tool.ToolResult res = testTool.get().execute(Map.of(), context.getWorkspace(), permissionManager);
-            log.append("[Test output]: ").append(res.output()).append("\n");
-            return res.success();
-        }
-        log.append("[Test]: Verification suite verified.\n");
-        return true;
     }
 
     private String extractWorkspaceDiff() {
@@ -344,6 +380,54 @@ public class TaskWorker implements Callable<ExecutionResult> {
     public static class TaskCancelledException extends Exception {
         public TaskCancelledException(String message) {
             super(message);
+        }
+    }
+
+    private static class LegacyAiProviderAdapter implements AIProvider {
+        private final AiInferenceService delegate;
+
+        LegacyAiProviderAdapter(AiInferenceService delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public String getProviderId() {
+            return "legacy-adapter";
+        }
+
+        @Override
+        public java.util.concurrent.CompletableFuture<Boolean> checkConnection() {
+            return delegate.checkConnection();
+        }
+
+        @Override
+        public java.util.concurrent.CompletableFuture<List<ProviderModelMetadata>> listAvailableModels() {
+            return delegate.listModels().thenApply(list -> list.stream()
+                    .map(m -> new ProviderModelMetadata(m.name(), m.sizeBytes(), m.modifiedAt(), m.format(), m.family(), m.parameterSize()))
+                    .toList());
+        }
+
+        @Override
+        public java.util.concurrent.CompletableFuture<InferenceResponse> generateResponse(InferenceRequest request) {
+            List<AiInferenceService.ChatMessage> msgs = request.messages().stream()
+                    .map(m -> new AiInferenceService.ChatMessage(m.role(), m.content()))
+                    .toList();
+            AiInferenceService.InferenceRequest req = new AiInferenceService.InferenceRequest(
+                    request.model(), msgs, request.temperature(), request.maxTokens(), request.extraParameters()
+            );
+            return delegate.generateResponse(req).thenApply(res ->
+                    new InferenceResponse(res.content(), res.finishReason(), res.durationMs(), res.promptEvalCount(), res.evalCount()));
+        }
+
+        @Override
+        public java.util.concurrent.CompletableFuture<Void> streamResponse(InferenceRequest request, java.util.function.Consumer<String> chunkConsumer) {
+            List<AiInferenceService.ChatMessage> msgs = request.messages().stream()
+                    .map(m -> new AiInferenceService.ChatMessage(m.role(), m.content()))
+                    .toList();
+            AiInferenceService.InferenceRequest req = new AiInferenceService.InferenceRequest(
+                    request.model(), msgs, request.temperature(), request.maxTokens(), request.extraParameters()
+            );
+            return delegate.streamResponse(req, chunkConsumer);
         }
     }
 }

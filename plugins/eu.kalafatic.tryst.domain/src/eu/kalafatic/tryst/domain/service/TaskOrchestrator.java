@@ -2,8 +2,7 @@ package eu.kalafatic.tryst.domain.service;
 
 import eu.kalafatic.tryst.core.error.TrystDomainException;
 import eu.kalafatic.tryst.core.log.TrystLog;
-import eu.kalafatic.tryst.domain.ai.AiContextManager;
-import eu.kalafatic.tryst.domain.ai.AiInferenceService;
+import eu.kalafatic.tryst.domain.ai.*;
 import eu.kalafatic.tryst.domain.model.Project;
 import eu.kalafatic.tryst.domain.model.Task;
 import eu.kalafatic.tryst.domain.model.TaskPriority;
@@ -43,8 +42,15 @@ public class TaskOrchestrator {
     private final ProjectRepository projectRepository;
     private final ToolRegistry toolRegistry;
     private final PermissionManager permissionManager;
+    private final AIProvider aiProvider;
     private final AiInferenceService aiClient;
     private final AiContextManager aiContextManager;
+    private final ModelSelectionService modelSelectionService;
+    private final PromptContextBuilder promptContextBuilder;
+    private final TaskAnalyzer taskAnalyzer;
+    private final ImplementationPlanner implementationPlanner;
+    private final CodeChangeExecutor codeChangeExecutor;
+    private final ResultValidator resultValidator;
     private final ConversationMessageRepository messageRepository;
     private final ExecutionResultRepository executionResultRepository;
     private final CodeReviewRepository codeReviewRepository;
@@ -81,9 +87,22 @@ public class TaskOrchestrator {
         this.workspaceService = workspaceService;
         this.projectRepository = projectRepository;
         this.toolRegistry = toolRegistry;
-        this.permissionManager = permissionManager;
+        this.permissionManager = permissionManager != null ? permissionManager : new PermissionManager();
         this.aiClient = aiClient;
+        if (aiClient instanceof AIProvider provider) {
+            this.aiProvider = provider;
+        } else if (aiClient != null) {
+            this.aiProvider = new LegacyAiProviderAdapter(aiClient);
+        } else {
+            this.aiProvider = null;
+        }
         this.aiContextManager = aiContextManager;
+        this.modelSelectionService = new ModelSelectionService(new AiModelRegistryService());
+        this.promptContextBuilder = new PromptContextBuilder(4096);
+        this.taskAnalyzer = new TaskAnalyzer(this.permissionManager);
+        this.implementationPlanner = new ImplementationPlanner();
+        this.codeChangeExecutor = new CodeChangeExecutor(toolRegistry, this.permissionManager);
+        this.resultValidator = new ResultValidator(toolRegistry, this.permissionManager);
         this.messageRepository = messageRepository;
         this.executionResultRepository = executionResultRepository;
         this.codeReviewRepository = codeReviewRepository;
@@ -288,16 +307,24 @@ public class TaskOrchestrator {
         }
 
         String userId = project != null ? project.getOwnerId() : "default-user";
-        TaskExecutionContext context = new TaskExecutionContext(task, project, workspace, userId, workerId, "deepseek-coder:6.7b");
+        String resolvedModel = modelSelectionService.selectModel(task, null, eu.kalafatic.tryst.domain.model.UserRole.USER);
+        TaskExecutionContext context = new TaskExecutionContext(task, project, workspace, userId, workerId, resolvedModel);
         activeContexts.put(task.getId(), context);
+
+        CodeAgent codeAgent = new CodeAgent(aiProvider, promptContextBuilder, codeChangeExecutor);
 
         TaskWorker worker = new TaskWorker(
                 context,
                 lifecycleManager,
                 toolRegistry,
                 permissionManager,
-                aiClient,
-                aiContextManager,
+                aiProvider,
+                promptContextBuilder,
+                taskAnalyzer,
+                implementationPlanner,
+                codeChangeExecutor,
+                resultValidator,
+                codeAgent,
                 messageRepository,
                 executionResultRepository,
                 codeReviewRepository,
@@ -318,5 +345,53 @@ public class TaskOrchestrator {
         });
 
         activeFutures.put(task.getId(), future);
+    }
+
+    private static class LegacyAiProviderAdapter implements AIProvider {
+        private final AiInferenceService delegate;
+
+        LegacyAiProviderAdapter(AiInferenceService delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public String getProviderId() {
+            return "legacy-orchestrator-adapter";
+        }
+
+        @Override
+        public java.util.concurrent.CompletableFuture<Boolean> checkConnection() {
+            return delegate.checkConnection();
+        }
+
+        @Override
+        public java.util.concurrent.CompletableFuture<List<ProviderModelMetadata>> listAvailableModels() {
+            return delegate.listModels().thenApply(list -> list.stream()
+                    .map(m -> new ProviderModelMetadata(m.name(), m.sizeBytes(), m.modifiedAt(), m.format(), m.family(), m.parameterSize()))
+                    .toList());
+        }
+
+        @Override
+        public java.util.concurrent.CompletableFuture<InferenceResponse> generateResponse(InferenceRequest request) {
+            List<AiInferenceService.ChatMessage> msgs = request.messages().stream()
+                    .map(m -> new AiInferenceService.ChatMessage(m.role(), m.content()))
+                    .toList();
+            AiInferenceService.InferenceRequest req = new AiInferenceService.InferenceRequest(
+                    request.model(), msgs, request.temperature(), request.maxTokens(), request.extraParameters()
+            );
+            return delegate.generateResponse(req).thenApply(res ->
+                    new InferenceResponse(res.content(), res.finishReason(), res.durationMs(), res.promptEvalCount(), res.evalCount()));
+        }
+
+        @Override
+        public java.util.concurrent.CompletableFuture<Void> streamResponse(InferenceRequest request, java.util.function.Consumer<String> chunkConsumer) {
+            List<AiInferenceService.ChatMessage> msgs = request.messages().stream()
+                    .map(m -> new AiInferenceService.ChatMessage(m.role(), m.content()))
+                    .toList();
+            AiInferenceService.InferenceRequest req = new AiInferenceService.InferenceRequest(
+                    request.model(), msgs, request.temperature(), request.maxTokens(), request.extraParameters()
+            );
+            return delegate.streamResponse(req, chunkConsumer);
+        }
     }
 }

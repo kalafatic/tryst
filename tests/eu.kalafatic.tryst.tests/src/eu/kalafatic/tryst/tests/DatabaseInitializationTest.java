@@ -18,7 +18,7 @@ class DatabaseInitializationTest {
             dbManager.initialize();
             SchemaMigrationService migration = new SchemaMigrationService(dbManager);
             migration.migrate();
-            assertEquals(6, migration.getCurrentVersion());
+            assertEquals(7, migration.getCurrentVersion());
         }
     }
 
@@ -31,7 +31,7 @@ class DatabaseInitializationTest {
             dbManager.initialize();
             SchemaMigrationService migration = new SchemaMigrationService(dbManager);
             migration.migrate();
-            assertEquals(6, migration.getCurrentVersion());
+            assertEquals(7, migration.getCurrentVersion());
         }
 
         // Second startup - reopen same DB
@@ -39,7 +39,7 @@ class DatabaseInitializationTest {
             dbManager.initialize();
             SchemaMigrationService migration = new SchemaMigrationService(dbManager);
             migration.migrate(); // Should safely do nothing
-            assertEquals(6, migration.getCurrentVersion());
+            assertEquals(7, migration.getCurrentVersion());
         }
     }
 }
