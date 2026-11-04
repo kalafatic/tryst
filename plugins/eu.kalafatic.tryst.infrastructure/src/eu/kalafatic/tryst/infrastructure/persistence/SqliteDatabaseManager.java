@@ -81,6 +81,65 @@ public class SqliteDatabaseManager implements UnitOfWork, AutoCloseable {
         }
     }
 
+    /**
+     * Executes comprehensive consistency checks: integrity check, quick check, and foreign key verification.
+     */
+    public boolean verifyDatabaseConsistency() {
+        synchronized (dbLock) {
+            Connection conn = getConnection();
+            // 1. Foreign Key Constraints check
+            try (Statement stmt = conn.createStatement();
+                 var rs = stmt.executeQuery("PRAGMA foreign_key_check;")) {
+                if (rs.next()) {
+                    String table = rs.getString(1);
+                    long rowid = rs.getLong(2);
+                    String target = rs.getString(3);
+                    int fkid = rs.getInt(4);
+                    String error = String.format("Foreign key constraint violation in table '%s' rowid %d -> target '%s' (fkid %d)",
+                            table, rowid, target, fkid);
+                    TrystLog.error(SqliteDatabaseManager.class, error);
+                    throw new TrystInfrastructureException(error);
+                }
+            } catch (SQLException e) {
+                throw new TrystInfrastructureException("Failed to verify foreign_key_check", e);
+            }
+
+            // 2. Quick check
+            try (Statement stmt = conn.createStatement();
+                 var rs = stmt.executeQuery("PRAGMA quick_check;")) {
+                if (rs.next()) {
+                    String res = rs.getString(1);
+                    if (!"ok".equalsIgnoreCase(res)) {
+                        throw new TrystInfrastructureException("PRAGMA quick_check failed: " + res);
+                    }
+                }
+            } catch (SQLException e) {
+                throw new TrystInfrastructureException("Failed to verify quick_check", e);
+            }
+
+            // 3. Full integrity check
+            return verifyDatabaseIntegrity(conn);
+        }
+    }
+
+    /**
+     * Executes an explicit WAL checkpoint to flush pending transactions from WAL into main database file.
+     */
+    public void checkpointWal(String mode) {
+        synchronized (dbLock) {
+            String checkpointMode = (mode != null && !mode.isBlank()) ? mode.trim().toUpperCase() : "PASSIVE";
+            if (!java.util.Set.of("PASSIVE", "FULL", "RESTART", "TRUNCATE").contains(checkpointMode)) {
+                throw new IllegalArgumentException("Invalid SQLite wal_checkpoint mode: " + mode);
+            }
+            try (Statement stmt = getConnection().createStatement()) {
+                stmt.execute("PRAGMA wal_checkpoint(" + checkpointMode + ");");
+                TrystLog.info(SqliteDatabaseManager.class, "Executed PRAGMA wal_checkpoint(" + checkpointMode + ")");
+            } catch (SQLException e) {
+                throw new TrystInfrastructureException("Failed to execute wal_checkpoint(" + checkpointMode + ")", e);
+            }
+        }
+    }
+
     private void configureConnectionPragmas(Connection conn) throws SQLException {
         try (Statement stmt = conn.createStatement()) {
             // Enable foreign keys

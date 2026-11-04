@@ -58,6 +58,7 @@ public class TaskWorker implements Callable<ExecutionResult> {
     private final CodeReviewService codeReviewService;
     private GitHubService gitHubService;
     private NotificationService notificationService;
+    private TaskRecoveryService taskRecoveryService;
 
     public TaskWorker(
             TaskExecutionContext context,
@@ -181,6 +182,16 @@ public class TaskWorker implements Callable<ExecutionResult> {
         this.notificationService = notificationService;
     }
 
+    public void setTaskRecoveryService(TaskRecoveryService taskRecoveryService) {
+        this.taskRecoveryService = taskRecoveryService;
+    }
+
+    private void recordRecoveryCheckpoint(Task task, TaskStatus stage, String data) {
+        if (taskRecoveryService != null) {
+            taskRecoveryService.recordCheckpoint(task.getId(), stage, data);
+        }
+    }
+
     @Override
     public ExecutionResult call() {
         Task task = context.getTask();
@@ -202,6 +213,7 @@ public class TaskWorker implements Callable<ExecutionResult> {
             checkCancelled();
             if (task.getStatus() == TaskStatus.QUEUED || task.getStatus() == TaskStatus.CLAIMED) {
                 lifecycleManager.transition(task, TaskStatus.CLONING, "Verifying project repository and workspace structure", null);
+                recordRecoveryCheckpoint(task, TaskStatus.CLONING, "{\"stage\":\"CLONING\",\"worker\":\"" + context.getWorkerId() + "\"}");
             }
             logBuilder.append("[Worker ").append(context.getWorkerId()).append("] Stage: CLONING\n");
 
@@ -210,6 +222,7 @@ public class TaskWorker implements Callable<ExecutionResult> {
             // Stage 2: ANALYZING (Analyze request, inspect repo, identify relevant source files, analyze conventions)
             checkCancelled();
             lifecycleManager.transition(task, TaskStatus.ANALYZING, "Analyzing project code base and requirements", null);
+            recordRecoveryCheckpoint(task, TaskStatus.ANALYZING, "{\"stage\":\"ANALYZING\"}");
             logBuilder.append("[Worker ").append(context.getWorkerId()).append("] Stage: ANALYZING\n");
 
             TaskAnalyzer.AnalysisResult analysis = taskAnalyzer.analyze(task, context.getWorkspace());
@@ -224,6 +237,7 @@ public class TaskWorker implements Callable<ExecutionResult> {
             // Stage 3: PLANNING (Generate structured implementation plan)
             checkCancelled();
             lifecycleManager.transition(task, TaskStatus.PLANNING, "Formulating autonomous execution plan", null);
+            recordRecoveryCheckpoint(task, TaskStatus.PLANNING, "{\"stage\":\"PLANNING\"}");
             logBuilder.append("[Worker ").append(context.getWorkerId()).append("] Stage: PLANNING\n");
 
             ImplementationPlanner.ExecutionPlan plan = implementationPlanner.createPlan(task, analysis, context.getWorkspace());
@@ -235,6 +249,7 @@ public class TaskWorker implements Callable<ExecutionResult> {
             // Stage 4: IMPLEMENTING (Execute changes incrementally and track modified files)
             checkCancelled();
             lifecycleManager.transition(task, TaskStatus.IMPLEMENTING, "Executing AI inference and modifying files", null);
+            recordRecoveryCheckpoint(task, TaskStatus.IMPLEMENTING, "{\"stage\":\"IMPLEMENTING\",\"goal\":\"" + plan.goal().replace("\"", "\\\"") + "\"}");
             logBuilder.append("[Worker ").append(context.getWorkerId()).append("] Stage: IMPLEMENTING\n");
 
             executeAgentImplementationLoop(task, analysis, plan, logBuilder);
@@ -248,6 +263,7 @@ public class TaskWorker implements Callable<ExecutionResult> {
             // Stage 5: BUILDING (Run build verification)
             checkCancelled();
             lifecycleManager.transition(task, TaskStatus.BUILDING, "Compiling modified codebase", null);
+            recordRecoveryCheckpoint(task, TaskStatus.BUILDING, "{\"stage\":\"BUILDING\",\"modifiedCount\":" + modified.size() + "}");
             logBuilder.append("[Worker ").append(context.getWorkerId()).append("] Stage: BUILDING\n");
 
             ResultValidator.ValidationReport validation = resultValidator.validate(context.getWorkspace());
@@ -260,6 +276,7 @@ public class TaskWorker implements Callable<ExecutionResult> {
             // Stage 6: TESTING (Run test verification)
             checkCancelled();
             lifecycleManager.transition(task, TaskStatus.TESTING, "Executing project tests and verification", null);
+            recordRecoveryCheckpoint(task, TaskStatus.TESTING, "{\"stage\":\"TESTING\"}");
             logBuilder.append("[Worker ").append(context.getWorkerId()).append("] Stage: TESTING\n");
 
             if (!validation.testSuccess()) {
@@ -320,6 +337,9 @@ public class TaskWorker implements Callable<ExecutionResult> {
             if (context.getWorkspace() != null) {
                 context.getWorkspace().markWaitingForReview();
             }
+
+            recordRecoveryCheckpoint(task, TaskStatus.WAITING_FOR_REVIEW,
+                    "{\"reviewId\":\"" + (review != null ? review.getId() : "") + "\",\"revision\":" + revCount + "}");
 
             lifecycleManager.transition(
                     task,

@@ -90,3 +90,23 @@ TRYST uses SQLite 3 via standard JDBC (`org.sqlite.JDBC`) without ORM overhead:
     - `idx_workspaces_owner_id`
     - `idx_workspaces_task_id`
     - `idx_workspaces_status`
+
+### 2.6 Version 7: Secure GitHub Credentials Storage (`V7`)
+- **`github_credentials`**
+  - `id` (TEXT PRIMARY KEY), `user_id` (TEXT NOT NULL UNIQUE, FK -> `users.id` ON DELETE CASCADE), `github_username` (TEXT NOT NULL), `encrypted_token` (TEXT NOT NULL), `scopes` (TEXT), `token_type` (TEXT NOT NULL DEFAULT 'pat'), `expires_at` (TEXT), `created_at` (TEXT NOT NULL), `updated_at` (TEXT NOT NULL)
+  - Indexes: `idx_github_credentials_user`, `idx_github_credentials_username`
+
+### 2.7 Version 8: Interactive Web Code Review Revisions & Comments (`V8`)
+- **`review_revisions`**
+  - `id` (TEXT PRIMARY KEY), `review_id` (TEXT NOT NULL, FK -> `code_reviews.id` ON DELETE CASCADE), `revision_number` (INTEGER NOT NULL), `diff` (TEXT), `explanation` (TEXT), `build_status` (TEXT), `test_summary` (TEXT), `created_at` (TEXT NOT NULL)
+  - Indexes: `idx_review_revisions_review_id`, `idx_review_revisions_rev_num` (UNIQUE)
+- **`review_comments`**
+  - `id` (TEXT PRIMARY KEY), `review_id` (TEXT NOT NULL, FK -> `code_reviews.id` ON DELETE CASCADE), `task_id` (TEXT NOT NULL, FK -> `tasks.id` ON DELETE CASCADE), `revision_number` (INTEGER NOT NULL), `file_path` (TEXT), `diff_side` (TEXT), `start_line` (INTEGER), `end_line` (INTEGER), `code_context` (TEXT), `comment_type` (TEXT), `content` (TEXT NOT NULL), `author_id` (TEXT), `resolved` (INTEGER DEFAULT 0), `include_in_rework` (INTEGER DEFAULT 0), `created_at` (TEXT NOT NULL), `updated_at` (TEXT NOT NULL)
+  - Indexes: `idx_review_comments_review_id`, `idx_review_comments_task_id`
+- **`code_reviews`**
+  - Columns added: `ai_explanation` (TEXT), `revision_count` (INTEGER DEFAULT 1)
+
+### 2.8 Version 9: Task Recovery Checkpoints and Granular Persistence (`V9`)
+- **`task_recovery_checkpoints`**
+  - `id` (TEXT PRIMARY KEY), `task_id` (TEXT NOT NULL, FK -> `tasks.id` ON DELETE CASCADE), `stage` (TEXT NOT NULL), `checkpoint_data` (TEXT), `created_at` (TEXT NOT NULL)
+  - Indexes: `idx_recovery_checkpoints_task`, `idx_recovery_checkpoints_created`

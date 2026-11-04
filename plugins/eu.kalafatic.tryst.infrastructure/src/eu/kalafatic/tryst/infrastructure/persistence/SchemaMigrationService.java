@@ -545,6 +545,23 @@ public class SchemaMigrationService {
         );
         migrations.add(new Migration(8, "Interactive web code review revisions and comments", v8Statements));
 
+        // V9: Task Recovery Checkpoints and Granular Persistence
+        List<String> v9Statements = List.of(
+                """
+                CREATE TABLE IF NOT EXISTS task_recovery_checkpoints (
+                    id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    stage TEXT NOT NULL,
+                    checkpoint_data TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+                );
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_recovery_checkpoints_task ON task_recovery_checkpoints(task_id);",
+                "CREATE INDEX IF NOT EXISTS idx_recovery_checkpoints_created ON task_recovery_checkpoints(created_at);"
+        );
+        migrations.add(new Migration(9, "Task recovery checkpoints and granular persistence", v9Statements));
+
         return migrations;
     }
 }
