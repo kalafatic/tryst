@@ -251,4 +251,43 @@ The audit of the codebase and implementation progress tracks the following compo
 - **Known Deviations:**
   - None. All architectural constraints, PDE configurations, and SQLite schema migrations are preserved.
 - **Recommended Next Implementation Step:**
-  - Structured JSON Tool Invocation Schema & Autonomous Self-Healing Tool Execution (Phase 9).
+  - Centralized Notification & Real-Time Communication Subsystem (Phase 9).
+
+---
+
+## 9. Completed Centralized Notification and Real-Time Communication Subsystem (Phase 9 / Current Protocol)
+
+- **Completed Requirements:**
+  - Centralized, authoritative notification dispatch independent of active browser connections.
+  - Complete coverage for all 12 asynchronous task lifecycle events:
+    1. `TASK_ACCEPTED`: Dispatched when task is submitted and queued in `TaskOrchestrator`.
+    2. `REPOSITORY_CLONED`: Dispatched in `TaskWorker` after repository environment is prepared.
+    3. `AI_ANALYSIS_COMPLETED`: Dispatched in `TaskWorker` after workspace and conventions analysis.
+    4. `IMPLEMENTATION_STARTED`: Dispatched in `TaskWorker` before incremental file modifications.
+    5. `BUILD_COMPLETED`: Dispatched in `TaskWorker` after compiler verification passes.
+    6. `TESTS_FAILED`: Dispatched in `TaskWorker` when validation fails test verification.
+    7. `REVIEW_READY`: Dispatched in `TaskWorker` when reviewable diff enters `WAITING_FOR_REVIEW`.
+    8. `REVIEW_COMMENTS_RECEIVED`: Dispatched in `TrystHttpServer` when reviewers submit feedback comments.
+    9. `REWORK_COMPLETED`: Dispatched in `TaskWorker` upon completing autonomous rework iterations.
+    10. `APPROVAL_REQUIRED`: Dispatched when human code review authorization is required before commit.
+    11. `COMMIT_COMPLETED`: Dispatched in `TrystHttpServer` upon authorized Git commit.
+    12. `TASK_FAILED`: Dispatched in `TaskWorker` on unrecoverable execution failure.
+  - Per-user notification ownership and strict multi-tenant isolation.
+  - Persistent read/unread status and unread counter queries.
+  - Sequential notification history and task-specific querying (`/api/notifications?taskId=...`).
+  - Server-side duplicate notification prevention using atomic `dedup_key` indexing and `saveIfAbsent()`.
+  - Configurable notification preferences: per-user toggle for browser notifications, in-app notifications, and granular event type filtering (`notification_preferences` table).
+  - Real-time updates via Server-Sent Events (`GET /api/notifications/stream`) with `Last-Event-ID` reconnection replay of missed notifications.
+  - Modern web UI notification bell, badge counter, dropdown panel, and native browser Notification API integration (`Notification.requestPermission()`).
+- **Modified Modules:**
+  - `eu.kalafatic.tryst.core`: `ApplicationEvents` (`NotificationBroadcastEvent`).
+  - `eu.kalafatic.tryst.domain`: `Notification`, `NotificationType`, `NotificationPreference`, `NotificationRepository`, `NotificationPreferenceRepository`, `NotificationService`, `TaskOrchestrator`, `TaskWorker`.
+  - `eu.kalafatic.tryst.infrastructure`: `SchemaMigrationService` (V10), `SqliteNotificationRepository`, `SqliteNotificationPreferenceRepository`, `TrystHttpServer`.
+  - `eu.kalafatic.tryst.application`: `ApplicationLifecycleCoordinator`.
+  - `eu.kalafatic.tryst.tests`: Added `CentralizedNotificationSubsystemTest`, updated `SchemaMigrationTest`, `DatabaseInitializationTest`, `ServerBootstrapAndNetworkingTest`.
+- **New Interfaces and Dependencies:**
+  - `NotificationPreferenceRepository`.
+- **Known Deviations:**
+  - None. All architectural constraints, PDE configurations, and SQLite schema migrations are preserved.
+- **Recommended Next Implementation Step:**
+  - Structured JSON Tool Invocation Schema & Autonomous Self-Healing Tool Execution (Phase 10).

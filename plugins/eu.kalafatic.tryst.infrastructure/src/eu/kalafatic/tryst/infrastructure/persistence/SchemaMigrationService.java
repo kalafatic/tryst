@@ -562,6 +562,30 @@ public class SchemaMigrationService {
         );
         migrations.add(new Migration(9, "Task recovery checkpoints and granular persistence", v9Statements));
 
+        // V10: Notification Preferences, Deduplication, and Sequential Reconnection Replay
+        List<String> v10Statements = List.of(
+                """
+                ALTER TABLE notifications ADD COLUMN dedup_key TEXT;
+                """,
+                """
+                ALTER TABLE notifications ADD COLUMN seq_num INTEGER DEFAULT 0;
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_notifications_user_dedup ON notifications(user_id, dedup_key);",
+                "CREATE INDEX IF NOT EXISTS idx_notifications_seq ON notifications(seq_num);",
+                "CREATE INDEX IF NOT EXISTS idx_notifications_ref ON notifications(reference_type, reference_id);",
+                """
+                CREATE TABLE IF NOT EXISTS notification_preferences (
+                    user_id TEXT PRIMARY KEY,
+                    browser_enabled INTEGER NOT NULL DEFAULT 1,
+                    in_app_enabled INTEGER NOT NULL DEFAULT 1,
+                    enabled_types_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                );
+                """
+        );
+        migrations.add(new Migration(10, "Notification preferences, deduplication, and sequential stream replay", v10Statements));
+
         return migrations;
     }
 }
