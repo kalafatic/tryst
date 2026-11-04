@@ -66,6 +66,7 @@ public class TrystHttpServer implements TrystHttpService {
     private ProcessExecutionManager processExecutionManager;
     private NotificationService notificationService;
     private LogDiagnosticService logDiagnosticService;
+    private eu.kalafatic.tryst.domain.service.DataRetentionService dataRetentionService;
     private ConfigurationService configurationService;
     private SqliteDatabaseManager databaseManager;
     private SqliteBackupService backupService;
@@ -112,6 +113,10 @@ public class TrystHttpServer implements TrystHttpService {
         this.dynamicPortFallback = fallbackEnabled;
         this.portRangeStart = rangeStart;
         this.portRangeEnd = rangeEnd;
+    }
+
+    public void setDataRetentionService(eu.kalafatic.tryst.domain.service.DataRetentionService dataRetentionService) {
+        this.dataRetentionService = dataRetentionService;
     }
 
     public void setPhase4Dependencies(
@@ -1750,6 +1755,26 @@ public class TrystHttpServer implements TrystHttpService {
                     Path backupDir = databaseManager.getDatabasePath().getParent().resolve("backups");
                     Path backupFile = backupService.createBackup(backupDir);
                     sendJsonResponse(exchange, 200, "{\"success\": true, \"backupPath\": \"" + escapeJson(backupFile.toString()) + "\"}");
+                    return;
+                }
+                if (sub.endsWith("/integrity") && "POST".equalsIgnoreCase(exchange.getRequestMethod()) && databaseManager != null) {
+                    try {
+                        boolean ok = databaseManager.verifyDatabaseConsistency();
+                        sendJsonResponse(exchange, 200, "{\"success\": true, \"consistent\": " + ok + ", \"message\": \"Consistency check passed (integrity_check, quick_check, foreign_key_check)\"}");
+                    } catch (Exception e) {
+                        sendJsonResponse(exchange, 500, "{\"success\": false, \"consistent\": false, \"error\": \"" + escapeJson(e.getMessage()) + "\"}");
+                    }
+                    return;
+                }
+                if (sub.endsWith("/retention") && "POST".equalsIgnoreCase(exchange.getRequestMethod()) && dataRetentionService != null) {
+                    try {
+                        var report = dataRetentionService.executeRetentionPolicy();
+                        String res = String.format("{\"success\": true, \"expiredSessionsPurged\": %d, \"oldTelemetryPurged\": %d, \"oldAuditEventsPurged\": %d, \"oldTaskEventsPurged\": %d}",
+                                report.expiredSessionsPurged(), report.oldTelemetryPurged(), report.oldAuditEventsPurged(), report.oldTaskEventsPurged());
+                        sendJsonResponse(exchange, 200, res);
+                    } catch (Exception e) {
+                        sendJsonResponse(exchange, 500, "{\"success\": false, \"error\": \"" + escapeJson(e.getMessage()) + "\"}");
+                    }
                     return;
                 }
                 String json = String.format("{\"databasePath\": \"%s\", \"sizeBytes\": %d, \"schemaVersion\": %d}",

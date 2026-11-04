@@ -63,4 +63,45 @@ public class SqliteBackupService {
             }
         }
     }
+
+    /**
+     * Verifies the integrity of a backup file by opening a standalone connection and executing PRAGMA integrity_check.
+     */
+    public boolean verifyBackup(Path backupPath) {
+        Objects.requireNonNull(backupPath, "backupPath must not be null");
+        if (!Files.exists(backupPath)) {
+            throw new TrystInfrastructureException("Backup file does not exist: " + backupPath);
+        }
+
+        try (SqliteDatabaseManager backupDb = new SqliteDatabaseManager(backupPath)) {
+            backupDb.initialize();
+            boolean ok = backupDb.verifyDatabaseIntegrity();
+            TrystLog.info(SqliteBackupService.class, "Backup file integrity verified successfully: " + backupPath);
+            return ok;
+        } catch (Exception e) {
+            TrystLog.error(SqliteBackupService.class, "Backup file integrity verification failed: " + backupPath, e);
+            throw new TrystInfrastructureException("Backup file verification failed: " + backupPath, e);
+        }
+    }
+
+    /**
+     * Restores database from a verified backup file into target location.
+     */
+    public void restoreFromBackup(Path backupPath, Path targetPath) {
+        Objects.requireNonNull(backupPath, "backupPath must not be null");
+        Objects.requireNonNull(targetPath, "targetPath must not be null");
+
+        // Verify source backup first
+        verifyBackup(backupPath);
+
+        try {
+            if (targetPath.getParent() != null) {
+                Files.createDirectories(targetPath.getParent());
+            }
+            Files.copy(backupPath, targetPath, StandardCopyOption.REPLACE_EXISTING);
+            TrystLog.info(SqliteBackupService.class, "Successfully restored database from " + backupPath + " to " + targetPath);
+        } catch (IOException e) {
+            throw new TrystInfrastructureException("Failed to restore database from " + backupPath + " to " + targetPath, e);
+        }
+    }
 }

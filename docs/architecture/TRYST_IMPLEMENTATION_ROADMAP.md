@@ -218,4 +218,37 @@ The audit of the codebase and implementation progress tracks the following compo
 - **Known Deviations:**
   - None. All architectural constraints, PDE configurations, and SQLite schema migrations are preserved.
 - **Recommended Next Implementation Step:**
-  - Structured JSON Tool Invocation Schema & Autonomous Self-Healing Tool Execution (P07).
+  - Comprehensive Persistence & Fault Recovery Implementation (Phase 8).
+
+---
+
+## 8. Completed Comprehensive Persistence & Fault Recovery Implementation (Phase 8 / Current Protocol)
+
+- **Completed Requirements:**
+  - Full survival and recovery from browser disconnection, client reconnection, JVM restart, Eclipse RCP restart, interrupted AI requests, interrupted Git operations, interrupted builds, database connection failures, and unexpected OS termination.
+  - Recovery Checkpointing & Interrupted Operation Classification:
+    - Introduced `TaskRecoveryCheckpoint` immutable model and SQLite schema migration V9 creating `task_recovery_checkpoints` table with indexes and foreign keys.
+    - Introduced `InterruptedOperationClassification` taxonomy (`INTERRUPTED_GIT_OPERATION`, `INTERRUPTED_AI_REQUEST`, `INTERRUPTED_BUILD`, `INTERRUPTED_DATABASE_TX`, `CLIENT_DISCONNECTION`, `OS_TERMINATION`).
+    - Introduced `TaskRecoveryDecision` (`SAFE_TO_RESUME`, `RECONCILE_AND_RETRY`, `REQUIRES_USER_INTERVENTION`) preventing naive replay of non-idempotent operations.
+    - Extended `TaskRecoveryService` with granular assessment, checkpointing, and safe recovery decision logic.
+  - Database Consistency & Referential Integrity:
+    - Extended `SqliteDatabaseManager` with `verifyDatabaseConsistency()` executing `PRAGMA foreign_key_check`, `PRAGMA quick_check`, and `PRAGMA integrity_check`.
+    - Added WAL checkpointing `checkpointWal()` (`PASSIVE`, `FULL`, `TRUNCATE`).
+  - Online Backup & Verification:
+    - Extended `SqliteBackupService` with backup verification (`verifyBackup`) and restore functionality (`restoreFromBackup`).
+  - Retention & Archival Policies:
+    - Implemented `RetentionPolicy` and `DataRetentionService` with `SqliteRetentionStore` running transactional pruning of expired user sessions, stale telemetry snapshots, old audit records, and task events.
+  - REST & Administration Endpoints:
+    - Added `/api/admin/database/integrity` (run consistency and foreign key checks).
+    - Added `/api/admin/database/retention` (execute transactional retention policy pruning).
+- **Modified Modules:**
+  - `eu.kalafatic.tryst.domain`: `TaskRecoveryCheckpoint`, `TaskRecoveryDecision`, `InterruptedOperationClassification`, `TaskRecoveryCheckpointRepository`, `RetentionPolicy`, `DataRetentionService`, `TaskRecoveryService`, `TaskWorker`, `TaskOrchestrator`.
+  - `eu.kalafatic.tryst.infrastructure`: `SchemaMigrationService` (V9), `SqliteTaskRecoveryCheckpointRepository`, `SqliteRetentionStore`, `SqliteDatabaseManager`, `SqliteBackupService`, `TrystHttpServer`.
+  - `eu.kalafatic.tryst.application`: `ApplicationLifecycleCoordinator`.
+  - `eu.kalafatic.tryst.tests`: Added `ComprehensivePersistenceAndRecoveryTest`, updated `SchemaMigrationTest`.
+- **New Interfaces and Dependencies:**
+  - `TaskRecoveryCheckpointRepository`, `DataRetentionService.RetentionStore`.
+- **Known Deviations:**
+  - None. All architectural constraints, PDE configurations, and SQLite schema migrations are preserved.
+- **Recommended Next Implementation Step:**
+  - Structured JSON Tool Invocation Schema & Autonomous Self-Healing Tool Execution (Phase 9).

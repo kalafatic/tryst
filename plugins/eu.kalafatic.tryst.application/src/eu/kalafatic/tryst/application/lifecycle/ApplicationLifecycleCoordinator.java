@@ -89,6 +89,9 @@ public class ApplicationLifecycleCoordinator {
     private ExecutionResultRepository executionResultRepository;
     private AgentRepository agentRepository;
     private CodeReviewRepository codeReviewRepository;
+    private eu.kalafatic.tryst.domain.repository.TaskRecoveryCheckpointRepository taskRecoveryCheckpointRepository;
+    private eu.kalafatic.tryst.domain.service.DataRetentionService dataRetentionService;
+    private eu.kalafatic.tryst.domain.service.WorkspaceRecoveryService workspaceRecoveryService;
 
     private WorkspaceService workspaceService;
     private AsyncExecutionService asyncExecutionService;
@@ -216,6 +219,9 @@ public class ApplicationLifecycleCoordinator {
         this.migrationService = new SchemaMigrationService(databaseManager);
         this.migrationService.migrate();
 
+        // Comprehensive database consistency and referential integrity check
+        this.databaseManager.verifyDatabaseConsistency();
+
         if (serverReadinessService != null) {
             serverReadinessService.markHealthy("Database", java.util.Map.of("path", dbPath.toString()));
         }
@@ -238,13 +244,22 @@ public class ApplicationLifecycleCoordinator {
         this.auditEventRepository = new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteAuditEventRepository(databaseManager);
         this.notificationRepository = new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteNotificationRepository(databaseManager);
         this.telemetryRepository = new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteTelemetryRepository(databaseManager);
+        this.taskRecoveryCheckpointRepository = new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteTaskRecoveryCheckpointRepository(databaseManager);
 
-        // 4. Startup Task Reconciliation: detect interrupted tasks and mark them RECOVERY_REQUIRED
+        // Data Retention and Archival Service
+        eu.kalafatic.tryst.infrastructure.persistence.SqliteRetentionStore retentionStore =
+                new eu.kalafatic.tryst.infrastructure.persistence.SqliteRetentionStore(databaseManager);
+        this.dataRetentionService = new eu.kalafatic.tryst.domain.service.DataRetentionService(retentionStore, databaseManager);
+
+        // 4. Startup Task Reconciliation & Workspace Recovery
         this.taskLifecycleManager = new eu.kalafatic.tryst.domain.service.TaskLifecycleManager(this.taskRepository, this.eventBus);
-        this.taskRecoveryService = new eu.kalafatic.tryst.domain.service.TaskRecoveryService(this.taskRepository, this.taskLifecycleManager);
-        this.taskQueue = new eu.kalafatic.tryst.domain.service.TaskQueue(this.taskRepository, this.taskLifecycleManager);
-
+        this.taskRecoveryService = new eu.kalafatic.tryst.domain.service.TaskRecoveryService(
+                this.taskRepository, this.taskLifecycleManager, this.taskRecoveryCheckpointRepository);
+        this.workspaceRecoveryService = new eu.kalafatic.tryst.domain.service.WorkspaceRecoveryService(this.workspaceRepository);
+        this.workspaceRecoveryService.recoverWorkspaces();
         this.taskRecoveryService.reconcileInterruptedTasks();
+
+        this.taskQueue = new eu.kalafatic.tryst.domain.service.TaskQueue(this.taskRepository, this.taskLifecycleManager);
 
         // 5. Initialize Core domain & async services
         this.workspaceService = new WorkspaceService(configuration.defaultWorkspaceDirectory(),
@@ -354,6 +369,7 @@ public class ApplicationLifecycleCoordinator {
                 taskConcurrency
         );
         this.taskOrchestrator.setGitHubService(this.gitHubService);
+        this.taskOrchestrator.setTaskRecoveryService(this.taskRecoveryService);
         this.taskOrchestrator.start();
 
         // Phase 4 Observability & Operational Services
@@ -401,6 +417,7 @@ public class ApplicationLifecycleCoordinator {
                     processExecutionManager, notificationService, logDiagnosticService,
                     configurationService, databaseManager, backupService, agentRepository
             );
+            server.setDataRetentionService(this.dataRetentionService);
             server.setDynamicPortConfiguration(
                     configuration.dynamicPortFallbackEnabled(),
                     configuration.portRangeStart(),
@@ -461,6 +478,8 @@ public class ApplicationLifecycleCoordinator {
             registerService(AutonomousDevelopmentService.class, this.autonomousDevelopmentService);
             registerService(eu.kalafatic.tryst.domain.service.TaskLifecycleManager.class, this.taskLifecycleManager);
             registerService(eu.kalafatic.tryst.domain.service.TaskRecoveryService.class, this.taskRecoveryService);
+            registerService(eu.kalafatic.tryst.domain.service.WorkspaceRecoveryService.class, this.workspaceRecoveryService);
+            registerService(eu.kalafatic.tryst.domain.service.DataRetentionService.class, this.dataRetentionService);
             registerService(eu.kalafatic.tryst.domain.service.TaskQueue.class, this.taskQueue);
             registerService(eu.kalafatic.tryst.domain.service.TaskOrchestrator.class, this.taskOrchestrator);
             registerService(eu.kalafatic.tryst.domain.repository.UserRepository.class, this.userRepository);
@@ -468,6 +487,7 @@ public class ApplicationLifecycleCoordinator {
             registerService(eu.kalafatic.tryst.domain.repository.AuditEventRepository.class, this.auditEventRepository);
             registerService(eu.kalafatic.tryst.domain.repository.NotificationRepository.class, this.notificationRepository);
             registerService(eu.kalafatic.tryst.domain.repository.TelemetryRepository.class, this.telemetryRepository);
+            registerService(eu.kalafatic.tryst.domain.repository.TaskRecoveryCheckpointRepository.class, this.taskRecoveryCheckpointRepository);
             registerService(eu.kalafatic.tryst.domain.security.AuthenticationService.class, this.authenticationService);
             registerService(eu.kalafatic.tryst.domain.service.ServerMonitoringService.class, this.serverMonitoringService);
             registerService(eu.kalafatic.tryst.domain.service.TelemetryService.class, this.telemetryService);
@@ -627,6 +647,9 @@ public class ApplicationLifecycleCoordinator {
         this.gitHubService = null;
         this.gitHubCredentialRepository = null;
         this.gitHubCredentialEncryptionService = null;
+        this.taskRecoveryCheckpointRepository = null;
+        this.dataRetentionService = null;
+        this.workspaceRecoveryService = null;
 
         TrystLog.info(ApplicationLifecycleCoordinator.class, "Service disposal complete.");
     }
@@ -778,6 +801,18 @@ public class ApplicationLifecycleCoordinator {
 
     public eu.kalafatic.tryst.domain.service.TaskRecoveryService getTaskRecoveryService() {
         return taskRecoveryService;
+    }
+
+    public eu.kalafatic.tryst.domain.repository.TaskRecoveryCheckpointRepository getTaskRecoveryCheckpointRepository() {
+        return taskRecoveryCheckpointRepository;
+    }
+
+    public eu.kalafatic.tryst.domain.service.DataRetentionService getDataRetentionService() {
+        return dataRetentionService;
+    }
+
+    public eu.kalafatic.tryst.domain.service.WorkspaceRecoveryService getWorkspaceRecoveryService() {
+        return workspaceRecoveryService;
     }
 
     public eu.kalafatic.tryst.domain.service.TaskQueue getTaskQueue() {

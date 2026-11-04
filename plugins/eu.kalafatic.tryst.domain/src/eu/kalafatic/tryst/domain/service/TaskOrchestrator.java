@@ -57,6 +57,7 @@ public class TaskOrchestrator {
     private final CodeReviewService codeReviewService;
     private eu.kalafatic.tryst.domain.github.GitHubService gitHubService;
     private NotificationService notificationService;
+    private TaskRecoveryService taskRecoveryService;
 
     private final int concurrency;
     private final ExecutorService workerExecutor;
@@ -294,6 +295,14 @@ public class TaskOrchestrator {
         this.notificationService = notificationService;
     }
 
+    public void setTaskRecoveryService(TaskRecoveryService taskRecoveryService) {
+        this.taskRecoveryService = taskRecoveryService;
+    }
+
+    public TaskRecoveryService getTaskRecoveryService() {
+        return taskRecoveryService;
+    }
+
     public int getConcurrency() {
         return concurrency;
     }
@@ -396,6 +405,7 @@ public class TaskOrchestrator {
                 gitHubService,
                 notificationService
         );
+        worker.setTaskRecoveryService(this.taskRecoveryService);
 
         Future<?> future = workerExecutor.submit(() -> {
             try {
