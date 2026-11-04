@@ -291,6 +291,8 @@ Tasks follow an explicit lifecycle supporting asynchronous, autonomous execution
   - **V6:** Production workspace and sandbox lifecycle isolation (`workspaces` columns).
   - **V7:** Secure GitHub credentials storage encrypted at rest (`github_credentials`).
   - **V8:** Interactive Web Code Review Center revisions, comments, and AI explanation tracking (`review_revisions`, `review_comments`, `code_reviews` extensions).
+  - **V9:** Task recovery checkpoints and granular persistence (`task_recovery_checkpoints`).
+  - **V10:** Centralized notification preferences, deduplication, and sequential stream replay (`notification_preferences`, `notifications` deduplication and sequence columns).
 - **Backup and Maintenance:** Hot SQLite backups via `SqliteBackupService`, automated integrity checks (`PRAGMA integrity_check`), and compaction (`VACUUM`).
 
 ---

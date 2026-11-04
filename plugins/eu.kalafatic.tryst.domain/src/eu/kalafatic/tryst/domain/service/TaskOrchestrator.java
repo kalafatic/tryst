@@ -177,6 +177,18 @@ public class TaskOrchestrator {
         taskRepository.saveTask(task);
         taskQueue.enqueue(task);
 
+        if (notificationService != null && userId != null && !userId.isBlank()) {
+            notificationService.notifyUser(
+                    userId,
+                    eu.kalafatic.tryst.domain.model.NotificationType.TASK_ACCEPTED.name(),
+                    "Task Accepted: " + task.getTitle(),
+                    "Task " + task.getId() + " has been accepted and queued for execution.",
+                    "task",
+                    task.getId(),
+                    userId + ":TASK_ACCEPTED:" + task.getId()
+            );
+        }
+
         // Notify dispatcher
         synchronized (this) {
             notifyAll();

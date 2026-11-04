@@ -91,4 +91,23 @@ public final class ApplicationEvents {
             this(UUID.randomUUID().toString(), Instant.now(), correlationId, stage, exitCode, summary);
         }
     }
+
+    public record NotificationBroadcastEvent(
+            String eventId,
+            Instant timestamp,
+            String correlationId,
+            String notificationId,
+            String userId,
+            String type,
+            String title,
+            String message,
+            String referenceType,
+            String referenceId,
+            long sequenceNumber
+    ) implements TrystTypedEvent {
+        public NotificationBroadcastEvent(String notificationId, String userId, String type, String title,
+                                          String message, String referenceType, String referenceId, long sequenceNumber) {
+            this(UUID.randomUUID().toString(), Instant.now(), null, notificationId, userId, type, title, message, referenceType, referenceId, sequenceNumber);
+        }
+    }
 }

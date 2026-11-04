@@ -218,6 +218,17 @@ public class TaskWorker implements Callable<ExecutionResult> {
             logBuilder.append("[Worker ").append(context.getWorkerId()).append("] Stage: CLONING\n");
 
             performRepositoryCloningStage(task, logBuilder);
+            if (notificationService != null && context.getUserId() != null) {
+                notificationService.notifyUser(
+                        context.getUserId(),
+                        eu.kalafatic.tryst.domain.model.NotificationType.REPOSITORY_CLONED.name(),
+                        "Repository Cloned: " + task.getTitle(),
+                        "Repository environment prepared in sandbox for task " + task.getId(),
+                        "task",
+                        task.getId(),
+                        context.getUserId() + ":REPOSITORY_CLONED:" + task.getId()
+                );
+            }
 
             // Stage 2: ANALYZING (Analyze request, inspect repo, identify relevant source files, analyze conventions)
             checkCancelled();
@@ -232,6 +243,17 @@ public class TaskWorker implements Callable<ExecutionResult> {
             }
             for (Path rel : analysis.identifiedFiles()) {
                 logBuilder.append("  - Identified file: ").append(rel).append("\n");
+            }
+            if (notificationService != null && context.getUserId() != null) {
+                notificationService.notifyUser(
+                        context.getUserId(),
+                        eu.kalafatic.tryst.domain.model.NotificationType.AI_ANALYSIS_COMPLETED.name(),
+                        "AI Analysis Completed: " + task.getTitle(),
+                        analysis.summary(),
+                        "task",
+                        task.getId(),
+                        context.getUserId() + ":AI_ANALYSIS_COMPLETED:" + task.getId()
+                );
             }
 
             // Stage 3: PLANNING (Generate structured implementation plan)
@@ -251,6 +273,17 @@ public class TaskWorker implements Callable<ExecutionResult> {
             lifecycleManager.transition(task, TaskStatus.IMPLEMENTING, "Executing AI inference and modifying files", null);
             recordRecoveryCheckpoint(task, TaskStatus.IMPLEMENTING, "{\"stage\":\"IMPLEMENTING\",\"goal\":\"" + plan.goal().replace("\"", "\\\"") + "\"}");
             logBuilder.append("[Worker ").append(context.getWorkerId()).append("] Stage: IMPLEMENTING\n");
+            if (notificationService != null && context.getUserId() != null) {
+                notificationService.notifyUser(
+                        context.getUserId(),
+                        eu.kalafatic.tryst.domain.model.NotificationType.IMPLEMENTATION_STARTED.name(),
+                        "Implementation Started: " + task.getTitle(),
+                        "Autonomous code modifications started based on execution plan: " + plan.goal(),
+                        "task",
+                        task.getId(),
+                        context.getUserId() + ":IMPLEMENTATION_STARTED:" + task.getId() + ":" + task.getReworkCount()
+                );
+            }
 
             executeAgentImplementationLoop(task, analysis, plan, logBuilder);
 
@@ -272,6 +305,17 @@ public class TaskWorker implements Callable<ExecutionResult> {
                 throw new IllegalStateException("Build failed during task execution: " + validation.details());
             }
             logBuilder.append("[Build Passed]: Compiler verified successfully.\n");
+            if (notificationService != null && context.getUserId() != null) {
+                notificationService.notifyUser(
+                        context.getUserId(),
+                        eu.kalafatic.tryst.domain.model.NotificationType.BUILD_COMPLETED.name(),
+                        "Build Completed: " + task.getTitle(),
+                        "Compilation and build verification passed successfully.",
+                        "task",
+                        task.getId(),
+                        context.getUserId() + ":BUILD_COMPLETED:" + task.getId() + ":" + task.getReworkCount()
+                );
+            }
 
             // Stage 6: TESTING (Run test verification)
             checkCancelled();
@@ -281,6 +325,17 @@ public class TaskWorker implements Callable<ExecutionResult> {
 
             if (!validation.testSuccess()) {
                 failureClass = AiFailureClassification.TEST_FAILURE;
+                if (notificationService != null && context.getUserId() != null) {
+                    notificationService.notifyUser(
+                            context.getUserId(),
+                            eu.kalafatic.tryst.domain.model.NotificationType.TESTS_FAILED.name(),
+                            "Tests Failed: " + task.getTitle(),
+                            validation.details(),
+                            "task",
+                            task.getId(),
+                            context.getUserId() + ":TESTS_FAILED:" + task.getId() + ":" + task.getReworkCount()
+                    );
+                }
                 throw new IllegalStateException("Tests failed during task verification: " + validation.details());
             }
             logBuilder.append("[Tests Passed]: Test suite verified successfully.\n");
@@ -349,17 +404,36 @@ public class TaskWorker implements Callable<ExecutionResult> {
             );
 
             if (notificationService != null && context.getUserId() != null) {
-                String title = (task.getReworkCount() > 0)
-                        ? "Rework Complete (Rev " + revCount + "): " + task.getTitle()
-                        : "Review Ready: " + task.getTitle();
-                String message = "Task " + task.getId() + " has produced revision " + revCount + " ready for review.";
+                if (task.getReworkCount() > 0) {
+                    notificationService.notifyUser(
+                            context.getUserId(),
+                            eu.kalafatic.tryst.domain.model.NotificationType.REWORK_COMPLETED.name(),
+                            "Rework Complete (Rev " + revCount + "): " + task.getTitle(),
+                            "Task " + task.getId() + " rework complete. Revision " + revCount + " ready for review.",
+                            "review",
+                            review != null ? review.getId() : task.getId(),
+                            context.getUserId() + ":REWORK_COMPLETED:" + task.getId() + ":" + revCount
+                    );
+                }
+
                 notificationService.notifyUser(
                         context.getUserId(),
-                        "REVIEW_READY",
-                        title,
-                        message,
+                        eu.kalafatic.tryst.domain.model.NotificationType.REVIEW_READY.name(),
+                        "Review Ready: " + task.getTitle(),
+                        "Task " + task.getId() + " changes are ready for human code review.",
                         "review",
-                        review != null ? review.getId() : task.getId()
+                        review != null ? review.getId() : task.getId(),
+                        context.getUserId() + ":REVIEW_READY:" + task.getId() + ":" + revCount
+                );
+
+                notificationService.notifyUser(
+                        context.getUserId(),
+                        eu.kalafatic.tryst.domain.model.NotificationType.APPROVAL_REQUIRED.name(),
+                        "Approval Required: " + task.getTitle(),
+                        "Code review " + (review != null ? review.getId() : task.getId()) + " requires reviewer approval before commit.",
+                        "review",
+                        review != null ? review.getId() : task.getId(),
+                        context.getUserId() + ":APPROVAL_REQUIRED:" + (review != null ? review.getId() : task.getId()) + ":" + revCount
                 );
             }
 
@@ -376,6 +450,17 @@ public class TaskWorker implements Callable<ExecutionResult> {
             TrystLog.error(TaskWorker.class, "Task " + task.getId() + " failed: " + e.getMessage(), e);
             if (failureClass == AiFailureClassification.NONE) {
                 failureClass = AiFailureClassification.UNCLASSIFIED_ERROR;
+            }
+            if (notificationService != null && context.getUserId() != null) {
+                notificationService.notifyUser(
+                        context.getUserId(),
+                        eu.kalafatic.tryst.domain.model.NotificationType.TASK_FAILED.name(),
+                        "Task Failed: " + task.getTitle(),
+                        "Task " + task.getId() + " failed: " + e.getMessage(),
+                        "task",
+                        task.getId(),
+                        context.getUserId() + ":TASK_FAILED:" + task.getId() + ":" + task.getReworkCount()
+                );
             }
             lifecycleManager.transition(task, TaskStatus.FAILED, "Execution error: " + e.getMessage(),
                     "Classification: " + failureClass + "\n" + e.toString());

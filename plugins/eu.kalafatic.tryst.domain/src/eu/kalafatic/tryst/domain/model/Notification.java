@@ -18,9 +18,12 @@ public class Notification {
     private final String referenceId;
     private boolean read;
     private final Instant createdAt;
+    private final String dedupKey;
+    private final long sequenceNumber;
 
     public Notification(String id, String userId, String type, String title, String message,
-                        String referenceType, String referenceId, boolean read, Instant createdAt) {
+                        String referenceType, String referenceId, boolean read, Instant createdAt,
+                        String dedupKey, long sequenceNumber) {
         this.id = Objects.requireNonNull(id, "id must not be null");
         this.userId = Objects.requireNonNull(userId, "userId must not be null");
         this.type = Objects.requireNonNull(type, "type must not be null");
@@ -30,10 +33,21 @@ public class Notification {
         this.referenceId = referenceId;
         this.read = read;
         this.createdAt = createdAt != null ? createdAt : Instant.now();
+        this.dedupKey = dedupKey;
+        this.sequenceNumber = sequenceNumber;
+    }
+
+    public Notification(String id, String userId, String type, String title, String message,
+                        String referenceType, String referenceId, boolean read, Instant createdAt) {
+        this(id, userId, type, title, message, referenceType, referenceId, read, createdAt, null, 0L);
     }
 
     public Notification(String userId, String type, String title, String message, String referenceType, String referenceId) {
-        this(UUID.randomUUID().toString(), userId, type, title, message, referenceType, referenceId, false, Instant.now());
+        this(UUID.randomUUID().toString(), userId, type, title, message, referenceType, referenceId, false, Instant.now(), null, 0L);
+    }
+
+    public Notification(String userId, String type, String title, String message, String referenceType, String referenceId, String dedupKey) {
+        this(UUID.randomUUID().toString(), userId, type, title, message, referenceType, referenceId, false, Instant.now(), dedupKey, 0L);
     }
 
     public String getId() {
@@ -74,5 +88,13 @@ public class Notification {
 
     public Instant getCreatedAt() {
         return createdAt;
+    }
+
+    public String getDedupKey() {
+        return dedupKey;
+    }
+
+    public long getSequenceNumber() {
+        return sequenceNumber;
     }
 }

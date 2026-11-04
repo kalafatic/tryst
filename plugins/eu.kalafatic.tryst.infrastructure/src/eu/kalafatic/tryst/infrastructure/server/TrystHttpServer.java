@@ -1140,8 +1140,15 @@ public class TrystHttpServer implements TrystHttpService {
                             if (res.success()) {
                                 codeReviewRepository.save(review);
                                 if (notificationService != null) {
-                                    notificationService.notifyUser(userId, "COMMIT_SUCCESS", "Commit Successful",
-                                            "Committed changes with hash " + res.commitHash(), "review", review.getId());
+                                    notificationService.notifyUser(
+                                            userId,
+                                            eu.kalafatic.tryst.domain.model.NotificationType.COMMIT_COMPLETED.name(),
+                                            "Commit Completed",
+                                            "Committed changes with hash " + res.commitHash() + " for review " + review.getId(),
+                                            "review",
+                                            review.getId(),
+                                            userId + ":COMMIT_COMPLETED:" + review.getId() + ":" + res.commitHash()
+                                    );
                                 }
                                 String json = String.format("{\"success\": true, \"commitHash\": \"%s\", \"review\": %s}",
                                         res.commitHash(), serializeReview(review));
@@ -1288,6 +1295,25 @@ public class TrystHttpServer implements TrystHttpService {
                                     Instant.now()
                             );
                             codeReviewRepository.saveComment(comment);
+
+                            if (notificationService != null) {
+                                String targetUser = userId;
+                                if (projectRepository != null && review.getProjectId() != null) {
+                                    targetUser = projectRepository.findById(review.getProjectId())
+                                            .map(eu.kalafatic.tryst.domain.model.Project::getOwnerId)
+                                            .orElse(userId);
+                                }
+                                notificationService.notifyUser(
+                                        targetUser,
+                                        eu.kalafatic.tryst.domain.model.NotificationType.REVIEW_COMMENTS_RECEIVED.name(),
+                                        "Review Comment Received",
+                                        "New feedback received on file: " + (filePath != null ? filePath : "General review"),
+                                        "review",
+                                        review.getId(),
+                                        targetUser + ":REVIEW_COMMENTS_RECEIVED:" + comment.getId()
+                                    );
+                            }
+
                             sendJsonResponse(exchange, 201, serializeComment(comment));
                             return;
                         } else if (parts.length >= 3) {
@@ -1580,21 +1606,120 @@ public class TrystHttpServer implements TrystHttpService {
             String userId = ctx.map(SecurityContext::getUserId).orElseGet(() -> getUserId(exchange));
             String path = exchange.getRequestURI().getPath();
 
+            // Route: SSE Stream GET /api/notifications/stream
+            if (path.endsWith("/stream") && "GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                handleNotificationStream(exchange, userId);
+                return;
+            }
+
+            // Route: Preferences GET /api/notifications/preferences
+            if (path.endsWith("/preferences") && "GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                eu.kalafatic.tryst.domain.model.NotificationPreference pref =
+                        (notificationService != null) ? notificationService.getPreferences(userId)
+                                : eu.kalafatic.tryst.domain.model.NotificationPreference.createDefault(userId);
+                StringBuilder sb = new StringBuilder("{");
+                sb.append("\"userId\":\"").append(escapeJson(pref.getUserId())).append("\",");
+                sb.append("\"browserNotificationsEnabled\":").append(pref.isBrowserNotificationsEnabled()).append(",");
+                sb.append("\"inAppNotificationsEnabled\":").append(pref.isInAppNotificationsEnabled()).append(",");
+                sb.append("\"enabledTypes\":[");
+                int ti = 0;
+                for (eu.kalafatic.tryst.domain.model.NotificationType nt : pref.getEnabledTypes()) {
+                    if (ti++ > 0) sb.append(",");
+                    sb.append("\"").append(nt.name()).append("\"");
+                }
+                sb.append("],\"updatedAt\":\"").append(pref.getUpdatedAt()).append("\"}");
+                sendJsonResponse(exchange, 200, sb.toString());
+                return;
+            }
+
+            // Route: Preferences PUT /api/notifications/preferences
+            if (path.endsWith("/preferences") && ("PUT".equalsIgnoreCase(exchange.getRequestMethod()) || "POST".equalsIgnoreCase(exchange.getRequestMethod()))) {
+                String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                boolean browserEnabled = true;
+                boolean inAppEnabled = true;
+                String bStr = extractJsonField(body, "browserNotificationsEnabled");
+                if (bStr != null && !bStr.isBlank()) {
+                    browserEnabled = Boolean.parseBoolean(bStr);
+                }
+                String iStr = extractJsonField(body, "inAppNotificationsEnabled");
+                if (iStr != null && !iStr.isBlank()) {
+                    inAppEnabled = Boolean.parseBoolean(iStr);
+                }
+
+                Set<eu.kalafatic.tryst.domain.model.NotificationType> types = new HashSet<>();
+                if (body.contains("\"enabledTypes\"")) {
+                    int st = body.indexOf("\"enabledTypes\"");
+                    int openBracket = body.indexOf('[', st);
+                    int closeBracket = body.indexOf(']', openBracket);
+                    if (openBracket != -1 && closeBracket != -1) {
+                        String inner = body.substring(openBracket + 1, closeBracket);
+                        for (String part : inner.split(",")) {
+                            String clean = part.replace("\"", "").trim();
+                            eu.kalafatic.tryst.domain.model.NotificationType nt = eu.kalafatic.tryst.domain.model.NotificationType.fromString(clean);
+                            if (nt != null) {
+                                types.add(nt);
+                            }
+                        }
+                    }
+                } else {
+                    Collections.addAll(types, eu.kalafatic.tryst.domain.model.NotificationType.values());
+                }
+
+                eu.kalafatic.tryst.domain.model.NotificationPreference pref =
+                        new eu.kalafatic.tryst.domain.model.NotificationPreference(userId, browserEnabled, inAppEnabled, types, java.time.Instant.now());
+                if (notificationService != null) {
+                    notificationService.updatePreferences(pref);
+                }
+                sendJsonResponse(exchange, 200, "{\"success\": true}");
+                return;
+            }
+
             if (path.endsWith("/read-all") && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
                 notificationRepository.markAllAsRead(userId);
                 sendJsonResponse(exchange, 200, "{\"success\": true}");
                 return;
             }
 
+            // Route: Mark single notification as read: POST/PATCH /api/notifications/{id}/read
+            String relPath = path.substring(path.indexOf("/api/notifications") + "/api/notifications".length());
+            if (relPath.startsWith("/")) relPath = relPath.substring(1);
+            String[] parts = relPath.split("/");
+            if (parts.length >= 2 && "read".equalsIgnoreCase(parts[1]) &&
+                    ("POST".equalsIgnoreCase(exchange.getRequestMethod()) || "PATCH".equalsIgnoreCase(exchange.getRequestMethod()))) {
+                String notifId = parts[0];
+                notificationRepository.markAsRead(notifId);
+                sendJsonResponse(exchange, 200, "{\"success\": true}");
+                return;
+            }
+
             if ("GET".equalsIgnoreCase(exchange.getRequestMethod())) {
-                List<Notification> notifs = notificationRepository.findByUserId(userId, false, 50);
+                String query = exchange.getRequestURI().getQuery();
+                Map<String, String> qp = parseQueryParams(query);
+                boolean unreadOnly = Boolean.parseBoolean(qp.getOrDefault("unreadOnly", "false"));
+                String taskId = qp.get("taskId");
+                String sinceSeqStr = qp.get("sinceSeq");
+                int limit = 50;
+                try {
+                    if (qp.containsKey("limit")) limit = Integer.parseInt(qp.get("limit"));
+                } catch (Exception ignored) {}
+
+                List<Notification> notifs;
+                if (sinceSeqStr != null && !sinceSeqStr.isBlank()) {
+                    long seq = 0L;
+                    try { seq = Long.parseLong(sinceSeqStr); } catch (Exception ignored) {}
+                    notifs = notificationRepository.findSinceSequence(userId, seq, limit);
+                } else if (taskId != null && !taskId.isBlank()) {
+                    notifs = notificationRepository.findByTaskId(taskId, userId);
+                } else {
+                    notifs = notificationRepository.findByUserId(userId, unreadOnly, limit);
+                }
+
                 StringBuilder sb = new StringBuilder();
                 sb.append("{\"notifications\": [");
                 for (int i = 0; i < notifs.size(); i++) {
                     Notification n = notifs.get(i);
                     if (i > 0) sb.append(",");
-                    sb.append(String.format("{\"id\": \"%s\", \"type\": \"%s\", \"title\": \"%s\", \"message\": \"%s\", \"isRead\": %b, \"createdAt\": \"%s\"}",
-                            n.getId(), n.getType(), escapeJson(n.getTitle()), escapeJson(n.getMessage()), n.isRead(), n.getCreatedAt()));
+                    sb.append(serializeNotificationJson(n));
                 }
                 sb.append("], \"unreadCount\": ").append(notificationRepository.countUnread(userId)).append("}");
                 sendJsonResponse(exchange, 200, sb.toString());
@@ -1602,6 +1727,96 @@ public class TrystHttpServer implements TrystHttpService {
             }
 
             sendJsonResponse(exchange, 404, "{\"error\": \"Not Found\"}");
+        }
+
+        private void handleNotificationStream(HttpExchange exchange, String userId) throws IOException {
+            exchange.getResponseHeaders().set("Content-Type", "text/event-stream");
+            exchange.getResponseHeaders().set("Cache-Control", "no-cache, no-transform");
+            exchange.getResponseHeaders().set("Connection", "keep-alive");
+            applySecurityHeaders(exchange);
+            exchange.sendResponseHeaders(200, 0);
+
+            OutputStream os = exchange.getResponseBody();
+
+            String lastEventId = exchange.getRequestHeaders().getFirst("Last-Event-ID");
+            if (lastEventId == null || lastEventId.isBlank()) {
+                Map<String, String> qp = parseQueryParams(exchange.getRequestURI().getQuery());
+                lastEventId = qp.get("lastEventId");
+            }
+
+            long sinceSeq = 0L;
+            if (lastEventId != null && !lastEventId.isBlank()) {
+                try {
+                    sinceSeq = Long.parseLong(lastEventId.trim());
+                } catch (NumberFormatException ignored) {}
+            }
+
+            if (sinceSeq > 0L && notificationRepository != null) {
+                List<Notification> missed = notificationRepository.findSinceSequence(userId, sinceSeq, 100);
+                for (Notification n : missed) {
+                    writeSseEvent(os, n);
+                }
+            }
+
+            os.write((": connected userId=" + userId + "\n\n").getBytes(StandardCharsets.UTF_8));
+            os.flush();
+
+            java.util.concurrent.atomic.AtomicBoolean active = new java.util.concurrent.atomic.AtomicBoolean(true);
+            AutoCloseable registration = (notificationService != null) ? notificationService.registerListener(n -> {
+                if (active.get() && (userId.equals(n.getUserId()) || "all".equals(n.getUserId()))) {
+                    try {
+                        synchronized (os) {
+                            writeSseEvent(os, n);
+                        }
+                    } catch (IOException e) {
+                        active.set(false);
+                    }
+                }
+            }) : null;
+
+            try {
+                while (active.get()) {
+                    try {
+                        Thread.sleep(15000);
+                        synchronized (os) {
+                            os.write(": ping\n\n".getBytes(StandardCharsets.UTF_8));
+                            os.flush();
+                        }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    } catch (IOException e) {
+                        break;
+                    }
+                }
+            } finally {
+                active.set(false);
+                if (registration != null) {
+                    try { registration.close(); } catch (Exception ignored) {}
+                }
+                try { os.close(); } catch (Exception ignored) {}
+            }
+        }
+
+        private void writeSseEvent(OutputStream os, Notification n) throws IOException {
+            String data = serializeNotificationJson(n);
+            String payload = "id: " + n.getSequenceNumber() + "\n"
+                    + "event: notification\n"
+                    + "data: " + data + "\n\n";
+            os.write(payload.getBytes(StandardCharsets.UTF_8));
+            os.flush();
+        }
+
+        private static String serializeNotificationJson(Notification n) {
+            return String.format(
+                    "{\"id\":\"%s\",\"type\":\"%s\",\"title\":\"%s\",\"message\":\"%s\",\"referenceType\":\"%s\",\"referenceId\":\"%s\",\"isRead\":%b,\"createdAt\":\"%s\",\"dedupKey\":\"%s\",\"sequenceNumber\":%d}",
+                    escapeJson(n.getId()), escapeJson(n.getType()), escapeJson(n.getTitle()),
+                    escapeJson(n.getMessage()), escapeJson(n.getReferenceType() != null ? n.getReferenceType() : ""),
+                    escapeJson(n.getReferenceId() != null ? n.getReferenceId() : ""),
+                    n.isRead(), n.getCreatedAt().toString(),
+                    escapeJson(n.getDedupKey() != null ? n.getDedupKey() : ""),
+                    n.getSequenceNumber()
+            );
         }
     }
 
@@ -2078,6 +2293,23 @@ public class TrystHttpServer implements TrystHttpService {
                         <div class="top-nav">
                             <button id="navReviews" class="nav-btn active" onclick="switchTab('reviews')">Code Review Center</button>
                             <button id="navAdmin" class="nav-btn" onclick="switchTab('admin')">Administration & Observability</button>
+                            <div style="position: relative; display: inline-block;">
+                                <button id="btnNotifBell" class="nav-btn" onclick="toggleNotificationDropdown()" title="Notifications">
+                                    🔔 <span id="notifBadge" class="badge badge-warning" style="display:none; font-size:10px; padding:2px 5px;">0</span>
+                                </button>
+                                <div id="notifDropdown" style="display:none; position: absolute; right: 0; top: 38px; width: 360px; max-height: 420px; overflow-y: auto; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); z-index: 1000; padding: 12px;">
+                                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 8px; border-bottom: 1px solid var(--border); padding-bottom: 6px;">
+                                        <b style="font-size:13px;">Notifications</b>
+                                        <div>
+                                            <button class="btn btn-sm btn-primary" onclick="requestBrowserNotificationPermission()">Enable Push</button>
+                                            <button class="btn btn-sm btn-warning" onclick="markAllNotificationsRead()">Mark Read</button>
+                                        </div>
+                                    </div>
+                                    <div id="notifList" style="font-size: 12px; color: var(--text);">
+                                        <div style="color:var(--muted); text-align:center; padding:12px;">No notifications.</div>
+                                    </div>
+                                </div>
+                            </div>
                             <span id="userStatus" style="font-size: 13px; color: var(--muted);">User: Local</span>
                         </div>
                     </header>
@@ -2813,8 +3045,124 @@ public class TrystHttpServer implements TrystHttpService {
                             return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
                         }
 
+                        let lastNotificationSeq = 0;
+                        let sseEventSource = null;
+
+                        function toggleNotificationDropdown() {
+                            const d = document.getElementById('notifDropdown');
+                            d.style.display = (d.style.display === 'none' || !d.style.display) ? 'block' : 'none';
+                            if (d.style.display === 'block') {
+                                loadNotifications();
+                            }
+                        }
+
+                        async function requestBrowserNotificationPermission() {
+                            if (!('Notification' in window)) {
+                                alert('This browser does not support desktop notifications.');
+                                return;
+                            }
+                            const perm = await Notification.requestPermission();
+                            if (perm === 'granted') {
+                                alert('Desktop notifications enabled.');
+                            } else {
+                                alert('Permission ' + perm);
+                            }
+                        }
+
+                        function triggerBrowserNotification(title, message, refType, refId) {
+                            if (('Notification' in window) && Notification.permission === 'granted') {
+                                try {
+                                    new Notification(title, {
+                                        body: message,
+                                        icon: '/favicon.ico'
+                                    });
+                                } catch (e) {
+                                    console.warn('Browser notification error', e);
+                                }
+                            }
+                        }
+
+                        async function loadNotifications() {
+                            try {
+                                const res = await fetch(apiUrl('/api/notifications?limit=30'), { headers: getAuthHeaders() });
+                                if (!res.ok) return;
+                                const data = await res.json();
+                                renderNotifications(data.notifications, data.unreadCount);
+                            } catch (e) {
+                                console.warn('Failed to load notifications', e);
+                            }
+                        }
+
+                        function renderNotifications(notifs, unreadCount) {
+                            const badge = document.getElementById('notifBadge');
+                            if (unreadCount > 0) {
+                                badge.textContent = unreadCount;
+                                badge.style.display = 'inline-block';
+                            } else {
+                                badge.style.display = 'none';
+                            }
+
+                            const list = document.getElementById('notifList');
+                            if (!notifs || notifs.length === 0) {
+                                list.innerHTML = '<div style="color:var(--muted); text-align:center; padding:12px;">No notifications.</div>';
+                                return;
+                            }
+
+                            list.innerHTML = notifs.map(n => {
+                                const readStyle = n.isRead ? 'opacity:0.6;' : 'font-weight:600; border-left: 3px solid var(--primary);';
+                                const time = new Date(n.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                                return `<div style="padding: 8px; border-bottom: 1px solid var(--border); ${readStyle}">
+                                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                                        <span class="badge badge-info" style="font-size:10px;">${escapeHtml(n.type)}</span>
+                                        <span style="font-size:11px; color:var(--muted);">${time}</span>
+                                    </div>
+                                    <div style="margin-top: 4px; color: #fff;">${escapeHtml(n.title)}</div>
+                                    <div style="color:var(--muted); font-size:11px; margin-top:2px;">${escapeHtml(n.message)}</div>
+                                </div>`;
+                            }).join('');
+                        }
+
+                        async function markAllNotificationsRead() {
+                            await fetch(apiUrl('/api/notifications/read-all'), {
+                                method: 'POST',
+                                headers: getAuthHeaders()
+                            });
+                            loadNotifications();
+                        }
+
+                        function connectNotificationStream() {
+                            const streamUrl = apiUrl('/api/notifications/stream' + (lastNotificationSeq > 0 ? ('?lastEventId=' + lastNotificationSeq) : ''));
+                            if (sseEventSource) {
+                                sseEventSource.close();
+                            }
+                            try {
+                                sseEventSource = new EventSource(streamUrl);
+                                sseEventSource.addEventListener('notification', e => {
+                                    try {
+                                        const notif = JSON.parse(e.data);
+                                        if (notif.sequenceNumber) {
+                                            lastNotificationSeq = Math.max(lastNotificationSeq, notif.sequenceNumber);
+                                        }
+                                        triggerBrowserNotification(notif.title, notif.message, notif.referenceType, notif.referenceId);
+                                        loadNotifications();
+                                    } catch (err) {
+                                        console.warn('Error processing SSE notification', err);
+                                    }
+                                });
+                                sseEventSource.onerror = err => {
+                                    console.warn('Notification stream connection interrupted, reconnecting in 5s...', err);
+                                    sseEventSource.close();
+                                    setTimeout(connectNotificationStream, 5000);
+                                };
+                            } catch (e) {
+                                setTimeout(connectNotificationStream, 5000);
+                            }
+                        }
+
                         loadProjects();
                         loadReviews();
+                        loadNotifications();
+                        connectNotificationStream();
                     </script>
                 </body>
                 </html>

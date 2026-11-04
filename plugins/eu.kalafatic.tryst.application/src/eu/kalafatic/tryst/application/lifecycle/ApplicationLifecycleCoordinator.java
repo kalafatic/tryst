@@ -122,6 +122,7 @@ public class ApplicationLifecycleCoordinator {
     private eu.kalafatic.tryst.domain.repository.UserSessionRepository userSessionRepository;
     private eu.kalafatic.tryst.domain.repository.AuditEventRepository auditEventRepository;
     private eu.kalafatic.tryst.domain.repository.NotificationRepository notificationRepository;
+    private eu.kalafatic.tryst.domain.repository.NotificationPreferenceRepository notificationPreferenceRepository;
     private eu.kalafatic.tryst.domain.repository.TelemetryRepository telemetryRepository;
     private eu.kalafatic.tryst.domain.security.AuthenticationService authenticationService;
     private eu.kalafatic.tryst.domain.service.ServerMonitoringService serverMonitoringService;
@@ -243,6 +244,7 @@ public class ApplicationLifecycleCoordinator {
         this.userSessionRepository = new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteUserSessionRepository(databaseManager);
         this.auditEventRepository = new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteAuditEventRepository(databaseManager);
         this.notificationRepository = new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteNotificationRepository(databaseManager);
+        this.notificationPreferenceRepository = new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteNotificationPreferenceRepository(databaseManager);
         this.telemetryRepository = new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteTelemetryRepository(databaseManager);
         this.taskRecoveryCheckpointRepository = new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteTaskRecoveryCheckpointRepository(databaseManager);
 
@@ -384,7 +386,7 @@ public class ApplicationLifecycleCoordinator {
             this.aiMonitoringService = new eu.kalafatic.tryst.domain.service.AiMonitoringService(null);
         }
         this.processExecutionManager = new eu.kalafatic.tryst.domain.service.ProcessExecutionManager();
-        this.notificationService = new eu.kalafatic.tryst.domain.service.NotificationService(this.notificationRepository, this.eventBus);
+        this.notificationService = new eu.kalafatic.tryst.domain.service.NotificationService(this.notificationRepository, this.notificationPreferenceRepository, this.eventBus);
         this.logDiagnosticService = new eu.kalafatic.tryst.domain.service.LogDiagnosticService();
         if (this.taskOrchestrator != null) {
             this.taskOrchestrator.setNotificationService(this.notificationService);
@@ -486,6 +488,7 @@ public class ApplicationLifecycleCoordinator {
             registerService(eu.kalafatic.tryst.domain.repository.UserSessionRepository.class, this.userSessionRepository);
             registerService(eu.kalafatic.tryst.domain.repository.AuditEventRepository.class, this.auditEventRepository);
             registerService(eu.kalafatic.tryst.domain.repository.NotificationRepository.class, this.notificationRepository);
+            registerService(eu.kalafatic.tryst.domain.repository.NotificationPreferenceRepository.class, this.notificationPreferenceRepository);
             registerService(eu.kalafatic.tryst.domain.repository.TelemetryRepository.class, this.telemetryRepository);
             registerService(eu.kalafatic.tryst.domain.repository.TaskRecoveryCheckpointRepository.class, this.taskRecoveryCheckpointRepository);
             registerService(eu.kalafatic.tryst.domain.security.AuthenticationService.class, this.authenticationService);
