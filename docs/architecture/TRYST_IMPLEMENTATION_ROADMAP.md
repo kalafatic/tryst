@@ -66,12 +66,22 @@ The audit of the codebase and implementation progress tracks the following compo
        - In-app notification delivery on rework completion
        - Synchronized Workspace lifecycle (WAITING_FOR_REVIEW -> REWORKING -> WAITING_FOR_REVIEW)
 
+  P07: Comprehensive Security Architecture & Defense-in-Depth
+       - Explicit PermissionDecision (ALLOW, DENY) with strict DENY precedence
+       - Server-side RBAC and service boundary validations across projects, workspaces, tasks, and reviews
+       - Sliding-window rate limiting on sensitive authentication and task endpoints
+       - Cryptographic CSRF token management and verification for cookie-authenticated sessions
+       - HTTP Security Headers (X-Content-Type-Options, X-Frame-Options, CSP, Referrer-Policy, Permissions-Policy)
+       - Client header spoofing protection (rejecting unauthenticated X-User-Id overrides)
+       - Canonical workspace containment, symlink escape protection, and null-byte defenses
+       - Automated authorization and penetration test suite (SecurityArchitectureAndPenetrationTest)
+
 [PENDING / SUBSEQUENT PHASES]
-  P07: Structured JSON Tool Invocation Schema
+  P08: Structured JSON Tool Invocation Schema
        - Formal JSON schema tool calling for Ollama inference
        - Tool validation and hallucination resilience
 
-  P07: Web Client Asset Decoupling
+  P08: Web Client Asset Decoupling
        - Static asset separation into modular resources
        - Bundle classloader asset resolution
 ```

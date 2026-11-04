@@ -139,8 +139,20 @@ public class TaskOrchestrator {
      */
     public Task submitTask(String projectId, String sessionId, String title, String description,
                            TaskPriority priority, String userId, String modelName) {
+        return submitTask(projectId, sessionId, title, description, priority, userId, modelName, null);
+    }
+
+    public Task submitTask(String projectId, String sessionId, String title, String description,
+                           TaskPriority priority, String userId, String modelName,
+                           eu.kalafatic.tryst.domain.security.SecurityContext context) {
         if (title == null || title.isBlank()) {
             throw new TrystDomainException("Task title must not be blank");
+        }
+
+        if (projectId != null && projectRepository != null) {
+            projectRepository.findById(projectId).ifPresent(p -> {
+                permissionManager.validateUserProjectAccess(userId, p, context);
+            });
         }
 
         Task task = new Task(
@@ -196,12 +208,21 @@ public class TaskOrchestrator {
      * Submits unresolved review comments and requests rework for a task in WAITING_FOR_REVIEW.
      */
     public boolean requestRework(String taskId, String reason) {
+        return requestRework(taskId, reason, null, null);
+    }
+
+    public boolean requestRework(String taskId, String reason, String userId, eu.kalafatic.tryst.domain.security.SecurityContext context) {
         Objects.requireNonNull(taskId, "taskId must not be null");
         Optional<Task> optTask = taskRepository.findTaskById(taskId);
         if (optTask.isEmpty()) {
             return false;
         }
         Task task = optTask.get();
+
+        if (userId != null && !userId.isBlank()) {
+            permissionManager.validateTaskAccess(userId, task, context, eu.kalafatic.tryst.domain.model.Permission.EDIT_PROPOSED_CHANGES);
+        }
+
         if (task.getStatus() != TaskStatus.WAITING_FOR_REVIEW) {
             return false;
         }
@@ -224,7 +245,17 @@ public class TaskOrchestrator {
      * Cancels an active or queued task.
      */
     public boolean cancelTask(String taskId, String reason) {
+        return cancelTask(taskId, reason, null, null);
+    }
+
+    public boolean cancelTask(String taskId, String reason, String userId, eu.kalafatic.tryst.domain.security.SecurityContext context) {
         Objects.requireNonNull(taskId, "taskId must not be null");
+
+        if (userId != null && !userId.isBlank()) {
+            taskRepository.findTaskById(taskId).ifPresent(t -> {
+                permissionManager.validateTaskAccess(userId, t, context, eu.kalafatic.tryst.domain.model.Permission.CANCEL_TASKS);
+            });
+        }
 
         TaskExecutionContext ctx = activeContexts.get(taskId);
         if (ctx != null) {
