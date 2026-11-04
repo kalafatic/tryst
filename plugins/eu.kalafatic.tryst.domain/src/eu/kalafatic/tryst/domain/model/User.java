@@ -136,11 +136,12 @@ public class User {
         }
         return switch (permission) {
             case MANAGE_USERS, MANAGE_ROLES, MANAGE_SERVER_CONFIG, INSPECT_SERVER_HEALTH, VIEW_AUDIT_LOGS, MANAGE_SESSIONS -> false;
-            case CREATE_PROJECTS, EXECUTE_TASKS, CANCEL_TASKS -> role != UserRole.REVIEWER;
-            case ACCESS_PROJECTS -> true;
+            case CREATE_PROJECTS, EXECUTE_TASKS, CANCEL_TASKS -> role != UserRole.REVIEWER && role != UserRole.USER;
+            case ACCESS_PROJECTS, VIEW_TASKS, ACCESS_WORKSPACE -> true;
             case EDIT_PROPOSED_CHANGES, APPROVE_REVIEWS, COMMIT_APPROVED_CHANGES ->
                     role == UserRole.PROJECT_OWNER || role == UserRole.DEVELOPER;
             case MANAGE_AGENTS -> role == UserRole.PROJECT_OWNER || role == UserRole.DEVELOPER;
+            case MANAGE_GITHUB_CREDENTIALS -> role != UserRole.USER;
         };
     }
 }

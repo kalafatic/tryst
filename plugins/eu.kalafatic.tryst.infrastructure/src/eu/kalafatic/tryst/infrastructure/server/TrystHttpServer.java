@@ -12,7 +12,11 @@ import eu.kalafatic.tryst.domain.repository.*;
 import eu.kalafatic.tryst.domain.review.CodeReview;
 import eu.kalafatic.tryst.domain.review.ReviewFileEdit;
 import eu.kalafatic.tryst.domain.security.AuthenticationService;
+import eu.kalafatic.tryst.core.error.TrystDomainException;
+import eu.kalafatic.tryst.domain.security.CsrfTokenManager;
+import eu.kalafatic.tryst.domain.security.PermissionDecision;
 import eu.kalafatic.tryst.domain.security.PermissionManager;
+import eu.kalafatic.tryst.domain.security.RateLimiter;
 import eu.kalafatic.tryst.domain.security.SecurityContext;
 import eu.kalafatic.tryst.domain.service.*;
 import eu.kalafatic.tryst.infrastructure.build.BuildAndTestService;
@@ -72,6 +76,10 @@ public class TrystHttpServer implements TrystHttpService {
     private eu.kalafatic.tryst.domain.github.GitHubCredentialRepository gitHubCredentialRepository;
     private eu.kalafatic.tryst.domain.github.GitHubCredentialEncryptionService gitHubCredentialEncryptionService;
 
+    private final RateLimiter authRateLimiter = new RateLimiter(30, 60);
+    private final RateLimiter apiRateLimiter = new RateLimiter(300, 60);
+    private final CsrfTokenManager csrfTokenManager = new CsrfTokenManager();
+
     private HttpServer server;
     private ExecutorService httpExecutor;
     private final AtomicBoolean running = new AtomicBoolean(false);
@@ -128,6 +136,9 @@ public class TrystHttpServer implements TrystHttpService {
         this.userRepository = userRepository;
         this.sessionRepository = sessionRepository;
         this.auditEventRepository = auditEventRepository;
+        if (this.permissionManager != null && userRepository != null) {
+            this.permissionManager.setUserRepository(userRepository);
+        }
         this.notificationRepository = notificationRepository;
         this.telemetryRepository = telemetryRepository;
         this.serverMonitoringService = serverMonitoringService;
@@ -350,12 +361,21 @@ public class TrystHttpServer implements TrystHttpService {
         return host;
     }
 
+    private static void applySecurityHeaders(HttpExchange exchange) {
+        exchange.getResponseHeaders().set("X-Content-Type-Options", "nosniff");
+        exchange.getResponseHeaders().set("X-Frame-Options", "DENY");
+        exchange.getResponseHeaders().set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'");
+        exchange.getResponseHeaders().set("Referrer-Policy", "strict-origin-when-cross-origin");
+        exchange.getResponseHeaders().set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+    }
+
     private static void sendJsonResponse(HttpExchange exchange, int statusCode, String json) throws IOException {
         byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().set("Content-Type", "application/json; charset=UTF-8");
         exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
         exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-        exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-User-Id");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-User-Id, X-CSRF-Token");
+        applySecurityHeaders(exchange);
 
         if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
             exchange.sendResponseHeaders(204, -1);
@@ -401,14 +421,76 @@ public class TrystHttpServer implements TrystHttpService {
         return Optional.empty();
     }
 
+    private String extractTokenFromRequest(HttpExchange exchange) {
+        String authHeader = exchange.getRequestHeaders().getFirst("Authorization");
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            return authHeader.substring("Bearer ".length()).trim();
+        }
+
+        String cookieHeader = exchange.getRequestHeaders().getFirst("Cookie");
+        if (cookieHeader != null && !cookieHeader.isBlank()) {
+            String[] cookies = cookieHeader.split(";");
+            for (String cookie : cookies) {
+                String[] pair = cookie.trim().split("=", 2);
+                if (pair.length == 2 && ("tryst_session".equalsIgnoreCase(pair[0].trim()) || "token".equalsIgnoreCase(pair[0].trim()))) {
+                    return pair[1].trim();
+                }
+            }
+        }
+        return null;
+    }
+
     private String getUserId(HttpExchange exchange) {
         Optional<SecurityContext> ctx = resolveSecurityContext(exchange);
         if (ctx.isPresent()) {
             return ctx.get().getUserId();
         }
-        // Fallback for tests or unauthenticated paths
+        if (authenticationService != null && authenticationService.hasAdministrator()) {
+            return "unauthenticated";
+        }
         String uid = exchange.getRequestHeaders().getFirst("X-User-Id");
         return (uid != null && !uid.isBlank()) ? uid.trim() : Project.DEFAULT_OWNER_ID;
+    }
+
+    private String getClientIp(HttpExchange exchange) {
+        if (exchange.getRemoteAddress() != null && exchange.getRemoteAddress().getAddress() != null) {
+            return exchange.getRemoteAddress().getAddress().getHostAddress();
+        }
+        return "127.0.0.1";
+    }
+
+    private boolean validateCsrfIfCookieAuth(HttpExchange exchange) {
+        String method = exchange.getRequestMethod().toUpperCase();
+        if ("GET".equals(method) || "HEAD".equals(method) || "OPTIONS".equals(method)) {
+            return true;
+        }
+
+        String authHeader = exchange.getRequestHeaders().getFirst("Authorization");
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            return true;
+        }
+
+        String path = exchange.getRequestURI().getPath();
+        if (path.endsWith("/api/auth/logout") || path.endsWith("/api/auth/login")) {
+            return true;
+        }
+
+        String cookieHeader = exchange.getRequestHeaders().getFirst("Cookie");
+        if (cookieHeader != null && cookieHeader.contains("tryst_session=")) {
+            String token = null;
+            for (String c : cookieHeader.split(";")) {
+                String[] pair = c.trim().split("=", 2);
+                if (pair.length == 2 && "tryst_session".equalsIgnoreCase(pair[0].trim())) {
+                    token = pair[1].trim();
+                    break;
+                }
+            }
+            if (token != null && !token.isBlank()) {
+                String csrfHeader = exchange.getRequestHeaders().getFirst("X-CSRF-Token");
+                return csrfTokenManager.validateToken(token, csrfHeader);
+            }
+        }
+        return true;
     }
 
     private class StatusHandler implements HttpHandler {
@@ -517,6 +599,10 @@ public class TrystHttpServer implements TrystHttpService {
                 sendJsonResponse(exchange, 204, "");
                 return;
             }
+            if (!validateCsrfIfCookieAuth(exchange)) {
+                sendJsonResponse(exchange, 403, "{\"error\": \"Invalid or missing CSRF token\"}");
+                return;
+            }
 
             String path = exchange.getRequestURI().getPath();
             if (authenticationService == null) {
@@ -525,24 +611,43 @@ public class TrystHttpServer implements TrystHttpService {
             }
 
             if (path.endsWith("/login") && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                String clientIp = getClientIp(exchange);
+                if (!authRateLimiter.allowRequest(clientIp)) {
+                    permissionManager.recordAudit("rate-limiter", "RATE_LIMIT_EXCEEDED", "ip", clientIp, null, null, "DENIED", "Too many login attempts");
+                    sendJsonResponse(exchange, 429, "{\"error\": \"Too many login attempts. Please try again later.\"}");
+                    return;
+                }
+
                 String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
                 String username = extractJsonField(body, "username");
                 String password = extractJsonField(body, "password");
-                String clientIp = exchange.getRemoteAddress() != null ? exchange.getRemoteAddress().getAddress().getHostAddress() : "127.0.0.1";
                 String userAgent = exchange.getRequestHeaders().getFirst("User-Agent");
 
                 AuthenticationService.AuthResult res = authenticationService.login(username, password, clientIp, userAgent);
                 if (res.success()) {
+                    String csrfToken = csrfTokenManager.refreshToken(res.token());
                     String ctxPath = (configurationService != null) ? configurationService.getConfiguration().contextPath() : "/tryst";
                     if (!ctxPath.startsWith("/")) ctxPath = "/" + ctxPath;
                     exchange.getResponseHeaders().add("Set-Cookie",
                             "tryst_session=" + res.token() + "; Path=" + ctxPath + "; HttpOnly; SameSite=Lax");
-                    String json = String.format("{\"success\": true, \"token\": \"%s\", \"user\": {\"id\": \"%s\", \"username\": \"%s\", \"role\": \"%s\"}}",
-                            res.token(), res.user().getId(), res.user().getUsername(), res.user().getRole().name());
+                    String json = String.format("{\"success\": true, \"token\": \"%s\", \"csrfToken\": \"%s\", \"user\": {\"id\": \"%s\", \"username\": \"%s\", \"role\": \"%s\"}}",
+                            res.token(), csrfToken, res.user().getId(), res.user().getUsername(), res.user().getRole().name());
                     sendJsonResponse(exchange, 200, json);
                 } else {
                     sendJsonResponse(exchange, 401, String.format("{\"success\": false, \"error\": \"%s\"}", escapeJson(res.errorMessage())));
                 }
+                return;
+            }
+
+            if (path.endsWith("/csrf") && "GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                Optional<SecurityContext> ctx = resolveSecurityContext(exchange);
+                if (ctx.isEmpty()) {
+                    sendJsonResponse(exchange, 401, "{\"error\": \"Unauthenticated\"}");
+                    return;
+                }
+                String token = extractTokenFromRequest(exchange);
+                String csrf = (token != null) ? csrfTokenManager.getOrCreateToken(token) : "";
+                sendJsonResponse(exchange, 200, "{\"csrfToken\": \"" + csrf + "\"}");
                 return;
             }
 
@@ -592,12 +697,17 @@ public class TrystHttpServer implements TrystHttpService {
                 sendJsonResponse(exchange, 204, "");
                 return;
             }
+            if (!validateCsrfIfCookieAuth(exchange)) {
+                sendJsonResponse(exchange, 403, "{\"error\": \"Invalid or missing CSRF token\"}");
+                return;
+            }
             Optional<SecurityContext> ctx = resolveSecurityContext(exchange);
             String userId = ctx.map(SecurityContext::getUserId).orElseGet(() -> getUserId(exchange));
             boolean isAdmin = ctx.map(SecurityContext::isAdmin).orElse(false);
 
             if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
                 if (ctx.isPresent() && !ctx.get().user().hasPermission(Permission.CREATE_PROJECTS)) {
+                    permissionManager.recordAudit(userId, "PROJECT_CREATE", "project", null, null, null, "DENIED", "Lacks CREATE_PROJECTS");
                     sendJsonResponse(exchange, 403, "{\"error\": \"Permission CREATE_PROJECTS required\"}");
                     return;
                 }
@@ -653,24 +763,45 @@ public class TrystHttpServer implements TrystHttpService {
                 sendJsonResponse(exchange, 204, "");
                 return;
             }
-            Optional<SecurityContext> ctx = resolveSecurityContext(exchange);
+            if (!validateCsrfIfCookieAuth(exchange)) {
+                sendJsonResponse(exchange, 403, "{\"error\": \"Invalid or missing CSRF token\"}");
+                return;
+            }
 
+            String clientIp = getClientIp(exchange);
+            if (!apiRateLimiter.allowRequest(clientIp)) {
+                sendJsonResponse(exchange, 429, "{\"error\": \"Rate limit exceeded. Please slow down.\"}");
+                return;
+            }
+
+            Optional<SecurityContext> ctx = resolveSecurityContext(exchange);
+            String userId = ctx.map(SecurityContext::getUserId).orElseGet(() -> getUserId(exchange));
             String path = exchange.getRequestURI().getPath();
 
             // Task cancellation: POST /api/tasks/{id}/cancel
             if (path.contains("/cancel") && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                if (ctx.isPresent() && !ctx.get().user().hasPermission(Permission.CANCEL_TASKS)) {
+                    sendJsonResponse(exchange, 403, "{\"error\": \"Permission CANCEL_TASKS required\"}");
+                    return;
+                }
                 String sub = path.substring(path.indexOf("/api/tasks/") + "/api/tasks/".length());
                 String taskId = sub.substring(0, sub.indexOf("/cancel"));
                 boolean cancelled = false;
-                if (taskOrchestrator != null) {
-                    cancelled = taskOrchestrator.cancelTask(taskId, "User request via HTTP API");
-                } else if (taskRepository != null) {
-                    cancelled = taskRepository.findTaskById(taskId).map(t -> {
-                        t.transitionTo(TaskStatus.CANCELLED);
-                        taskRepository.saveTask(t);
-                        return true;
-                    }).orElse(false);
+                try {
+                    if (taskOrchestrator != null) {
+                        cancelled = taskOrchestrator.cancelTask(taskId, "User request via HTTP API", userId, ctx.orElse(null));
+                    } else if (taskRepository != null) {
+                        cancelled = taskRepository.findTaskById(taskId).map(t -> {
+                            t.transitionTo(TaskStatus.CANCELLED);
+                            taskRepository.saveTask(t);
+                            return true;
+                        }).orElse(false);
+                    }
+                } catch (TrystDomainException e) {
+                    sendJsonResponse(exchange, 403, "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}");
+                    return;
                 }
+
                 if (cancelled) {
                     sendJsonResponse(exchange, 200, "{\"success\": true, \"taskId\": \"" + escapeJson(taskId) + "\"}");
                 } else {
@@ -718,17 +849,21 @@ public class TrystHttpServer implements TrystHttpService {
 
                 String taskId;
                 String statusName;
-                if (taskOrchestrator != null) {
-                    String userId = ctx.map(SecurityContext::getUserId).orElseGet(() -> getUserId(exchange));
-                    Task task = taskOrchestrator.submitTask(projectId, null, title, description, priority, userId, null);
-                    taskId = task.getId();
-                    statusName = task.getStatus().name();
-                } else if (workspaceService != null) {
-                    AgentTask t = workspaceService.createTask(projectId, title, description);
-                    taskId = t.getId();
-                    statusName = t.getTaskStatus().name();
-                } else {
-                    sendJsonResponse(exchange, 503, "{\"error\": \"Task execution service unavailable\"}");
+                try {
+                    if (taskOrchestrator != null) {
+                        Task task = taskOrchestrator.submitTask(projectId, null, title, description, priority, userId, null, ctx.orElse(null));
+                        taskId = task.getId();
+                        statusName = task.getStatus().name();
+                    } else if (workspaceService != null) {
+                        AgentTask t = workspaceService.createTask(projectId, title, description);
+                        taskId = t.getId();
+                        statusName = t.getTaskStatus().name();
+                    } else {
+                        sendJsonResponse(exchange, 503, "{\"error\": \"Task execution service unavailable\"}");
+                        return;
+                    }
+                } catch (TrystDomainException e) {
+                    sendJsonResponse(exchange, 403, "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}");
                     return;
                 }
 
@@ -1263,6 +1398,10 @@ public class TrystHttpServer implements TrystHttpService {
         public void handle(HttpExchange exchange) throws IOException {
             if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
                 sendJsonResponse(exchange, 204, "");
+                return;
+            }
+            if (!validateCsrfIfCookieAuth(exchange)) {
+                sendJsonResponse(exchange, 403, "{\"error\": \"Invalid or missing CSRF token\"}");
                 return;
             }
 
