@@ -331,4 +331,33 @@ The audit of the codebase and implementation progress tracks the following compo
 - **Known Deviations:**
   - None.
 - **Recommended Next Implementation Step:**
-  - Structured JSON Tool Invocation Schema (Phase 11).
+  - Final Approval and Git Delivery Workflow (Phase 11).
+
+---
+
+## 11. Completed Final Approval and Git Delivery Workflow (Phase 11 / Current Protocol)
+
+- **Completed Requirements:**
+  - **Explicit Human Approval Gating:** Review approval must be explicitly performed by an authorized human user with `APPROVE_REVIEWS` permission; AI agents are strictly forbidden from approving reviews or committing changes (`CodeReview.isAiAgent()`).
+  - **Exact Revision Reference & Stale Rejection:** Approval must reference an exact review revision (`approvedRevision`). Attempting to approve older or stale revisions when a newer revision exists is strictly rejected.
+  - **Blocking Comment Enforcement:** Added `blocking` flag support (`review_comments.blocking` column in migration V11); unresolved blocking comments (`!isResolved() && isBlocking()`) prevent approval and return HTTP 400 Bad Request with details. Non-blocking comments do not block approval.
+  - **Post-Approval Invalidation:** File edits via API, autonomous AI rework loops, or external concurrent disk modifications immediately invalidate previous approvals, resetting review status to `PENDING` and clearing approved fingerprints and revision references.
+  - **Commit Preparation & Summary Inspection:** Added `/api/reviews/{id}/commit-summary` returning git status, diff statistics (+/-), fingerprint verification, blocking comments count, and `canCommit` validation status.
+  - **Pre-Commit Git Status Verification:** Git status and working tree diff fingerprints are checked immediately prior to staging and committing in `GitService.commitAuthorizedReview`; any tampering or fingerprint divergence immediately aborts the commit and invalidates approval.
+  - **Commit Metadata Persistence:** Introduced `GitCommitRecord` domain entity, `GitCommitRepository` interface, and `SqliteGitCommitRepository` persisting commit hash, review ID, task ID, project ID, revision number, authorizer ID, commit message, content fingerprint, branch, and files changed into `git_commits` table (Migration V11).
+  - **Full Operational Traceability:** Commit operations transition associated `Task` to `COMMITTING -> COMPLETED`, transition `Workspace` to `COMPLETED`, record structured `AuditEvent` entries, dispatch `COMMIT_COMPLETED` notifications, and expose `/api/reviews/{id}/commits`.
+  - **Idempotent Recovery & Duplicate Prevention:** Attempting to commit an already-committed review idempotently returns the existing commit hash without creating duplicate commits in Git or SQLite.
+  - **Explicit Push Authorization & Conflict Detection:** Push requires explicit human authorization (`COMMIT_APPROVED_CHANGES`). Divergence between local and remote branches is detected before push, returning HTTP 409 Conflict. On successful push, `GitCommitRecord` status is updated to `PUSHED` with `pushedAt` timestamp.
+- **Modified Modules:**
+  - `eu.kalafatic.tryst.domain`: `CodeReview`, `ReviewComment`, `GitCommitRecord`, `GitCommitRepository`, `TaskRecoveryService`, `WorkspaceService`.
+  - `eu.kalafatic.tryst.infrastructure`: `SchemaMigrationService` (V11), `SqliteGitCommitRepository`, `SqliteCodeReviewRepository`, `GitService`, `DefaultGitHubService`, `TrystHttpServer`.
+  - `eu.kalafatic.tryst.application`: `ApplicationLifecycleCoordinator`.
+  - `eu.kalafatic.tryst.tests`: Added `GitDeliveryAndApprovalWorkflowTest`, updated `SchemaMigrationTest` and `CodeReviewAndCommitAuthorizationTest`.
+- **New Interfaces and Dependencies:**
+  - `GitCommitRecord`, `GitCommitRepository`, `SqliteGitCommitRepository`.
+- **Outstanding Requirements:**
+  - None.
+- **Known Deviations:**
+  - None.
+- **Recommended Next Implementation Step:**
+  - Structured JSON Tool Invocation Schema (Phase 12).

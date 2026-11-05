@@ -76,6 +76,7 @@ public class TrystHttpServer implements TrystHttpService {
     private eu.kalafatic.tryst.domain.github.GitHubService gitHubService;
     private eu.kalafatic.tryst.domain.github.GitHubCredentialRepository gitHubCredentialRepository;
     private eu.kalafatic.tryst.domain.github.GitHubCredentialEncryptionService gitHubCredentialEncryptionService;
+    private eu.kalafatic.tryst.domain.repository.GitCommitRepository gitCommitRepository;
 
     private final RateLimiter authRateLimiter = new RateLimiter(30, 60);
     private final RateLimiter apiRateLimiter = new RateLimiter(300, 60);
@@ -172,6 +173,10 @@ public class TrystHttpServer implements TrystHttpService {
         this.gitHubService = gitHubService;
         this.gitHubCredentialRepository = gitHubCredentialRepository;
         this.gitHubCredentialEncryptionService = gitHubCredentialEncryptionService;
+    }
+
+    public void setGitCommitRepository(eu.kalafatic.tryst.domain.repository.GitCommitRepository gitCommitRepository) {
+        this.gitCommitRepository = gitCommitRepository;
     }
 
     @Override
@@ -914,14 +919,15 @@ public class TrystHttpServer implements TrystHttpService {
                 return;
             }
 
-            String path = exchange.getRequestURI().getPath();
-            Optional<SecurityContext> ctx = resolveSecurityContext(exchange);
-            String userId = ctx.map(SecurityContext::getUserId).orElseGet(() -> getUserId(exchange));
+            try {
+                String path = exchange.getRequestURI().getPath();
+                Optional<SecurityContext> ctx = resolveSecurityContext(exchange);
+                String userId = ctx.map(SecurityContext::getUserId).orElseGet(() -> getUserId(exchange));
 
-            if (codeReviewRepository == null) {
-                sendJsonResponse(exchange, 503, "{\"error\": \"CodeReviewRepository unavailable\"}");
-                return;
-            }
+                if (codeReviewRepository == null) {
+                    sendJsonResponse(exchange, 503, "{\"error\": \"CodeReviewRepository unavailable\"}");
+                    return;
+                }
 
             // Route: GET /api/reviews
             if (path.equals("/api/reviews") && "GET".equalsIgnoreCase(exchange.getRequestMethod())) {
@@ -1101,17 +1107,154 @@ public class TrystHttpServer implements TrystHttpService {
                     }
                     case "approve" -> {
                         if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                            if (userId != null && CodeReview.isAiAgent(userId)) {
+                                sendJsonResponse(exchange, 403, "{\"error\": \"AI agents are strictly forbidden from approving reviews\"}");
+                                return;
+                            }
                             if (ctx.isPresent() && !ctx.get().user().hasPermission(Permission.APPROVE_REVIEWS)) {
                                 sendJsonResponse(exchange, 403, "{\"error\": \"Permission APPROVE_REVIEWS required\"}");
                                 return;
                             }
-                            review.approve(userId);
+
+                            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                            String revNumStr = extractJsonField(body, "revisionNumber");
+                            if (revNumStr == null || revNumStr.isBlank()) {
+                                Map<String, String> qParams = parseQueryParams(exchange.getRequestURI().getQuery());
+                                revNumStr = qParams.get("revisionNumber");
+                                if (revNumStr == null) revNumStr = qParams.get("revision");
+                            }
+
+                            if (revNumStr == null || revNumStr.isBlank()) {
+                                sendJsonResponse(exchange, 400, "{\"error\": \"Approval must reference an exact review revision (field 'revisionNumber' is required)\"}");
+                                return;
+                            }
+
+                            int revisionNumber;
+                            try {
+                                revisionNumber = Integer.parseInt(revNumStr);
+                            } catch (NumberFormatException e) {
+                                sendJsonResponse(exchange, 400, "{\"error\": \"Invalid revisionNumber: " + revNumStr + "\"}");
+                                return;
+                            }
+
+                            // Validate exact revision: reject stale approvals
+                            if (revisionNumber != review.getRevisionCount()) {
+                                sendJsonResponse(exchange, 400, String.format(
+                                        "{\"error\": \"Stale approval rejected: Cannot approve revision %d because latest revision is %d.\"}",
+                                        revisionNumber, review.getRevisionCount()));
+                                return;
+                            }
+
+                            // Check unresolved blocking comments
+                            List<eu.kalafatic.tryst.domain.review.ReviewComment> comments = codeReviewRepository.findCommentsByReviewId(review.getId());
+                            List<eu.kalafatic.tryst.domain.review.ReviewComment> unresolvedBlocking = comments.stream()
+                                    .filter(c -> !c.isResolved() && c.isBlocking())
+                                    .toList();
+                            if (!unresolvedBlocking.isEmpty()) {
+                                sendJsonResponse(exchange, 400, String.format(
+                                        "{\"error\": \"Approval rejected: Review has %d unresolved blocking comment(s). All blocking comments must be resolved before approval.\", \"unresolvedBlockingCount\": %d}",
+                                        unresolvedBlocking.size(), unresolvedBlocking.size()));
+                                return;
+                            }
+
+                            // Verify working tree matches review content fingerprint
+                            Path repoDir = resolveProjectWorkspacePath(review.getProjectId());
+                            GitService.GitCommandResult currentDiffRes = gitService.getDiff(repoDir);
+                            String currentFingerprint = CodeReview.calculateFingerprint(currentDiffRes.output());
+                            if (!currentFingerprint.equals(review.getContentFingerprint())) {
+                                sendJsonResponse(exchange, 400, "{\"error\": \"Approval rejected: Working tree content has changed since revision " +
+                                        revisionNumber + " was generated. Please trigger rework or update effective diff.\"}");
+                                return;
+                            }
+
+                            review.approve(userId, revisionNumber);
                             codeReviewRepository.save(review);
+
+                            if (taskRepository != null && review.getTaskId() != null) {
+                                taskRepository.findTaskById(review.getTaskId()).ifPresent(t -> {
+                                    if (t.getStatus() == TaskStatus.WAITING_FOR_REVIEW) {
+                                        t.transitionTo(TaskStatus.APPROVED);
+                                        taskRepository.saveTask(t);
+                                    }
+                                });
+                            }
+
                             if (notificationService != null) {
                                 notificationService.notifyUser(userId, "REVIEW_APPROVED", "Review Approved",
-                                        "Code review " + review.getId() + " approved.", "review", review.getId());
+                                        "Code review " + review.getId() + " revision " + revisionNumber + " approved.", "review", review.getId());
                             }
                             sendJsonResponse(exchange, 200, serializeReview(review));
+                            return;
+                        }
+                    }
+                    case "commit-summary" -> {
+                        if ("GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                            Path repoDir = resolveProjectWorkspacePath(review.getProjectId());
+                            GitService.GitCommandResult statusRes = gitService.getStatus(repoDir);
+                            GitService.GitCommandResult diffRes = gitService.getDiff(repoDir);
+                            String currentDiff = diffRes.output();
+                            String currentFingerprint = CodeReview.calculateFingerprint(currentDiff);
+
+                            List<eu.kalafatic.tryst.domain.review.ReviewComment> comments = codeReviewRepository.findCommentsByReviewId(review.getId());
+                            List<eu.kalafatic.tryst.domain.review.ReviewComment> unresolvedBlocking = comments.stream()
+                                    .filter(c -> !c.isResolved() && c.isBlocking())
+                                    .toList();
+                            long unresolvedTotal = comments.stream().filter(c -> !c.isResolved()).count();
+
+                            boolean fingerprintMatches = currentFingerprint.equals(review.getApprovedFingerprint());
+                            boolean isApproved = review.isApproved();
+                            boolean canCommit = isApproved && unresolvedBlocking.isEmpty() && fingerprintMatches;
+
+                            List<String> validationErrors = new ArrayList<>();
+                            if (!isApproved) {
+                                validationErrors.add("Review is not currently approved (status: " + review.getStatus() + ")");
+                            }
+                            if (review.getApprovedRevision() != null && review.getApprovedRevision() != review.getRevisionCount()) {
+                                validationErrors.add("Stale approval: approved revision " + review.getApprovedRevision() + " does not match current revision " + review.getRevisionCount());
+                            }
+                            if (!unresolvedBlocking.isEmpty()) {
+                                validationErrors.add(unresolvedBlocking.size() + " unresolved blocking comment(s) exist");
+                            }
+                            if (isApproved && !fingerprintMatches) {
+                                validationErrors.add("Working tree modified after approval (fingerprint mismatch)");
+                            }
+
+                            eu.kalafatic.tryst.domain.review.DiffModel.ParsedDiff parsed = eu.kalafatic.tryst.domain.review.DiffParser.parse(
+                                    review.getEffectiveDiff() != null ? review.getEffectiveDiff() : review.getInitialDiff());
+
+                            String defaultCommitMsg = "TRYST: Approved changes for task " + (review.getTaskId() != null ? review.getTaskId() : review.getId()) +
+                                    " (Review: " + review.getId() + ", Rev: " + (review.getApprovedRevision() != null ? review.getApprovedRevision() : review.getRevisionCount()) + ")";
+
+                            StringBuilder sb = new StringBuilder();
+                            sb.append("{");
+                            sb.append("\"reviewId\":\"").append(escapeJson(review.getId())).append("\",");
+                            sb.append("\"projectId\":\"").append(escapeJson(review.getProjectId())).append("\",");
+                            sb.append("\"taskId\":\"").append(escapeJson(review.getTaskId() != null ? review.getTaskId() : "")).append("\",");
+                            sb.append("\"branch\":\"").append(escapeJson(review.getBranch())).append("\",");
+                            sb.append("\"status\":\"").append(review.getStatus().name()).append("\",");
+                            sb.append("\"isApproved\":").append(isApproved).append(",");
+                            sb.append("\"approvedRevision\":").append(review.getApprovedRevision() != null ? review.getApprovedRevision() : "null").append(",");
+                            sb.append("\"approvedBy\":\"").append(escapeJson(review.getApprovedBy() != null ? review.getApprovedBy() : "")).append("\",");
+                            sb.append("\"revisionCount\":").append(review.getRevisionCount()).append(",");
+                            sb.append("\"contentFingerprint\":\"").append(escapeJson(review.getContentFingerprint())).append("\",");
+                            sb.append("\"approvedFingerprint\":\"").append(escapeJson(review.getApprovedFingerprint() != null ? review.getApprovedFingerprint() : "")).append("\",");
+                            sb.append("\"currentFingerprint\":\"").append(escapeJson(currentFingerprint)).append("\",");
+                            sb.append("\"canCommit\":").append(canCommit).append(",");
+                            sb.append("\"gitStatus\":\"").append(escapeJson(statusRes.output())).append("\",");
+                            sb.append("\"defaultCommitMessage\":\"").append(escapeJson(defaultCommitMsg)).append("\",");
+                            sb.append("\"unresolvedCommentsCount\":").append(unresolvedTotal).append(",");
+                            sb.append("\"blockingCommentsCount\":").append(unresolvedBlocking.size()).append(",");
+                            sb.append("\"filesCount\":").append(parsed.totalFiles()).append(",");
+                            sb.append("\"additions\":").append(parsed.totalAdditions()).append(",");
+                            sb.append("\"deletions\":").append(parsed.totalDeletions()).append(",");
+                            sb.append("\"validationErrors\":[");
+                            for (int i = 0; i < validationErrors.size(); i++) {
+                                if (i > 0) sb.append(",");
+                                sb.append("\"").append(escapeJson(validationErrors.get(i))).append("\"");
+                            }
+                            sb.append("]}");
+
+                            sendJsonResponse(exchange, 200, sb.toString());
                             return;
                         }
                     }
@@ -1127,18 +1270,101 @@ public class TrystHttpServer implements TrystHttpService {
                     }
                     case "commit" -> {
                         if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                            if (userId != null && CodeReview.isAiAgent(userId)) {
+                                sendJsonResponse(exchange, 403, "{\"error\": \"AI agents are strictly forbidden from committing changes\"}");
+                                return;
+                            }
                             if (ctx.isPresent() && !ctx.get().user().hasPermission(Permission.COMMIT_APPROVED_CHANGES)) {
                                 sendJsonResponse(exchange, 403, "{\"error\": \"Permission COMMIT_APPROVED_CHANGES required\"}");
                                 return;
                             }
+
+                            // Verify blocking comments before commit
+                            List<eu.kalafatic.tryst.domain.review.ReviewComment> comments = codeReviewRepository.findCommentsByReviewId(review.getId());
+                            List<eu.kalafatic.tryst.domain.review.ReviewComment> unresolvedBlocking = comments.stream()
+                                    .filter(c -> !c.isResolved() && c.isBlocking())
+                                    .toList();
+                            if (!unresolvedBlocking.isEmpty()) {
+                                sendJsonResponse(exchange, 400, String.format(
+                                        "{\"error\": \"Commit rejected: Review has %d unresolved blocking comment(s). All blocking comments must be resolved before committing.\"}",
+                                        unresolvedBlocking.size()));
+                                return;
+                            }
+
                             String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
                             String msg = extractJsonField(body, "message");
                             String commitMsg = (msg != null && !msg.isBlank()) ? msg : "Approved review " + review.getId();
 
                             Path repoDir = resolveProjectWorkspacePath(review.getProjectId());
+
+                            // Support failure recovery: transition Task to COMMITTING
+                            Optional<Task> optTask = (taskRepository != null && review.getTaskId() != null)
+                                    ? taskRepository.findTaskById(review.getTaskId()) : Optional.empty();
+                            optTask.ifPresent(t -> {
+                                if (t.getStatus() != TaskStatus.COMMITTING && t.getStatus() != TaskStatus.COMPLETED) {
+                                    t.transitionTo(TaskStatus.COMMITTING);
+                                    taskRepository.saveTask(t);
+                                }
+                            });
+
                             GitService.AuthorizedCommitResult res = gitService.commitAuthorizedReview(repoDir, review, userId, commitMsg);
                             if (res.success()) {
                                 codeReviewRepository.save(review);
+
+                                // Persist Git commit metadata
+                                int filesCount = 0;
+                                try {
+                                    filesCount = eu.kalafatic.tryst.domain.review.DiffParser.parse(
+                                            review.getEffectiveDiff() != null ? review.getEffectiveDiff() : review.getInitialDiff()).totalFiles();
+                                } catch (Exception ignored) {}
+                                int revNum = review.getApprovedRevision() != null ? review.getApprovedRevision() : review.getRevisionCount();
+                                eu.kalafatic.tryst.domain.review.GitCommitRecord commitRecord =
+                                        new eu.kalafatic.tryst.domain.review.GitCommitRecord(
+                                                res.commitHash(),
+                                                review.getId(),
+                                                review.getTaskId(),
+                                                review.getProjectId(),
+                                                revNum,
+                                                userId,
+                                                commitMsg,
+                                                review.getContentFingerprint(),
+                                                review.getBranch(),
+                                                filesCount
+                                        );
+                                if (gitCommitRepository != null) {
+                                    if (gitCommitRepository.findByCommitHash(res.commitHash()).isEmpty()) {
+                                        gitCommitRepository.save(commitRecord);
+                                    }
+                                }
+
+                                // Transition Task to COMPLETED
+                                optTask.ifPresent(t -> {
+                                    if (t.getStatus() != TaskStatus.COMPLETED) {
+                                        t.transitionTo(TaskStatus.COMPLETED);
+                                        taskRepository.saveTask(t);
+                                        taskRepository.saveTaskEvent(new eu.kalafatic.tryst.domain.model.TaskEvent(
+                                                t.getId(), TaskStatus.COMPLETED,
+                                                "Committed changes with hash " + res.commitHash() + " (Revision: " + revNum + ")", userId));
+                                    }
+                                });
+
+                                // Transition Workspace to COMPLETED
+                                if (workspaceService != null && review.getProjectId() != null) {
+                                    Workspace ws = workspaceService.getWorkspaceForProject(review.getProjectId());
+                                    if (ws != null && ws.getStatus() != eu.kalafatic.tryst.domain.model.WorkspaceStatus.COMPLETED) {
+                                        if (eu.kalafatic.tryst.domain.model.WorkspaceStateTransitionValidator.canTransition(
+                                                ws.getStatus(), eu.kalafatic.tryst.domain.model.WorkspaceStatus.COMPLETED)) {
+                                            ws.complete();
+                                            workspaceService.saveWorkspace(ws);
+                                        }
+                                    }
+                                }
+
+                                // Audit logging
+                                permissionManager.recordAudit(userId, "GIT_COMMIT", "review", review.getId(),
+                                        review.getProjectId(), review.getTaskId(), "ALLOWED",
+                                        "Committed " + res.commitHash() + " for revision " + revNum);
+
                                 if (notificationService != null) {
                                     notificationService.notifyUser(
                                             userId,
@@ -1154,7 +1380,98 @@ public class TrystHttpServer implements TrystHttpService {
                                         res.commitHash(), serializeReview(review));
                                 sendJsonResponse(exchange, 200, json);
                             } else {
+                                // Save review (it may have been invalidated to PENDING due to post-approval modification)
+                                codeReviewRepository.save(review);
+                                optTask.ifPresent(t -> {
+                                    if (t.getStatus() == TaskStatus.COMMITTING) {
+                                        t.transitionTo(TaskStatus.WAITING_FOR_REVIEW, res.error());
+                                        taskRepository.saveTask(t);
+                                    }
+                                });
                                 sendJsonResponse(exchange, 400, String.format("{\"success\": false, \"error\": \"%s\"}", escapeJson(res.error())));
+                            }
+                            return;
+                        }
+                    }
+                    case "commits" -> {
+                        if ("GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                            List<eu.kalafatic.tryst.domain.review.GitCommitRecord> commits = (gitCommitRepository != null)
+                                    ? gitCommitRepository.findByReviewId(review.getId())
+                                    : List.of();
+                            StringBuilder sb = new StringBuilder();
+                            sb.append("{\"commits\":[");
+                            for (int i = 0; i < commits.size(); i++) {
+                                if (i > 0) sb.append(",");
+                                eu.kalafatic.tryst.domain.review.GitCommitRecord c = commits.get(i);
+                                sb.append(String.format("{\"id\":\"%s\",\"commitHash\":\"%s\",\"reviewId\":\"%s\",\"taskId\":\"%s\",\"projectId\":\"%s\"," +
+                                        "\"revisionNumber\":%d,\"authorId\":\"%s\",\"commitMessage\":\"%s\",\"contentFingerprint\":\"%s\"," +
+                                        "\"branch\":\"%s\",\"filesChanged\":%d,\"status\":\"%s\",\"committedAt\":\"%s\",\"pushedAt\":\"%s\"}",
+                                        escapeJson(c.getId()), escapeJson(c.getCommitHash()), escapeJson(c.getReviewId()),
+                                        escapeJson(c.getTaskId() != null ? c.getTaskId() : ""), escapeJson(c.getProjectId()),
+                                        c.getRevisionNumber(), escapeJson(c.getAuthorId()), escapeJson(c.getCommitMessage()),
+                                        escapeJson(c.getContentFingerprint()), escapeJson(c.getBranch()), c.getFilesChanged(),
+                                        c.getStatus().name(), c.getCommittedAt().toString(),
+                                        c.getPushedAt() != null ? c.getPushedAt().toString() : ""));
+                            }
+                            sb.append("]}");
+                            sendJsonResponse(exchange, 200, sb.toString());
+                            return;
+                        }
+                    }
+                    case "push" -> {
+                        if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                            if (userId != null && CodeReview.isAiAgent(userId)) {
+                                sendJsonResponse(exchange, 403, "{\"error\": \"AI agents are strictly forbidden from pushing changes. Human authorization required.\"}");
+                                return;
+                            }
+                            if (ctx.isPresent() && !ctx.get().user().hasPermission(Permission.COMMIT_APPROVED_CHANGES)) {
+                                sendJsonResponse(exchange, 403, "{\"error\": \"Permission COMMIT_APPROVED_CHANGES required to push\"}");
+                                return;
+                            }
+                            if (review.getStatus() != CodeReview.ReviewStatus.COMMITTED) {
+                                sendJsonResponse(exchange, 400, "{\"error\": \"Push rejected: Code review " + review.getId() + " has not been committed yet.\"}");
+                                return;
+                            }
+                            if (gitHubService == null) {
+                                sendJsonResponse(exchange, 503, "{\"error\": \"GitHubService unavailable\"}");
+                                return;
+                            }
+
+                            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                            String remote = extractJsonField(body, "remote");
+                            String branch = extractJsonField(body, "branch");
+                            boolean force = body.contains("\"force\":true") || body.contains("\"force\": true");
+
+                            Path repoDir = resolveProjectWorkspacePath(review.getProjectId());
+                            try {
+                                eu.kalafatic.tryst.domain.github.GitHubService.PushResult res = gitHubService.pushAuthorized(
+                                        userId, repoDir, review, remote, branch, force
+                                );
+
+                                if (res.success()) {
+                                    if (gitCommitRepository != null && res.commitHash() != null) {
+                                        gitCommitRepository.findByCommitHash(res.commitHash()).ifPresent(rec -> {
+                                            rec.markPushed(Instant.now());
+                                            gitCommitRepository.save(rec);
+                                        });
+                                    }
+                                    permissionManager.recordAudit(userId, "GIT_PUSH", "review", review.getId(),
+                                            review.getProjectId(), review.getTaskId(), "ALLOWED",
+                                            "Pushed commit " + res.commitHash() + " to " + res.remote() + "/" + res.branch());
+                                    if (notificationService != null) {
+                                        notificationService.notifyUser(userId, "PUSH_SUCCESS", "GitHub Push Succeeded",
+                                            "Successfully pushed changes to " + res.remote() + "/" + res.branch(), "review", review.getId());
+                                    }
+                                    String json = String.format("{\"success\": true, \"remote\": \"%s\", \"branch\": \"%s\", \"commitHash\": \"%s\", \"message\": \"%s\"}",
+                                            escapeJson(res.remote()), escapeJson(res.branch()), escapeJson(res.commitHash()), escapeJson(res.message()));
+                                    sendJsonResponse(exchange, 200, json);
+                                } else {
+                                    int statusCode = (res.error() != null && res.error().toLowerCase().contains("conflict")) ? 409 : 400;
+                                    sendJsonResponse(exchange, statusCode, String.format("{\"success\": false, \"conflict\": %b, \"error\": \"%s\"}",
+                                            statusCode == 409, escapeJson(res.error())));
+                                }
+                            } catch (Exception e) {
+                                sendJsonResponse(exchange, 400, "{\"success\": false, \"error\": \"" + escapeJson(e.getMessage()) + "\"}");
                             }
                             return;
                         }
@@ -1284,6 +1601,11 @@ public class TrystHttpServer implements TrystHttpService {
                             if (reworkStr != null && !reworkStr.isBlank()) {
                                 includeInRework = Boolean.parseBoolean(reworkStr);
                             }
+                            boolean blocking = true;
+                            String blockingStr = extractJsonField(body, "blocking");
+                            if (blockingStr != null && !blockingStr.isBlank()) {
+                                blocking = Boolean.parseBoolean(blockingStr);
+                            }
 
                             if (content == null || content.isBlank()) {
                                 sendJsonResponse(exchange, 400, "{\"error\": \"Missing required field 'content'\"}");
@@ -1305,6 +1627,7 @@ public class TrystHttpServer implements TrystHttpService {
                                     userId,
                                     false,
                                     includeInRework,
+                                    blocking,
                                     Instant.now(),
                                     Instant.now()
                             );
@@ -1347,6 +1670,10 @@ public class TrystHttpServer implements TrystHttpService {
                                 String reworkStr = extractJsonField(body, "includeInRework");
                                 if (reworkStr != null && !reworkStr.isBlank()) {
                                     c.setIncludeInRework(Boolean.parseBoolean(reworkStr));
+                                }
+                                String blockingVal = extractJsonField(body, "blocking");
+                                if (blockingVal != null && !blockingVal.isBlank()) {
+                                    c.setBlocking(Boolean.parseBoolean(blockingVal));
                                 }
                                 String newContent = extractJsonField(body, "content");
                                 if (newContent != null && !newContent.isBlank()) {
@@ -1420,20 +1747,25 @@ public class TrystHttpServer implements TrystHttpService {
                 }
             }
 
-            sendJsonResponse(exchange, 404, "{\"error\": \"Sub-action not found\"}");
+                sendJsonResponse(exchange, 404, "{\"error\": \"Sub-action not found\"}");
+            } catch (eu.kalafatic.tryst.core.error.TrystDomainException e) {
+                sendJsonResponse(exchange, 403, "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}");
+            } catch (Exception e) {
+                sendJsonResponse(exchange, 500, "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}");
+            }
         }
 
         private static String serializeComment(eu.kalafatic.tryst.domain.review.ReviewComment c) {
             return String.format(
                     "{\"id\":\"%s\",\"reviewId\":\"%s\",\"taskId\":\"%s\",\"revisionNumber\":%d,\"filePath\":\"%s\"," +
                             "\"diffSide\":\"%s\",\"startLine\":%d,\"endLine\":%d,\"codeContext\":\"%s\"," +
-                            "\"commentType\":\"%s\",\"content\":\"%s\",\"authorId\":\"%s\",\"resolved\":%b,\"includeInRework\":%b," +
+                            "\"commentType\":\"%s\",\"content\":\"%s\",\"authorId\":\"%s\",\"resolved\":%b,\"includeInRework\":%b,\"blocking\":%b," +
                             "\"createdAt\":\"%s\",\"updatedAt\":\"%s\"}",
                     escapeJson(c.getId()), escapeJson(c.getReviewId()), escapeJson(c.getTaskId()),
                     c.getRevisionNumber(), escapeJson(c.getFilePath()), c.getDiffSide().name(),
                     c.getStartLine(), c.getEndLine(), escapeJson(c.getCodeContext()),
                     c.getCommentType().name(), escapeJson(c.getContent()), escapeJson(c.getAuthorId()),
-                    c.isResolved(), c.isIncludeInRework(), c.getCreatedAt().toString(), c.getUpdatedAt().toString()
+                    c.isResolved(), c.isIncludeInRework(), c.isBlocking(), c.getCreatedAt().toString(), c.getUpdatedAt().toString()
             );
         }
     }
@@ -1554,6 +1886,10 @@ public class TrystHttpServer implements TrystHttpService {
 
             // Route: POST /api/github/push
             if (path.endsWith("/push") && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                if (userId != null && CodeReview.isAiAgent(userId)) {
+                    sendJsonResponse(exchange, 403, "{\"error\": \"AI agents are strictly forbidden from pushing changes. Human authorization required.\"}");
+                    return;
+                }
                 if (ctx.isPresent() && !ctx.get().user().hasPermission(Permission.COMMIT_APPROVED_CHANGES)) {
                     sendJsonResponse(exchange, 403, "{\"error\": \"Permission COMMIT_APPROVED_CHANGES required to push\"}");
                     return;
@@ -1581,21 +1917,41 @@ public class TrystHttpServer implements TrystHttpService {
                 }
                 CodeReview review = optRev.get();
 
-                Path repoDir = resolveProjectWorkspacePath(review.getProjectId());
-                eu.kalafatic.tryst.domain.github.GitHubService.PushResult res = gitHubService.pushAuthorized(
-                        userId, repoDir, review, remote, branch, force
-                );
+                if (review.getStatus() != CodeReview.ReviewStatus.COMMITTED) {
+                    sendJsonResponse(exchange, 400, "{\"error\": \"Push rejected: Code review " + reviewId + " has not been committed yet.\"}");
+                    return;
+                }
 
-                if (res.success()) {
-                    if (notificationService != null) {
-                        notificationService.notifyUser(userId, "PUSH_SUCCESS", "GitHub Push Succeeded",
-                                "Successfully pushed changes to " + res.remote() + "/" + res.branch(), "review", review.getId());
+                Path repoDir = resolveProjectWorkspacePath(review.getProjectId());
+                try {
+                    eu.kalafatic.tryst.domain.github.GitHubService.PushResult res = gitHubService.pushAuthorized(
+                            userId, repoDir, review, remote, branch, force
+                    );
+
+                    if (res.success()) {
+                        if (gitCommitRepository != null && res.commitHash() != null) {
+                            gitCommitRepository.findByCommitHash(res.commitHash()).ifPresent(rec -> {
+                                rec.markPushed(Instant.now());
+                                gitCommitRepository.save(rec);
+                            });
+                        }
+                        permissionManager.recordAudit(userId, "GIT_PUSH", "review", review.getId(),
+                                review.getProjectId(), review.getTaskId(), "ALLOWED",
+                                "Pushed commit " + res.commitHash() + " to " + res.remote() + "/" + res.branch());
+                        if (notificationService != null) {
+                            notificationService.notifyUser(userId, "PUSH_SUCCESS", "GitHub Push Succeeded",
+                                    "Successfully pushed changes to " + res.remote() + "/" + res.branch(), "review", review.getId());
+                        }
+                        String json = String.format("{\"success\": true, \"remote\": \"%s\", \"branch\": \"%s\", \"commitHash\": \"%s\", \"message\": \"%s\"}",
+                                escapeJson(res.remote()), escapeJson(res.branch()), escapeJson(res.commitHash()), escapeJson(res.message()));
+                        sendJsonResponse(exchange, 200, json);
+                    } else {
+                        int statusCode = (res.error() != null && res.error().toLowerCase().contains("conflict")) ? 409 : 400;
+                        sendJsonResponse(exchange, statusCode, String.format("{\"success\": false, \"conflict\": %b, \"error\": \"%s\"}",
+                                statusCode == 409, escapeJson(res.error())));
                     }
-                    String json = String.format("{\"success\": true, \"remote\": \"%s\", \"branch\": \"%s\", \"commitHash\": \"%s\", \"message\": \"%s\"}",
-                            escapeJson(res.remote()), escapeJson(res.branch()), escapeJson(res.commitHash()), escapeJson(res.message()));
-                    sendJsonResponse(exchange, 200, json);
-                } else {
-                    sendJsonResponse(exchange, 400, String.format("{\"success\": false, \"error\": \"%s\"}", escapeJson(res.error())));
+                } catch (Exception e) {
+                    sendJsonResponse(exchange, 400, "{\"success\": false, \"error\": \"" + escapeJson(e.getMessage()) + "\"}");
                 }
                 return;
             }
@@ -2224,14 +2580,20 @@ public class TrystHttpServer implements TrystHttpService {
     }
 
     private static String serializeReview(CodeReview r) {
+        String approvedRevStr = r.getApprovedRevision() != null ? r.getApprovedRevision().toString() : "null";
         return String.format(
                 "{\"id\": \"%s\", \"projectId\": \"%s\", \"taskId\": \"%s\", \"branch\": \"%s\", \"status\": \"%s\", " +
-                        "\"contentFingerprint\": \"%s\", \"approvedFingerprint\": \"%s\", \"approvedBy\": \"%s\", " +
+                        "\"contentFingerprint\": \"%s\", \"approvedFingerprint\": \"%s\", \"approvedRevision\": %s, \"approvedBy\": \"%s\", " +
+                        "\"commitHash\": \"%s\", \"revisionCount\": %d, \"aiExplanation\": \"%s\", " +
                         "\"buildStatus\": \"%s\", \"testSummary\": \"%s\", \"initialDiff\": \"%s\", \"effectiveDiff\": \"%s\"}",
                 escapeJson(r.getId()), escapeJson(r.getProjectId()), escapeJson(r.getTaskId()), escapeJson(r.getBranch()),
                 r.getStatus().name(), escapeJson(r.getContentFingerprint()),
                 escapeJson(r.getApprovedFingerprint() != null ? r.getApprovedFingerprint() : ""),
+                approvedRevStr,
                 escapeJson(r.getApprovedBy() != null ? r.getApprovedBy() : ""),
+                escapeJson(r.getCommitHash() != null ? r.getCommitHash() : ""),
+                r.getRevisionCount(),
+                escapeJson(r.getAiExplanation() != null ? r.getAiExplanation() : ""),
                 escapeJson(r.getBuildStatus() != null ? r.getBuildStatus() : ""),
                 escapeJson(r.getTestSummary() != null ? r.getTestSummary() : ""),
                 escapeJson(r.getInitialDiff() != null ? r.getInitialDiff() : ""),
@@ -2999,16 +3361,25 @@ public class TrystHttpServer implements TrystHttpService {
 
                         async function approveReview() {
                             if (!activeReview) return;
-                            const res = await fetch(apiUrl(`/api/reviews/${activeReview.id}/approve`), { method: 'POST' });
-                            const updated = await res.json();
-                            selectReview(updated);
+                            const revToApprove = activeReview.revisionCount || 1;
+                            const res = await fetch(apiUrl(`/api/reviews/${activeReview.id}/approve`), {
+                                method: 'POST',
+                                headers: getAuthHeaders(),
+                                body: JSON.stringify({ revisionNumber: revToApprove })
+                            });
+                            const data = await res.json();
+                            if (!res.ok) {
+                                alert('Approval failed: ' + (data.error || 'Server rejected approval'));
+                                return;
+                            }
+                            selectReview(data);
                         }
 
                         async function rejectReview() {
                             if (!activeReview) return;
                             const res = await fetch(apiUrl(`/api/reviews/${activeReview.id}/reject`), {
                                 method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
+                                headers: getAuthHeaders(),
                                 body: JSON.stringify({ reason: 'Rejected from web UI' })
                             });
                             const updated = await res.json();
@@ -3017,9 +3388,26 @@ public class TrystHttpServer implements TrystHttpService {
 
                         async function commitReview() {
                             if (!activeReview) return;
+                            try {
+                                const sumRes = await fetch(apiUrl(`/api/reviews/${activeReview.id}/commit-summary`), { headers: getAuthHeaders() });
+                                if (sumRes.ok) {
+                                    const summary = await sumRes.json();
+                                    if (!summary.canCommit) {
+                                        alert('Cannot commit review:\\n' + (summary.validationErrors ? summary.validationErrors.join('\\n') : 'Preconditions failed'));
+                                        return;
+                                    }
+                                    const confirmMsg = `Confirm commit of revision ${summary.approvedRevision} for task ${summary.taskId || summary.reviewId}?\\n` +
+                                        `Files changed: ${summary.filesCount} (+${summary.additions} -${summary.deletions})\\n` +
+                                        `Message: ${summary.defaultCommitMessage}`;
+                                    if (!confirm(confirmMsg)) return;
+                                }
+                            } catch (e) {
+                                console.warn('Could not inspect commit summary:', e);
+                            }
+
                             const res = await fetch(apiUrl(`/api/reviews/${activeReview.id}/commit`), {
                                 method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
+                                headers: getAuthHeaders(),
                                 body: JSON.stringify({ message: 'Approved via TRYST Web Review Center' })
                             });
                             const data = await res.json();
@@ -3033,8 +3421,8 @@ public class TrystHttpServer implements TrystHttpService {
 
                         async function pushReview() {
                             if (!activeReview) return;
-                            if (!confirm('Perform authorized push to GitHub repository branch?')) return;
-                            const res = await fetch(apiUrl('/api/github/push'), {
+                            if (!confirm('Perform authorized push to repository branch?')) return;
+                            const res = await fetch(apiUrl(`/api/reviews/${activeReview.id}/push`), {
                                 method: 'POST',
                                 headers: getAuthHeaders(),
                                 body: JSON.stringify({ reviewId: activeReview.id })
@@ -3043,7 +3431,11 @@ public class TrystHttpServer implements TrystHttpService {
                             if (data.success) {
                                 alert('Push succeeded! ' + data.message);
                             } else {
-                                alert('Push failed: ' + data.error);
+                                if (res.status === 409 || data.conflict) {
+                                    alert('Push Rejected (Remote Conflict):\\n' + data.error);
+                                } else {
+                                    alert('Push failed: ' + data.error);
+                                }
                             }
                         }
 

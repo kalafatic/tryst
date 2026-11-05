@@ -586,6 +586,39 @@ public class SchemaMigrationService {
         );
         migrations.add(new Migration(10, "Notification preferences, deduplication, and sequential stream replay", v10Statements));
 
+        // V11: Final Approval, Blocking Review Comments, and Git Delivery Traceability
+        List<String> v11Statements = List.of(
+                """
+                ALTER TABLE code_reviews ADD COLUMN approved_revision INTEGER;
+                """,
+                """
+                ALTER TABLE review_comments ADD COLUMN blocking INTEGER DEFAULT 1;
+                """,
+                """
+                CREATE TABLE IF NOT EXISTS git_commits (
+                    id TEXT PRIMARY KEY,
+                    commit_hash TEXT NOT NULL,
+                    review_id TEXT NOT NULL,
+                    task_id TEXT,
+                    project_id TEXT NOT NULL,
+                    revision_number INTEGER NOT NULL,
+                    author_id TEXT NOT NULL,
+                    commit_message TEXT NOT NULL,
+                    content_fingerprint TEXT NOT NULL,
+                    branch TEXT NOT NULL,
+                    files_changed INTEGER DEFAULT 0,
+                    status TEXT NOT NULL,
+                    committed_at TEXT NOT NULL,
+                    pushed_at TEXT,
+                    FOREIGN KEY (review_id) REFERENCES code_reviews(id) ON DELETE CASCADE
+                );
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_git_commits_review ON git_commits(review_id);",
+                "CREATE INDEX IF NOT EXISTS idx_git_commits_project ON git_commits(project_id);",
+                "CREATE INDEX IF NOT EXISTS idx_git_commits_hash ON git_commits(commit_hash);"
+        );
+        migrations.add(new Migration(11, "Final approval, blocking review comments, and Git delivery traceability", v11Statements));
+
         return migrations;
     }
 }

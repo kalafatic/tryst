@@ -110,3 +110,20 @@ TRYST uses SQLite 3 via standard JDBC (`org.sqlite.JDBC`) without ORM overhead:
 - **`task_recovery_checkpoints`**
   - `id` (TEXT PRIMARY KEY), `task_id` (TEXT NOT NULL, FK -> `tasks.id` ON DELETE CASCADE), `stage` (TEXT NOT NULL), `checkpoint_data` (TEXT), `created_at` (TEXT NOT NULL)
   - Indexes: `idx_recovery_checkpoints_task`, `idx_recovery_checkpoints_created`
+
+### 2.9 Version 10: Centralized Notification Dispatch and Preferences (`V10`)
+- **`notifications`**
+  - Added columns: `dedup_key` (TEXT), `seq_num` (INTEGER)
+  - Indexes: `idx_notifications_user_seq`, `idx_notifications_dedup`
+- **`notification_preferences`**
+  - `id` (TEXT PRIMARY KEY), `user_id` (TEXT NOT NULL, FK -> `users.id` ON DELETE CASCADE), `event_type` (TEXT NOT NULL), `in_app_enabled` (INTEGER NOT NULL DEFAULT 1), `browser_push_enabled` (INTEGER NOT NULL DEFAULT 1), `email_enabled` (INTEGER NOT NULL DEFAULT 0), `updated_at` (TEXT NOT NULL)
+  - Indexes: `idx_notif_prefs_user`
+
+### 2.10 Version 11: Final Approval and Git Delivery Subsystem (`V11`)
+- **`code_reviews`**
+  - Added column: `approved_revision` (INTEGER)
+- **`review_comments`**
+  - Added column: `blocking` (INTEGER NOT NULL DEFAULT 1)
+- **`git_commits`**
+  - `id` (TEXT PRIMARY KEY), `commit_hash` (TEXT NOT NULL), `review_id` (TEXT NOT NULL REFERENCES `code_reviews.id` ON DELETE CASCADE), `task_id` (TEXT), `project_id` (TEXT NOT NULL REFERENCES `projects.id` ON DELETE CASCADE), `revision_number` (INTEGER NOT NULL), `author_id` (TEXT NOT NULL), `commit_message` (TEXT NOT NULL), `content_fingerprint` (TEXT NOT NULL), `branch` (TEXT NOT NULL), `files_changed` (INTEGER NOT NULL DEFAULT 0), `status` (TEXT NOT NULL DEFAULT 'COMMITTED'), `committed_at` (TEXT NOT NULL), `pushed_at` (TEXT)
+  - Indexes: `idx_git_commits_review_id`, `idx_git_commits_task_id`, `idx_git_commits_project_id`, `idx_git_commits_hash`

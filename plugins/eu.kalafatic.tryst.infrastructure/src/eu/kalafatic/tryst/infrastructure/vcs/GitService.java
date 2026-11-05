@@ -127,6 +127,14 @@ public class GitService {
         }
     }
 
+    public boolean hasRemoteConflicts(Path repoDir, String remote, String branch) {
+        return hasRemoteConflicts(repoDir, remote, branch, null);
+    }
+
+    public String getRemoteConflictDetails(Path repoDir, String remote, String branch) {
+        return getRemoteConflictDetails(repoDir, remote, branch, null);
+    }
+
     public boolean hasRemoteConflicts(Path repoDir, String remote, String branch, String token) {
         if (!isGitRepository(repoDir)) return false;
         String effRemote = (remote != null && !remote.isBlank()) ? remote : "origin";
@@ -147,6 +155,27 @@ public class GitService {
             } catch (NumberFormatException ignored) {}
         }
         return false;
+    }
+
+    public String getRemoteConflictDetails(Path repoDir, String remote, String branch, String token) {
+        if (!isGitRepository(repoDir)) return null;
+        String effRemote = (remote != null && !remote.isBlank()) ? remote : "origin";
+        String effBranch = (branch != null && !branch.isBlank()) ? branch : "main";
+
+        GitCommandResult revListRes = runGit(repoDir, List.of("rev-list", "--left-right", "--count", "HEAD..." + effRemote + "/" + effBranch));
+        if (revListRes.isSuccess()) {
+            String[] parts = revListRes.output().trim().split("\\s+");
+            if (parts.length == 2) {
+                try {
+                    int ahead = Integer.parseInt(parts[0]);
+                    int behind = Integer.parseInt(parts[1]);
+                    if (behind > 0) {
+                        return "Local branch is " + ahead + " commit(s) ahead and " + behind + " commit(s) behind " + effRemote + "/" + effBranch + ". Rebase or pull required before push.";
+                    }
+                } catch (NumberFormatException ignored) {}
+            }
+        }
+        return "Remote branch " + effRemote + "/" + effBranch + " contains conflicting changes.";
     }
 
     public GitCommandResult push(Path repoDir, String remote, String branch, String token, boolean force) {
@@ -219,8 +248,23 @@ public class GitService {
         Objects.requireNonNull(repoDir, "repoDir must not be null");
         Objects.requireNonNull(review, "review must not be null");
 
+        // 1. Authorizer validation: No AI agent may independently approve or commit changes
+        if (authorizerId == null || authorizerId.isBlank() || CodeReview.isAiAgent(authorizerId)) {
+            return new AuthorizedCommitResult(false, null, commitMessage,
+                    "Commit rejected: AI agents are strictly forbidden from committing changes. Human authorization required.");
+        }
+
         if (!isGitRepository(repoDir)) {
             return new AuthorizedCommitResult(false, null, commitMessage, "Directory is not a valid Git repository: " + repoDir);
+        }
+
+        // 2. Failure recovery & duplicate commit prevention:
+        // If already committed and HEAD matches the review commit hash, return idempotently without duplicate commits
+        if (review.getStatus() == CodeReview.ReviewStatus.COMMITTED && review.getCommitHash() != null) {
+            GitCommandResult headRes = runGit(repoDir, List.of("rev-parse", "HEAD"));
+            if (headRes.isSuccess() && headRes.output().trim().equals(review.getCommitHash())) {
+                return new AuthorizedCommitResult(true, review.getCommitHash(), commitMessage, null);
+            }
         }
 
         if (!review.isApproved()) {
@@ -228,27 +272,50 @@ public class GitService {
                     "Commit rejected: Code review " + review.getId() + " is not approved (status: " + review.getStatus() + ")");
         }
 
-        // Verify that the current working tree diff matches the approved content fingerprint
+        // 3. Git status must be checked immediately before committing
+        GitCommandResult statusRes = getStatus(repoDir);
+        if (!statusRes.isSuccess()) {
+            return new AuthorizedCommitResult(false, null, commitMessage,
+                    "Commit rejected: Failed to check git status before committing: " + statusRes.error());
+        }
+
+        // 4. Verify that the current working tree diff matches the approved content fingerprint
         GitCommandResult diffRes = getDiff(repoDir);
         String currentDiff = diffRes.output();
         String currentFingerprint = CodeReview.calculateFingerprint(currentDiff);
 
         if (!currentFingerprint.equals(review.getApprovedFingerprint())) {
+            // Concurrent workspace modification or tampered state: invalidate approval immediately
+            review.invalidateApproval("Working tree was modified after approval: content fingerprint mismatch (" +
+                    currentFingerprint + " vs approved " + review.getApprovedFingerprint() + ")");
             return new AuthorizedCommitResult(false, null, commitMessage,
                     "Commit rejected: Working tree content fingerprint (" + currentFingerprint +
-                            ") does not match approved review fingerprint (" + review.getApprovedFingerprint() + "). Content was modified after approval.");
+                            ") does not match approved review fingerprint (" + review.getApprovedFingerprint() +
+                            "). Content was modified after approval. Approval has been invalidated.");
         }
 
-        // Stage all authorized changes
+        // 5. Stage all authorized changes
         GitCommandResult stageRes = stageAll(repoDir);
         if (!stageRes.isSuccess()) {
             return new AuthorizedCommitResult(false, null, commitMessage, "Failed to stage changes: " + stageRes.error());
+        }
+
+        // Verify staged diff matches approved fingerprint
+        GitCommandResult stagedDiffRes = getDiffStaged(repoDir);
+        String stagedDiff = stagedDiffRes.output();
+        String stagedFingerprint = CodeReview.calculateFingerprint(stagedDiff);
+        if (!stagedFingerprint.equals(review.getApprovedFingerprint())) {
+            runGit(repoDir, List.of("reset"));
+            review.invalidateApproval("Staged content fingerprint mismatch");
+            return new AuthorizedCommitResult(false, null, commitMessage,
+                    "Commit rejected: Staged content fingerprint does not match approved review fingerprint. Approval has been invalidated.");
         }
 
         String message = commitMessage != null && !commitMessage.isBlank()
                 ? commitMessage
                 : "TRYST: Approved changes for task " + review.getTaskId() + " (Review: " + review.getId() + ", ApprovedBy: " + authorizerId + ")";
 
+        // 6. Safe commit execution
         GitCommandResult commitRes = commit(repoDir, message);
         if (!commitRes.isSuccess()) {
             return new AuthorizedCommitResult(false, null, message, "Git commit failed: " + commitRes.error());

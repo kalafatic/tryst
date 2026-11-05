@@ -263,8 +263,8 @@ public class DefaultGitHubService implements GitHubService {
         Objects.requireNonNull(repoDir, "repoDir must not be null");
         Objects.requireNonNull(review, "review must not be null");
 
-        if (!review.isApproved()) {
-            throw new TrystDomainException("Push rejected: Code review " + review.getId() + " is not approved");
+        if (review.getStatus() != CodeReview.ReviewStatus.COMMITTED && !review.isApproved()) {
+            throw new TrystDomainException("Push rejected: Code review " + review.getId() + " is not committed or approved");
         }
 
         String effectiveRemote = (remote != null && !remote.isBlank()) ? remote : "origin";

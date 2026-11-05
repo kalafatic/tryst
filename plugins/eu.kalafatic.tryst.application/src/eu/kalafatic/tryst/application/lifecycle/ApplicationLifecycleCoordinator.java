@@ -89,6 +89,7 @@ public class ApplicationLifecycleCoordinator {
     private ExecutionResultRepository executionResultRepository;
     private AgentRepository agentRepository;
     private CodeReviewRepository codeReviewRepository;
+    private eu.kalafatic.tryst.domain.repository.GitCommitRepository gitCommitRepository;
     private eu.kalafatic.tryst.domain.repository.TaskRecoveryCheckpointRepository taskRecoveryCheckpointRepository;
     private eu.kalafatic.tryst.domain.service.DataRetentionService dataRetentionService;
     private eu.kalafatic.tryst.domain.service.WorkspaceRecoveryService workspaceRecoveryService;
@@ -238,6 +239,7 @@ public class ApplicationLifecycleCoordinator {
         this.executionResultRepository = new SqliteExecutionResultRepository(databaseManager);
         this.agentRepository = new SqliteAgentRepository(databaseManager);
         this.codeReviewRepository = new SqliteCodeReviewRepository(databaseManager);
+        this.gitCommitRepository = new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteGitCommitRepository(databaseManager);
 
         // Phase 4 Repositories
         this.userRepository = new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteUserRepository(databaseManager);
@@ -435,6 +437,7 @@ public class ApplicationLifecycleCoordinator {
             server.setAiModelRegistryService(this.aiModelRegistryService);
             server.setTaskOrchestrator(this.taskOrchestrator);
             server.setGitHubService(this.gitHubService, this.gitHubCredentialRepository, this.gitHubCredentialEncryptionService);
+            server.setGitCommitRepository(this.gitCommitRepository);
             this.httpService = server;
             this.httpService.start();
             if (serverReadinessService != null) {
@@ -470,6 +473,7 @@ public class ApplicationLifecycleCoordinator {
             registerService(ExecutionResultRepository.class, this.executionResultRepository);
             registerService(AgentRepository.class, this.agentRepository);
             registerService(CodeReviewRepository.class, this.codeReviewRepository);
+            registerService(eu.kalafatic.tryst.domain.repository.GitCommitRepository.class, this.gitCommitRepository);
             registerService(WorkspaceService.class, this.workspaceService);
             registerService(AsyncExecutionService.class, this.asyncExecutionService);
             registerService(PermissionManager.class, this.permissionManager);
@@ -636,6 +640,7 @@ public class ApplicationLifecycleCoordinator {
         this.executionResultRepository = null;
         this.agentRepository = null;
         this.codeReviewRepository = null;
+        this.gitCommitRepository = null;
         this.backupService = null;
         this.migrationService = null;
         this.workspaceService = null;
@@ -752,6 +757,10 @@ public class ApplicationLifecycleCoordinator {
 
     public CodeReviewRepository getCodeReviewRepository() {
         return codeReviewRepository;
+    }
+
+    public eu.kalafatic.tryst.domain.repository.GitCommitRepository getGitCommitRepository() {
+        return gitCommitRepository;
     }
 
     public SqliteBackupService getBackupService() {
