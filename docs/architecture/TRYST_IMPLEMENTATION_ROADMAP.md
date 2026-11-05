@@ -76,12 +76,24 @@ The audit of the codebase and implementation progress tracks the following compo
        - Canonical workspace containment, symlink escape protection, and null-byte defenses
        - Automated authorization and penetration test suite (SecurityArchitectureAndPenetrationTest)
 
+  P10: Robust Build and Quality Assurance Subsystem (Phase 10)
+       - Multi-technology & build system detection (Maven, Gradle, npm, Cargo, Python, custom .tryst-build.json)
+       - Command resolution for build and automated tests without assuming Maven
+       - Isolated execution in assigned sandbox with strict path containment via PermissionManager
+       - Controlled environment variables and binary whitelisting
+       - Subprocess tracking and cross-workspace access prevention via ProcessExecutionManager
+       - Configurable timeouts and cooperative cancellation
+       - Exit code capture, stdout/stderr separation, and streaming log diagnostics
+       - Compilation and test failure classification
+       - Structured QualityReport distinguishing NOT_EXECUTED, SUCCESSFUL, FAILED, CANCELLED, TIMED_OUT
+       - Gated review revision results ensuring builds without tests are not reported as passed tests
+
 [PENDING / SUBSEQUENT PHASES]
-  P08: Structured JSON Tool Invocation Schema
+  P11: Structured JSON Tool Invocation Schema
        - Formal JSON schema tool calling for Ollama inference
        - Tool validation and hallucination resilience
 
-  P08: Web Client Asset Decoupling
+  P12: Web Client Asset Decoupling
        - Static asset separation into modular resources
        - Bundle classloader asset resolution
 ```
@@ -290,4 +302,33 @@ The audit of the codebase and implementation progress tracks the following compo
 - **Known Deviations:**
   - None. All architectural constraints, PDE configurations, and SQLite schema migrations are preserved.
 - **Recommended Next Implementation Step:**
-  - Structured JSON Tool Invocation Schema & Autonomous Self-Healing Tool Execution (Phase 10).
+  - Robust Build and Quality Assurance Subsystem (Phase 10).
+
+---
+
+## 10. Completed Robust Build and Quality Assurance Subsystem (Phase 10 / Current Protocol)
+
+- **Completed Requirements:**
+  - Technology and build system detection across diverse ecosystems (Maven with `./mvnw`/`mvn`, Gradle with `./gradlew`/`gradle`, Node/npm, Cargo/Rust, Python, and custom workspace-level configuration).
+  - Project-specific build and test configuration support via `.tryst-build.json` without introducing third-party build orchestrators.
+  - Safe subprocess execution confined strictly to the assigned workspace sandbox with path validation via `PermissionManager.validatePathWithinWorkspace()`.
+  - Process ownership tracking and prevention of cross-workspace process access via `ProcessExecutionManager`.
+  - Security constraints: binary whitelisting, stripping of sensitive credential environment variables (tokens, keys, secrets), and non-interactive environment flags (`CI=true`, `GIT_TERMINAL_PROMPT=0`).
+  - Configurable timeouts and cooperative cancellation cleanly destroying process trees.
+  - Explicit capture of exit codes, stdout, and stderr with real-time log streaming.
+  - Distinguishing compilation failures from test failures, and generating structured `QualityReport`.
+  - Every `ReviewRevision` records validated build status and test results, ensuring successful builds without tests are explicitly recorded with `NOT_EXECUTED` rather than falsely reported as passed tests.
+  - Integration with `TaskOrchestrator`, `TaskWorker`, `WorkspaceService`, `TrystHttpServer`, and `ApplicationLifecycleCoordinator`.
+- **Modified Modules:**
+  - `eu.kalafatic.tryst.domain`: Added package `eu.kalafatic.tryst.domain.build` with `BuildSystemType`, `BuildExecutionStatus`, `StageExecutionResult`, `BuildConfiguration`, `QualityReport`, `BuildTechnologyDetector`, `BuildAndQualityService`. Updated `ResultValidator`, `TaskWorker`, and `TaskOrchestrator`. Updated `MANIFEST.MF`.
+  - `eu.kalafatic.tryst.infrastructure`: Added `DefaultBuildTechnologyDetector`. Hardened `BuildAndTestService` implementing `BuildAndQualityService`. Updated `TrystHttpServer` review build-test endpoint.
+  - `eu.kalafatic.tryst.application`: Wired `BuildAndQualityService` into `TaskOrchestrator` and OSGi Service Registry in `ApplicationLifecycleCoordinator`.
+  - `eu.kalafatic.tryst.tests`: Added `BuildAndQualityAssuranceSubsystemTest`.
+- **New Interfaces and Dependencies:**
+  - `BuildAndQualityService`, `BuildTechnologyDetector`.
+- **Outstanding Requirements:**
+  - None.
+- **Known Deviations:**
+  - None.
+- **Recommended Next Implementation Step:**
+  - Structured JSON Tool Invocation Schema (Phase 11).

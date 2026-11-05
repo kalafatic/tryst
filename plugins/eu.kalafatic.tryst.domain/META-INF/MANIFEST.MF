@@ -6,6 +6,7 @@ Bundle-Version: 0.1.0.qualifier
 Bundle-RequiredExecutionEnvironment: JavaSE-21
 Require-Bundle: eu.kalafatic.tryst.core;bundle-version="0.1.0"
 Export-Package: eu.kalafatic.tryst.domain.ai,
+ eu.kalafatic.tryst.domain.build,
  eu.kalafatic.tryst.domain.github,
  eu.kalafatic.tryst.domain.model,
  eu.kalafatic.tryst.domain.repository,

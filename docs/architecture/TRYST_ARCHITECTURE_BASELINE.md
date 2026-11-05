@@ -62,8 +62,8 @@ Furthermore, TRYST Core is completely decoupled from EVO, permitting future inte
  |                       Infrastructure Tier (eu.kalafatic.tryst.infrastructure) |
  |  +--------------------+  +--------------------+  +-------------------------+  |
  |  |  TrystHttpServer   |  |   GitService       |  |   BuildAndTestService   |  |
- |  |  - REST Endpoints  |  |   - Status / Diff  |  |   - Isolated Maven      |  |
- |  |  - Static Assets   |  |   - Gated Commits  |  |     compile & test runs |  |
+ |  |  - REST Endpoints  |  |   - Status / Diff  |  |   - Multi-technology QA |  |
+ |  |  - Static Assets   |  |   - Gated Commits  |  |     sandbox build & test|  |
  |  +--------------------+  +--------------------+  +-------------------------+  |
  |  +--------------------+  +--------------------+  +-------------------------+  |
  |  |    OllamaClient    |  | SqliteDatabaseMgr  |  |  Sqlite Repositories    |  |
@@ -125,7 +125,7 @@ Furthermore, TRYST Core is completely decoupled from EVO, permitting future inte
 - **Public Interfaces / Types:**
   - Models: `Project`, `Workspace`, `AgentTask`, `Session`, `Agent`, `ConversationMessage`, `ExecutionResult`, `CodeReview`, `ReviewFileEdit`, `User`, `UserSession`, `AuditEvent`, `Notification`, `TelemetrySnapshot`, `ManagedProcessRecord`.
   - Repositories: `ProjectRepository`, `WorkspaceRepository`, `TaskRepository`, `SessionRepository`, `ConversationMessageRepository`, `ExecutionResultRepository`, `AgentRepository`, `CodeReviewRepository`, `UserRepository`, `UserSessionRepository`, `AuditEventRepository`, `NotificationRepository`, `TelemetryRepository`, `UnitOfWork`.
-  - Services: `WorkspaceService`, `SessionTaskOrchestrator`, `AutonomousDevelopmentService`, `CodeReviewService`, `AuthenticationService`, `PermissionManager`, `PasswordHasher`, `AiContextManager`, `AiInferenceService`, `AiModelRegistryService`, `ServerMonitoringService`, `TelemetryService`, `AiMonitoringService`, `ProcessExecutionManager`, `NotificationService`, `LogDiagnosticService`.
+  - Services: `WorkspaceService`, `SessionTaskOrchestrator`, `AutonomousDevelopmentService`, `CodeReviewService`, `AuthenticationService`, `PermissionManager`, `PasswordHasher`, `AiContextManager`, `AiInferenceService`, `AiModelRegistryService`, `ServerMonitoringService`, `TelemetryService`, `AiMonitoringService`, `ProcessExecutionManager`, `NotificationService`, `LogDiagnosticService`, `BuildAndQualityService`, `BuildTechnologyDetector`.
   - Tools: `Tool`, `ToolRegistry`, `FileTools`, `GitTools`.
 - **Dependencies:** `eu.kalafatic.tryst.core`. Strict prohibition of any UI or presentation packages.
 - **Lifecycle Ownership:** Managed by `ApplicationLifecycleCoordinator` during `CORE_SERVICE_INITIALIZATION`.
@@ -138,7 +138,7 @@ Furthermore, TRYST Core is completely decoupled from EVO, permitting future inte
 - **Public Interfaces / Types:**
   - Persistence: `SqliteDatabaseManager`, `SchemaMigrationService`, `SqliteBackupService`, and SQLite repository implementations (`SqliteProjectRepository`, `SqliteTaskRepository`, `SqliteCodeReviewRepository`, `SqliteUserRepository`, `SqliteGitHubCredentialRepository`, etc.).
   - AI: `OllamaClient`.
-  - VCS & Build: `GitService`, `BuildAndTestService`, `DefaultGitHubService`, `DefaultGitHubCredentialEncryptionService`.
+  - VCS & Build: `GitService`, `BuildAndTestService`, `DefaultBuildTechnologyDetector`, `DefaultGitHubService`, `DefaultGitHubCredentialEncryptionService`.
   - Server: `TrystHttpServer`, `TrystHttpService`, `TrystTcpServer`, `TrystTcpService`.
 - **Dependencies:** `eu.kalafatic.tryst.core`, `eu.kalafatic.tryst.domain`, `org.sqlite.JDBC`, `slf4j.api`.
 - **Lifecycle Ownership:** HTTP and TCP servers, database connections, and background backup tasks are managed and shutdown cleanly by `ApplicationLifecycleCoordinator`.

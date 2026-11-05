@@ -1161,13 +1161,27 @@ public class TrystHttpServer implements TrystHttpService {
                     }
                     case "build-test" -> {
                         if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
-                            Path repoDir = resolveProjectWorkspacePath(review.getProjectId());
-                            ExecutionResult buildRes = buildAndTestService.runTests(repoDir, 120, null);
-                            boolean ok = (buildRes.getExitCode() == 0);
-                            review.updateBuildAndTestStatus(
-                                    ok ? "SUCCESS" : "FAILED",
-                                    "Exit code: " + buildRes.getExitCode() + "\n" + buildRes.getOutput()
+                            eu.kalafatic.tryst.domain.model.Workspace ws = workspaceService != null
+                                    ? workspaceService.getWorkspaceForProject(review.getProjectId()) : null;
+                            if (ws == null) {
+                                Path repoDir = resolveProjectWorkspacePath(review.getProjectId());
+                                ws = new eu.kalafatic.tryst.domain.model.Workspace("ws-review-" + review.getId(), repoDir);
+                            }
+
+                            eu.kalafatic.tryst.domain.build.QualityReport qReport = buildAndTestService.runQualityAssurance(
+                                    ws,
+                                    review.getTaskId() != null ? review.getTaskId() : review.getId(),
+                                    java.time.Duration.ofMinutes(5),
+                                    () -> false,
+                                    null
                             );
+
+                            String buildStat = qReport.buildStatus().name();
+                            String testSummary = (qReport.testStatus() == eu.kalafatic.tryst.domain.build.BuildExecutionStatus.NOT_EXECUTED)
+                                    ? "Tests: NOT_EXECUTED (no test suite run)"
+                                    : "Tests: " + qReport.testStatus() + " (" + qReport.buildSystem() + ")";
+
+                            review.updateBuildAndTestStatus(buildStat, testSummary + "\n" + qReport.failureDetails());
                             codeReviewRepository.save(review);
                             sendJsonResponse(exchange, 200, serializeReview(review));
                             return;
