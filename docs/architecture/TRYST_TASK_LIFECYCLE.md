@@ -112,12 +112,12 @@ Special Lifecycle Transitions:
 | `IMPLEMENTING` | `BUILDING` | `TaskWorker` | Project compilation triggered. |
 | `BUILDING` | `TESTING` | `TaskWorker` | Test suites executed; summaries captured. |
 | `TESTING` | `WAITING_FOR_REVIEW`| `TaskWorker` | Diff extracted; CodeReview initialized; awaits human review. |
-| `WAITING_FOR_REVIEW`| `APPROVED` | User (Review Center) | Reviewer approves diff; captures SHA-256 content fingerprint. |
+| `WAITING_FOR_REVIEW`| `APPROVED` | User (Review Center) | Human user approves specific revision; no unresolved blocking comments allowed; captures SHA-256 fingerprint & approvedRevision. |
 | `WAITING_FOR_REVIEW`| `REJECTED` | User (Review Center) | Reviewer rejects diff with recorded explanation. |
 | `WAITING_FOR_REVIEW`| `REWORK_REQUESTED` | User (Review Center) | Reviewer provides feedback; task rework count incremented. |
 | `REWORK_REQUESTED` | `REWORKING` / `QUEUED` | Orchestrator | Task re-enters execution loop to address feedback. |
-| `APPROVED` | `COMMITTING` | Review Center / Commit Action | Commit authorization initiated. |
-| `COMMITTING` | `COMPLETED` | `GitService` | Unified diff verified against approved fingerprint; `git commit` succeeds. |
+| `APPROVED` | `COMMITTING` | Review Center / Commit Action | Human commit authorization initiated; git status checked immediately before commit. |
+| `COMMITTING` | `COMPLETED` | `GitService` | Working tree diff verified against approved fingerprint; git commit succeeds; GitCommitRecord persisted; duplicate commits prevented. |
 | `* (non-terminal)` | `CANCELLED` | User / Orchestrator | User aborts task execution or shutdown stops worker. |
 | `* (active)` | `FAILED` | `TaskWorker` | Unhandled error, compilation failure, or context limit exceeded. |
 | `* (active/queued)` | `RECOVERY_REQUIRED` | `TaskRecoveryService` | Server startup reconciles interrupted tasks left running across restarts. |

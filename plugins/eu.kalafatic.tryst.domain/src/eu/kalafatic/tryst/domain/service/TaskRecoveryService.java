@@ -86,6 +86,13 @@ public class TaskRecoveryService {
             return TaskRecoveryDecision.RECONCILE_AND_RETRY;
         }
 
+        if (stage == TaskStatus.RECOVERY_REQUIRED) {
+            if (checkpoint != null && checkpoint.isPresent() && checkpoint.get().stage() != null && checkpoint.get().stage() != TaskStatus.RECOVERY_REQUIRED) {
+                return determineRecoveryDecision(checkpoint.get().stage(), Optional.empty());
+            }
+            return TaskRecoveryDecision.RECONCILE_AND_RETRY;
+        }
+
         switch (stage) {
             case QUEUED, READY, CREATED:
                 // Strictly safe to resume / re-queue as no side effects occurred yet
@@ -126,7 +133,9 @@ public class TaskRecoveryService {
         Objects.requireNonNull(task, "task must not be null");
         TaskStatus stage = task.getStatus();
         Optional<TaskRecoveryCheckpoint> cp = getLatestCheckpoint(task.getId());
-        InterruptedOperationClassification classification = classifyInterruption(stage);
+        TaskStatus effectiveStage = (stage == TaskStatus.RECOVERY_REQUIRED && cp.isPresent() && cp.get().stage() != null)
+                ? cp.get().stage() : stage;
+        InterruptedOperationClassification classification = classifyInterruption(effectiveStage);
         TaskRecoveryDecision decision = determineRecoveryDecision(stage, cp);
 
         String explanation = switch (decision) {

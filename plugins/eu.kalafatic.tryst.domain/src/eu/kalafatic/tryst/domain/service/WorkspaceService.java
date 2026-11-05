@@ -228,6 +228,17 @@ public class WorkspaceService {
         return null;
     }
 
+    public synchronized void saveWorkspace(Workspace ws) {
+        if (ws == null) return;
+        workspacesById.put(ws.getId(), ws);
+        if (ws.getTaskId() != null) {
+            workspacesByTaskId.put(ws.getTaskId(), ws);
+        }
+        if (workspaceRepository != null) {
+            workspaceRepository.save(ws);
+        }
+    }
+
     /**
      * Resolves the isolated workspace for a given project.
      * Guarantees that file operations for this project are scoped to the project's own workspace root.

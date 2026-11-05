@@ -30,14 +30,28 @@ public class ReviewComment {
     private final String authorId;
     private boolean resolved;
     private boolean includeInRework;
+    private boolean blocking;
     private final Instant createdAt;
     private Instant updatedAt;
+
+    public ReviewComment(String id, String reviewId, String authorId, String content, boolean blocking) {
+        this(id, reviewId, "task-1", 1, "file.txt", DiffSide.RIGHT, 1, 1, "", CommentType.LINE, content, authorId, false, false, blocking, Instant.now(), Instant.now());
+    }
 
     public ReviewComment(String id, String reviewId, String taskId, int revisionNumber,
                          String filePath, DiffSide diffSide, int startLine, int endLine,
                          String codeContext, CommentType commentType, String content,
                          String authorId, boolean resolved, boolean includeInRework,
                          Instant createdAt, Instant updatedAt) {
+        this(id, reviewId, taskId, revisionNumber, filePath, diffSide, startLine, endLine,
+                codeContext, commentType, content, authorId, resolved, includeInRework, true, createdAt, updatedAt);
+    }
+
+    public ReviewComment(String id, String reviewId, String taskId, int revisionNumber,
+                         String filePath, DiffSide diffSide, int startLine, int endLine,
+                         String codeContext, CommentType commentType, String content,
+                         String authorId, boolean resolved, boolean includeInRework,
+                         boolean blocking, Instant createdAt, Instant updatedAt) {
         this.id = Objects.requireNonNull(id, "id must not be null");
         this.reviewId = Objects.requireNonNull(reviewId, "reviewId must not be null");
         this.taskId = Objects.requireNonNull(taskId, "taskId must not be null");
@@ -52,6 +66,7 @@ public class ReviewComment {
         this.authorId = authorId != null ? authorId : "anonymous";
         this.resolved = resolved;
         this.includeInRework = includeInRework;
+        this.blocking = blocking;
         this.createdAt = createdAt != null ? createdAt : Instant.now();
         this.updatedAt = updatedAt != null ? updatedAt : this.createdAt;
     }
@@ -65,7 +80,19 @@ public class ReviewComment {
                 diffSideStr != null && diffSideStr.equalsIgnoreCase("LEFT") ? DiffSide.LEFT : DiffSide.RIGHT,
                 startLine, endLine, codeContext,
                 parseCommentType(commentTypeStr),
-                content, authorId, resolved, includeInRework, createdAt, updatedAt);
+                content, authorId, resolved, includeInRework, true, createdAt, updatedAt);
+    }
+
+    public ReviewComment(String id, String reviewId, String taskId, int revisionNumber,
+                         String filePath, String diffSideStr, int startLine, int endLine,
+                         String codeContext, String commentTypeStr, String content,
+                         String authorId, boolean resolved, boolean includeInRework,
+                         boolean blocking, Instant createdAt, Instant updatedAt) {
+        this(id, reviewId, taskId, revisionNumber, filePath,
+                diffSideStr != null && diffSideStr.equalsIgnoreCase("LEFT") ? DiffSide.LEFT : DiffSide.RIGHT,
+                startLine, endLine, codeContext,
+                parseCommentType(commentTypeStr),
+                content, authorId, resolved, includeInRework, blocking, createdAt, updatedAt);
     }
 
     private static CommentType parseCommentType(String typeStr) {
@@ -147,6 +174,15 @@ public class ReviewComment {
 
     public void setIncludeInRework(boolean includeInRework) {
         this.includeInRework = includeInRework;
+        this.updatedAt = Instant.now();
+    }
+
+    public boolean isBlocking() {
+        return blocking;
+    }
+
+    public void setBlocking(boolean blocking) {
+        this.blocking = blocking;
         this.updatedAt = Instant.now();
     }
 

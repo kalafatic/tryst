@@ -76,14 +76,18 @@ All domain models reside in `eu.kalafatic.tryst.domain.model` and adhere to stri
   - `effectiveDiff`: String (diff including manual user edits)
   - `contentFingerprint`: SHA-256 hex string of effective diff
   - `approvedFingerprint`: SHA-256 hex string captured at approval
+  - `approvedRevision`: Integer (exact review revision approved by human user)
   - `commitHash`: Git commit SHA
   - `approvedBy`, `rejectedBy`: User IDs
   - `rejectionReason`: String
   - `buildStatus`, `testSummary`: String
   - `createdAt`, `updatedAt`: Instant
 - **Invariants:**
-  - Editing files invalidates any existing approval (`approvedFingerprint` cleared, status returns to `PENDING`).
-  - Cannot approve without valid fingerprint.
+  - Explicit human approval referencing an exact review revision number matching `revisionCount`.
+  - AI agents strictly forbidden from self-approving or self-committing.
+  - Unresolved blocking comments prevent approval.
+  - Editing files or creating a newer revision invalidates existing approvals (`approvedFingerprint`, `approvedRevision`, and `approvedBy` cleared, status returns to `PENDING`).
+  - Git status checked immediately prior to commit; working tree mismatch immediately invalidates approval.
 
 ### 1.5 User and UserSession
 - **User:**
@@ -111,6 +115,7 @@ All domain models reside in `eu.kalafatic.tryst.domain.model` and adhere to stri
 - `GitHubCredential`: User-owned encrypted GitHub credentials at rest (id, userId, githubUsername, encryptedToken, scopes, tokenType, expiresAt).
 - `GitHubRepository`: Value record for discovered GitHub repositories (id, fullName, owner, name, isPrivate, defaultBranch, cloneUrl, htmlUrl).
 - `GitHubBranch`: Value record for discovered branches (name, commitSha, isProtected).
+- `GitCommitRecord`: Authoritative Git commit metadata capturing commit hash, review ID, task ID, project ID, revision number, authorizer ID, commit message, content fingerprint, branch, files changed count, status (`COMMITTED`, `PUSHED`, `FAILED`), and timestamps (`committedAt`, `pushedAt`).
 
 ### 1.7 AI Development Execution Subsystem (`eu.kalafatic.tryst.domain.ai`)
 - `AIProvider`: Transport protocol abstraction separating LLM communication (tags, chat, streaming, timeouts) from agent logic.
@@ -132,6 +137,7 @@ Domain services depend strictly on repository interfaces, completely insulated f
 - `ProjectRepository`: `findById()`, `findAll()`, `findByOwnerId()`, `save()`, `delete()`
 - `TaskRepository`: `findById()`, `findAll()`, `findByProjectId()`, `findBySessionId()`, `save()`, `delete()`
 - `CodeReviewRepository`: `findById()`, `findByTaskId()`, `findByProjectId()`, `save()`, `delete()`
+- `GitCommitRepository`: `findById()`, `findByCommitHash()`, `findByReviewId()`, `findByProjectId()`, `findByTaskId()`, `findAll()`, `save()`, `delete()`
 - `UserRepository`: `findById()`, `findByUsername()`, `findAll()`, `save()`, `delete()`
 - `UserSessionRepository`: `findById()`, `findByTokenHash()`, `findByUserId()`, `save()`, `delete()`
 - `UnitOfWork`: Demarcates transactional boundaries (`runInTransaction`, `supplyInTransaction`).

@@ -128,8 +128,9 @@ class CodeReviewAndCommitAuthorizationTest {
         assertFalse(tamperedCommit.success(), "Commit must be rejected if working tree changed after approval");
         assertTrue(tamperedCommit.error().contains("does not match approved review fingerprint"));
 
-        // 4. Reconcile working tree to approved diff and commit
+        // 4. Reconcile working tree to approved diff and re-approve before commit
         Files.writeString(mainFile, "public class Main {\n    // Agent modification\n}\n");
+        review.approve("alice");
         GitService.AuthorizedCommitResult authorizedCommit = git.commitAuthorizedReview(repoDir, review, "alice", "Authorized commit");
         assertTrue(authorizedCommit.success());
         assertNotNull(authorizedCommit.commitHash());

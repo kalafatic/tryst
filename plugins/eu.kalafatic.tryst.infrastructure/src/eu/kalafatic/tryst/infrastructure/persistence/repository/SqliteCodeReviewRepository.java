@@ -36,15 +36,16 @@ public class SqliteCodeReviewRepository implements CodeReviewRepository {
         String sql = """
             INSERT INTO code_reviews (
                 id, project_id, task_id, branch, status, initial_diff, effective_diff,
-                content_fingerprint, approved_fingerprint, commit_hash, approved_by,
+                content_fingerprint, approved_fingerprint, approved_revision, commit_hash, approved_by,
                 rejected_by, rejection_reason, build_status, test_summary, ai_explanation,
                 revision_count, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 status = excluded.status,
                 effective_diff = excluded.effective_diff,
                 content_fingerprint = excluded.content_fingerprint,
                 approved_fingerprint = excluded.approved_fingerprint,
+                approved_revision = excluded.approved_revision,
                 commit_hash = excluded.commit_hash,
                 approved_by = excluded.approved_by,
                 rejected_by = excluded.rejected_by,
@@ -68,16 +69,21 @@ public class SqliteCodeReviewRepository implements CodeReviewRepository {
                 pstmt.setString(7, review.getEffectiveDiff());
                 pstmt.setString(8, review.getContentFingerprint());
                 setOrNull(pstmt, 9, review.getApprovedFingerprint());
-                setOrNull(pstmt, 10, review.getCommitHash());
-                setOrNull(pstmt, 11, review.getApprovedBy());
-                setOrNull(pstmt, 12, review.getRejectedBy());
-                setOrNull(pstmt, 13, review.getRejectionReason());
-                pstmt.setString(14, review.getBuildStatus());
-                pstmt.setString(15, review.getTestSummary());
-                setOrNull(pstmt, 16, review.getAiExplanation());
-                pstmt.setInt(17, review.getRevisionCount());
-                pstmt.setString(18, review.getCreatedAt().toString());
-                pstmt.setString(19, review.getUpdatedAt().toString());
+                if (review.getApprovedRevision() != null) {
+                    pstmt.setInt(10, review.getApprovedRevision());
+                } else {
+                    pstmt.setNull(10, Types.INTEGER);
+                }
+                setOrNull(pstmt, 11, review.getCommitHash());
+                setOrNull(pstmt, 12, review.getApprovedBy());
+                setOrNull(pstmt, 13, review.getRejectedBy());
+                setOrNull(pstmt, 14, review.getRejectionReason());
+                pstmt.setString(15, review.getBuildStatus());
+                pstmt.setString(16, review.getTestSummary());
+                setOrNull(pstmt, 17, review.getAiExplanation());
+                pstmt.setInt(18, review.getRevisionCount());
+                pstmt.setString(19, review.getCreatedAt().toString());
+                pstmt.setString(20, review.getUpdatedAt().toString());
                 pstmt.executeUpdate();
             } catch (SQLException e) {
                 throw new TrystInfrastructureException("Failed to save code review: " + review.getId(), e);
@@ -259,9 +265,16 @@ public class SqliteCodeReviewRepository implements CodeReviewRepository {
     private CodeReview mapResultSetToCodeReview(ResultSet rs) throws SQLException {
         String aiExp = null;
         int revCount = 1;
+        Integer approvedRev = null;
         try {
             aiExp = rs.getString("ai_explanation");
             revCount = rs.getInt("revision_count");
+        } catch (SQLException ignored) {}
+        try {
+            int r = rs.getInt("approved_revision");
+            if (!rs.wasNull()) {
+                approvedRev = r;
+            }
         } catch (SQLException ignored) {}
 
         return new CodeReview(
@@ -274,12 +287,15 @@ public class SqliteCodeReviewRepository implements CodeReviewRepository {
                 rs.getString("effective_diff"),
                 rs.getString("content_fingerprint"),
                 rs.getString("approved_fingerprint"),
+                approvedRev,
                 rs.getString("commit_hash"),
                 rs.getString("approved_by"),
                 rs.getString("rejected_by"),
                 rs.getString("rejection_reason"),
                 rs.getString("build_status"),
                 rs.getString("test_summary"),
+                aiExp != null ? aiExp : "",
+                revCount,
                 Instant.parse(rs.getString("created_at")),
                 Instant.parse(rs.getString("updated_at"))
         );
@@ -392,12 +408,13 @@ public class SqliteCodeReviewRepository implements CodeReviewRepository {
         String sql = """
             INSERT INTO review_comments (
                 id, review_id, task_id, revision_number, file_path, diff_side, start_line, end_line,
-                code_context, comment_type, content, author_id, resolved, include_in_rework, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                code_context, comment_type, content, author_id, resolved, include_in_rework, blocking, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 content = excluded.content,
                 resolved = excluded.resolved,
                 include_in_rework = excluded.include_in_rework,
+                blocking = excluded.blocking,
                 updated_at = excluded.updated_at;
         """;
         synchronized (databaseManager.getLock()) {
@@ -417,8 +434,9 @@ public class SqliteCodeReviewRepository implements CodeReviewRepository {
                 pstmt.setString(12, comment.getAuthorId());
                 pstmt.setInt(13, comment.isResolved() ? 1 : 0);
                 pstmt.setInt(14, comment.isIncludeInRework() ? 1 : 0);
-                pstmt.setString(15, comment.getCreatedAt().toString());
-                pstmt.setString(16, comment.getUpdatedAt().toString());
+                pstmt.setInt(15, comment.isBlocking() ? 1 : 0);
+                pstmt.setString(16, comment.getCreatedAt().toString());
+                pstmt.setString(17, comment.getUpdatedAt().toString());
                 pstmt.executeUpdate();
             } catch (SQLException e) {
                 throw new TrystInfrastructureException("Failed to save review comment: " + comment.getId(), e);
@@ -504,6 +522,14 @@ public class SqliteCodeReviewRepository implements CodeReviewRepository {
     }
 
     private ReviewComment mapResultSetToReviewComment(ResultSet rs) throws SQLException {
+        boolean blocking = true;
+        try {
+            int b = rs.getInt("blocking");
+            if (!rs.wasNull()) {
+                blocking = (b == 1);
+            }
+        } catch (SQLException ignored) {}
+
         return new ReviewComment(
                 rs.getString("id"),
                 rs.getString("review_id"),
@@ -519,6 +545,7 @@ public class SqliteCodeReviewRepository implements CodeReviewRepository {
                 rs.getString("author_id"),
                 rs.getInt("resolved") == 1,
                 rs.getInt("include_in_rework") == 1,
+                blocking,
                 Instant.parse(rs.getString("created_at")),
                 Instant.parse(rs.getString("updated_at"))
         );
