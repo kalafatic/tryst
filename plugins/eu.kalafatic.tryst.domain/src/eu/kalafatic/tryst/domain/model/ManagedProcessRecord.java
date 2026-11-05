@@ -18,9 +18,17 @@ public class ManagedProcessRecord {
     private long durationMs;
     private String status;
     private Integer exitCode;
+    private static final int MAX_OUTPUT_LINES = 500;
+    private final java.util.concurrent.ConcurrentLinkedDeque<String> outputLines = new java.util.concurrent.ConcurrentLinkedDeque<>();
 
     public ManagedProcessRecord(String id, String taskId, long pid, String commandClass, String workingDir,
                                 Instant startTime, long durationMs, String status, Integer exitCode) {
+        this(id, taskId, pid, commandClass, workingDir, startTime, durationMs, status, exitCode, null);
+    }
+
+    public ManagedProcessRecord(String id, String taskId, long pid, String commandClass, String workingDir,
+                                Instant startTime, long durationMs, String status, Integer exitCode,
+                                java.util.List<String> initialOutput) {
         this.id = Objects.requireNonNull(id, "id must not be null");
         this.taskId = taskId;
         this.pid = pid;
@@ -30,6 +38,11 @@ public class ManagedProcessRecord {
         this.durationMs = durationMs;
         this.status = status != null ? status : "RUNNING";
         this.exitCode = exitCode;
+        if (initialOutput != null) {
+            for (String line : initialOutput) {
+                appendOutput(line);
+            }
+        }
     }
 
     public ManagedProcessRecord(String taskId, long pid, String commandClass, String workingDir) {
@@ -81,5 +94,18 @@ public class ManagedProcessRecord {
     public void markKilled() {
         this.status = "KILLED";
         this.exitCode = 137;
+    }
+
+    public void appendOutput(String line) {
+        if (line != null) {
+            outputLines.add(line);
+            while (outputLines.size() > MAX_OUTPUT_LINES) {
+                outputLines.pollFirst();
+            }
+        }
+    }
+
+    public java.util.List<String> getOutputLines() {
+        return new java.util.ArrayList<>(outputLines);
     }
 }

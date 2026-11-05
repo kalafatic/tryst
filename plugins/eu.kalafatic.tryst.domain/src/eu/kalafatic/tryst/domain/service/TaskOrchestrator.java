@@ -300,6 +300,14 @@ public class TaskOrchestrator {
         return taskQueue.getQueueDepth();
     }
 
+    public Map<String, TaskExecutionContext> getActiveContexts() {
+        return java.util.Collections.unmodifiableMap(activeContexts);
+    }
+
+    public Optional<TaskExecutionContext> getExecutionContext(String taskId) {
+        return Optional.ofNullable(activeContexts.get(taskId));
+    }
+
     public void setGitHubService(eu.kalafatic.tryst.domain.github.GitHubService gitHubService) {
         this.gitHubService = gitHubService;
     }

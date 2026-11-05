@@ -283,4 +283,8 @@ public final class TrystUiServices {
     public static eu.kalafatic.tryst.core.lifecycle.ServerReadinessService getServerReadinessService() {
         return getService(eu.kalafatic.tryst.core.lifecycle.ServerReadinessService.class);
     }
+
+    public static eu.kalafatic.tryst.domain.service.ManagedServiceController getManagedServiceController() {
+        return getService(eu.kalafatic.tryst.domain.service.ManagedServiceController.class);
+    }
 }

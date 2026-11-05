@@ -228,6 +228,13 @@ public class WorkspaceService {
         return null;
     }
 
+    public synchronized List<Workspace> getAllWorkspaces() {
+        if (workspaceRepository != null) {
+            return workspaceRepository.findAll();
+        }
+        return new ArrayList<>(workspacesById.values());
+    }
+
     public synchronized void saveWorkspace(Workspace ws) {
         if (ws == null) return;
         workspacesById.put(ws.getId(), ws);
