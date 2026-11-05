@@ -52,6 +52,7 @@ public class TaskOrchestrator {
     private final CodeChangeExecutor codeChangeExecutor;
     private final ResultValidator resultValidator;
     private final ConversationMessageRepository messageRepository;
+    private eu.kalafatic.tryst.domain.build.BuildAndQualityService buildAndQualityService;
     private final ExecutionResultRepository executionResultRepository;
     private final CodeReviewRepository codeReviewRepository;
     private final CodeReviewService codeReviewService;
@@ -311,6 +312,10 @@ public class TaskOrchestrator {
         this.taskRecoveryService = taskRecoveryService;
     }
 
+    public void setBuildAndQualityService(eu.kalafatic.tryst.domain.build.BuildAndQualityService buildAndQualityService) {
+        this.buildAndQualityService = buildAndQualityService;
+    }
+
     public TaskRecoveryService getTaskRecoveryService() {
         return taskRecoveryService;
     }
@@ -398,6 +403,10 @@ public class TaskOrchestrator {
 
         CodeAgent codeAgent = new CodeAgent(aiProvider, promptContextBuilder, codeChangeExecutor);
 
+        ResultValidator effectiveValidator = (buildAndQualityService != null)
+                ? new ResultValidator(toolRegistry, permissionManager, buildAndQualityService)
+                : this.resultValidator;
+
         TaskWorker worker = new TaskWorker(
                 context,
                 lifecycleManager,
@@ -408,7 +417,7 @@ public class TaskOrchestrator {
                 taskAnalyzer,
                 implementationPlanner,
                 codeChangeExecutor,
-                resultValidator,
+                effectiveValidator,
                 codeAgent,
                 messageRepository,
                 executionResultRepository,

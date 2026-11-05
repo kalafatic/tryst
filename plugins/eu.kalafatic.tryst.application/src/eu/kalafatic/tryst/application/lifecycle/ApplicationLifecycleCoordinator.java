@@ -317,6 +317,9 @@ public class ApplicationLifecycleCoordinator {
         }
         this.gitService = new GitService();
         this.buildAndTestService = new BuildAndTestService();
+        if (this.processExecutionManager != null) {
+            this.buildAndTestService.setProcessExecutionManager(this.processExecutionManager);
+        }
         this.codeReviewService = new CodeReviewService();
 
         // GitHub Integration
@@ -372,6 +375,7 @@ public class ApplicationLifecycleCoordinator {
         );
         this.taskOrchestrator.setGitHubService(this.gitHubService);
         this.taskOrchestrator.setTaskRecoveryService(this.taskRecoveryService);
+        this.taskOrchestrator.setBuildAndQualityService(this.buildAndTestService);
         this.taskOrchestrator.start();
 
         // Phase 4 Observability & Operational Services
@@ -390,6 +394,9 @@ public class ApplicationLifecycleCoordinator {
         this.logDiagnosticService = new eu.kalafatic.tryst.domain.service.LogDiagnosticService();
         if (this.taskOrchestrator != null) {
             this.taskOrchestrator.setNotificationService(this.notificationService);
+        }
+        if (this.buildAndTestService != null) {
+            this.buildAndTestService.setProcessExecutionManager(this.processExecutionManager);
         }
 
         // 7. Initialize and start TCP and HTTP communication services
@@ -472,6 +479,7 @@ public class ApplicationLifecycleCoordinator {
             registerService(eu.kalafatic.tryst.domain.ai.AiModelRegistryService.class, this.aiModelRegistryService);
             registerService(GitService.class, this.gitService);
             registerService(BuildAndTestService.class, this.buildAndTestService);
+            registerService(eu.kalafatic.tryst.domain.build.BuildAndQualityService.class, this.buildAndTestService);
             registerService(CodeReviewService.class, this.codeReviewService);
             registerService(eu.kalafatic.tryst.domain.github.GitHubCredentialRepository.class, this.gitHubCredentialRepository);
             registerService(eu.kalafatic.tryst.domain.github.GitHubCredentialEncryptionService.class, this.gitHubCredentialEncryptionService);

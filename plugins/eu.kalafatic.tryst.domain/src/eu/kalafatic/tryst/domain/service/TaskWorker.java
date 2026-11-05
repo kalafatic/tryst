@@ -299,9 +299,18 @@ public class TaskWorker implements Callable<ExecutionResult> {
             recordRecoveryCheckpoint(task, TaskStatus.BUILDING, "{\"stage\":\"BUILDING\",\"modifiedCount\":" + modified.size() + "}");
             logBuilder.append("[Worker ").append(context.getWorkerId()).append("] Stage: BUILDING\n");
 
-            ResultValidator.ValidationReport validation = resultValidator.validate(context.getWorkspace());
+            ResultValidator.ValidationReport validation = resultValidator.validate(
+                    context.getWorkspace(),
+                    task.getId(),
+                    java.time.Duration.ofMinutes(10),
+                    () -> context.isCancelled() || Thread.currentThread().isInterrupted(),
+                    line -> logBuilder.append("[build/test] ").append(line).append("\n")
+            );
+
             if (!validation.buildSuccess()) {
-                failureClass = AiFailureClassification.BUILD_FAILURE;
+                failureClass = (validation.failureClassification() != null && validation.failureClassification() != AiFailureClassification.NONE)
+                        ? validation.failureClassification()
+                        : AiFailureClassification.BUILD_FAILURE;
                 throw new IllegalStateException("Build failed during task execution: " + validation.details());
             }
             logBuilder.append("[Build Passed]: Compiler verified successfully.\n");
@@ -324,7 +333,9 @@ public class TaskWorker implements Callable<ExecutionResult> {
             logBuilder.append("[Worker ").append(context.getWorkerId()).append("] Stage: TESTING\n");
 
             if (!validation.testSuccess()) {
-                failureClass = AiFailureClassification.TEST_FAILURE;
+                failureClass = (validation.failureClassification() != null && validation.failureClassification() != AiFailureClassification.NONE)
+                        ? validation.failureClassification()
+                        : AiFailureClassification.TEST_FAILURE;
                 if (notificationService != null && context.getUserId() != null) {
                     notificationService.notifyUser(
                             context.getUserId(),
@@ -346,6 +357,20 @@ public class TaskWorker implements Callable<ExecutionResult> {
             logBuilder.append("[Worker ").append(context.getWorkerId()).append("] Extracted workspace diff (")
                     .append(diff.length()).append(" chars)\n");
 
+            // Derive granular build and test summary for review revision
+            String effectiveBuildStatus = "SUCCESS";
+            String effectiveTestSummary = "Tests passed successfully";
+            if (validation.qualityReport() != null) {
+                effectiveBuildStatus = validation.qualityReport().buildStatus().name();
+                if (validation.qualityReport().testStatus() == eu.kalafatic.tryst.domain.build.BuildExecutionStatus.NOT_EXECUTED) {
+                    effectiveTestSummary = "Tests: NOT_EXECUTED (no tests discovered or executed)";
+                } else if (validation.qualityReport().testStatus() == eu.kalafatic.tryst.domain.build.BuildExecutionStatus.SUCCESSFUL) {
+                    effectiveTestSummary = "Tests: SUCCESSFUL (" + validation.qualityReport().buildSystem() + ")";
+                } else {
+                    effectiveTestSummary = "Tests: " + validation.qualityReport().testStatus() + " - " + validation.qualityReport().failureDetails();
+                }
+            }
+
             CodeReview review = null;
             int revCount = 1;
             if (codeReviewRepository != null) {
@@ -358,7 +383,7 @@ public class TaskWorker implements Callable<ExecutionResult> {
                     review.incrementRevisionCount();
                     revCount = review.getRevisionCount();
                     review.updateEffectiveDiff(diff);
-                    review.updateBuildAndTestStatus("SUCCESS", "Automated build and tests passed successfully");
+                    review.updateBuildAndTestStatus(effectiveBuildStatus, effectiveTestSummary);
                     review.setAiExplanation(explanation);
                     codeReviewRepository.save(review);
                 } else {
@@ -367,8 +392,8 @@ public class TaskWorker implements Callable<ExecutionResult> {
                             task.getId(),
                             context.getWorkspace() != null ? context.getWorkspace().getBranch() : "main",
                             diff,
-                            "SUCCESS",
-                            "Automated build and tests passed successfully"
+                            effectiveBuildStatus,
+                            effectiveTestSummary
                     );
                     review.setAiExplanation(explanation);
                     review.setRevisionCount(1);
@@ -381,8 +406,8 @@ public class TaskWorker implements Callable<ExecutionResult> {
                         revCount,
                         diff,
                         explanation,
-                        "SUCCESS",
-                        "Automated build and tests passed successfully",
+                        effectiveBuildStatus,
+                        effectiveTestSummary,
                         java.time.Instant.now()
                 );
                 codeReviewRepository.saveRevision(rev);
