@@ -78,6 +78,7 @@ public class TrystHttpServer implements TrystHttpService {
     private eu.kalafatic.tryst.domain.github.GitHubCredentialEncryptionService gitHubCredentialEncryptionService;
     private eu.kalafatic.tryst.domain.repository.GitCommitRepository gitCommitRepository;
     private eu.kalafatic.tryst.domain.service.ManagedServiceController managedServiceController;
+    private eu.kalafatic.tryst.domain.intake.TaskIntakeService taskIntakeService;
 
     private final RateLimiter authRateLimiter = new RateLimiter(30, 60);
     private final RateLimiter apiRateLimiter = new RateLimiter(300, 60);
@@ -187,6 +188,10 @@ public class TrystHttpServer implements TrystHttpService {
 
     public void setManagedServiceController(eu.kalafatic.tryst.domain.service.ManagedServiceController managedServiceController) {
         this.managedServiceController = managedServiceController;
+    }
+
+    public void setTaskIntakeService(eu.kalafatic.tryst.domain.intake.TaskIntakeService taskIntakeService) {
+        this.taskIntakeService = taskIntakeService;
     }
 
     @Override
@@ -802,6 +807,167 @@ public class TrystHttpServer implements TrystHttpService {
             Optional<SecurityContext> ctx = resolveSecurityContext(exchange);
             String userId = ctx.map(SecurityContext::getUserId).orElseGet(() -> getUserId(exchange));
             String path = exchange.getRequestURI().getPath();
+
+            // Task Intake Analysis: POST /api/tasks/intake/analyze
+            if (path.endsWith("/intake/analyze") && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                if (taskIntakeService == null) {
+                    sendJsonResponse(exchange, 503, "{\"error\": \"TaskIntakeService unavailable\"}");
+                    return;
+                }
+                String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                String title = extractJsonField(body, "title");
+                String description = extractJsonField(body, "description");
+                String projectId = extractJsonField(body, "projectId");
+                String repoUrl = extractJsonField(body, "repositoryUrl");
+                String branch = extractJsonField(body, "branch");
+                String expectedOutcome = extractJsonField(body, "expectedOutcome");
+                String priorityStr = extractJsonField(body, "priority");
+                TaskPriority priority = null;
+                if (priorityStr != null && !priorityStr.isBlank()) {
+                    try { priority = TaskPriority.valueOf(priorityStr.toUpperCase()); } catch (Exception ignored) {}
+                }
+                List<String> criteria = extractJsonStringArray(body, "acceptanceCriteria");
+                List<String> constraints = extractJsonStringArray(body, "constraints");
+                List<String> supplementary = extractJsonStringArray(body, "supplementaryInstructions");
+
+                eu.kalafatic.tryst.domain.intake.TaskIntakeService.TaskIntakeRequest req =
+                        new eu.kalafatic.tryst.domain.intake.TaskIntakeService.TaskIntakeRequest(
+                                projectId, repoUrl, branch, title, description, priority,
+                                expectedOutcome, criteria, constraints, supplementary
+                        );
+
+                eu.kalafatic.tryst.domain.intake.TaskIntakeService.TaskIntakeAnalysis analysis =
+                        taskIntakeService.analyzeAndValidate(req, userId, ctx.orElse(null));
+
+                StringBuilder sb = new StringBuilder("{");
+                sb.append("\"valid\": ").append(analysis.valid()).append(",");
+                sb.append("\"suggestedTitle\": \"").append(escapeJson(analysis.suggestedTitle())).append("\",");
+                sb.append("\"classification\": \"").append(analysis.classification().name()).append("\",");
+                sb.append("\"suggestedPriority\": \"").append(analysis.suggestedPriority().name()).append("\",");
+                sb.append("\"repositoryContext\": \"").append(escapeJson(analysis.repositoryContext())).append("\",");
+                sb.append("\"complexityEstimate\": \"").append(escapeJson(analysis.complexityEstimate())).append("\",");
+
+                sb.append("\"missingInformation\": [");
+                for (int i = 0; i < analysis.missingInformation().size(); i++) {
+                    if (i > 0) sb.append(",");
+                    sb.append("\"").append(escapeJson(analysis.missingInformation().get(i))).append("\"");
+                }
+                sb.append("],");
+
+                sb.append("\"validationErrors\": [");
+                for (int i = 0; i < analysis.validationErrors().size(); i++) {
+                    if (i > 0) sb.append(",");
+                    sb.append("\"").append(escapeJson(analysis.validationErrors().get(i))).append("\"");
+                }
+                sb.append("]");
+                sb.append("}");
+
+                sendJsonResponse(exchange, 200, sb.toString());
+                return;
+            }
+
+            // Task Intake Submit: POST /api/tasks/intake/submit
+            if (path.endsWith("/intake/submit") && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                if (taskIntakeService == null) {
+                    sendJsonResponse(exchange, 503, "{\"error\": \"TaskIntakeService unavailable\"}");
+                    return;
+                }
+                String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                String title = extractJsonField(body, "title");
+                String description = extractJsonField(body, "description");
+                String projectId = extractJsonField(body, "projectId");
+                String repoUrl = extractJsonField(body, "repositoryUrl");
+                String branch = extractJsonField(body, "branch");
+                String expectedOutcome = extractJsonField(body, "expectedOutcome");
+                String priorityStr = extractJsonField(body, "priority");
+                TaskPriority priority = null;
+                if (priorityStr != null && !priorityStr.isBlank()) {
+                    try { priority = TaskPriority.valueOf(priorityStr.toUpperCase()); } catch (Exception ignored) {}
+                }
+                List<String> criteria = extractJsonStringArray(body, "acceptanceCriteria");
+                List<String> constraints = extractJsonStringArray(body, "constraints");
+                List<String> supplementary = extractJsonStringArray(body, "supplementaryInstructions");
+
+                eu.kalafatic.tryst.domain.intake.TaskIntakeService.TaskIntakeRequest req =
+                        new eu.kalafatic.tryst.domain.intake.TaskIntakeService.TaskIntakeRequest(
+                                projectId, repoUrl, branch, title, description, priority,
+                                expectedOutcome, criteria, constraints, supplementary
+                        );
+
+                try {
+                    eu.kalafatic.tryst.domain.intake.TaskIntakeService.TaskIntakeResult res =
+                            taskIntakeService.submitIntake(req, userId, ctx.orElse(null));
+
+                    StringBuilder sb = new StringBuilder("{");
+                    sb.append("\"taskId\": \"").append(res.task().getId()).append("\",");
+                    sb.append("\"title\": \"").append(escapeJson(res.task().getTitle())).append("\",");
+                    sb.append("\"status\": \"").append(res.task().getStatus().name()).append("\",");
+                    sb.append("\"priority\": \"").append(res.task().getPriority().name()).append("\",");
+                    sb.append("\"persistedInstructionsCount\": ").append(res.persistedInstructions().size()).append(",");
+                    sb.append("\"classification\": \"").append(res.analysis().classification().name()).append("\"");
+                    sb.append("}");
+
+                    sendJsonResponse(exchange, 201, sb.toString());
+                } catch (TrystDomainException e) {
+                    sendJsonResponse(exchange, 400, "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}");
+                } catch (Exception e) {
+                    sendJsonResponse(exchange, 500, "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}");
+                }
+                return;
+            }
+
+            // Task instructions: GET /api/tasks/{id}/instructions
+            if (path.contains("/instructions") && "GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                String sub = path.substring(path.indexOf("/api/tasks/") + "/api/tasks/".length());
+                String taskId = sub.substring(0, sub.indexOf("/instructions"));
+                List<eu.kalafatic.tryst.domain.model.TaskInstruction> instructions =
+                        taskIntakeService != null ? taskIntakeService.getInstructionsForTask(taskId, userId, ctx.orElse(null)) : List.of();
+
+                StringBuilder sb = new StringBuilder("{\"instructions\": [");
+                for (int i = 0; i < instructions.size(); i++) {
+                    eu.kalafatic.tryst.domain.model.TaskInstruction inst = instructions.get(i);
+                    if (i > 0) sb.append(",");
+                    sb.append(String.format("{\"id\": \"%s\", \"taskId\": \"%s\", \"type\": \"%s\", \"content\": \"%s\", \"authorId\": \"%s\", \"createdAt\": \"%s\"}",
+                            inst.getId(), inst.getTaskId(), inst.getInstructionType().name(), escapeJson(inst.getContent()), escapeJson(inst.getAuthorId()), inst.getCreatedAt()));
+                }
+                sb.append("]}");
+                sendJsonResponse(exchange, 200, sb.toString());
+                return;
+            }
+
+            // Add supplementary instruction: POST /api/tasks/{id}/instructions
+            if (path.contains("/instructions") && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                if (taskIntakeService == null) {
+                    sendJsonResponse(exchange, 503, "{\"error\": \"TaskIntakeService unavailable\"}");
+                    return;
+                }
+                String sub = path.substring(path.indexOf("/api/tasks/") + "/api/tasks/".length());
+                String taskId = sub.substring(0, sub.indexOf("/instructions"));
+                String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                String content = extractJsonField(body, "content");
+                String typeStr = extractJsonField(body, "type");
+                eu.kalafatic.tryst.domain.model.TaskInstruction.InstructionType type =
+                        eu.kalafatic.tryst.domain.model.TaskInstruction.InstructionType.SUPPLEMENTARY;
+                if (typeStr != null && !typeStr.isBlank()) {
+                    try { type = eu.kalafatic.tryst.domain.model.TaskInstruction.InstructionType.valueOf(typeStr.toUpperCase()); } catch (Exception ignored) {}
+                }
+
+                if (content == null || content.isBlank()) {
+                    sendJsonResponse(exchange, 400, "{\"error\": \"Missing required field 'content'\"}");
+                    return;
+                }
+
+                try {
+                    eu.kalafatic.tryst.domain.model.TaskInstruction inst =
+                            taskIntakeService.addSupplementaryInstruction(taskId, content, type, userId, ctx.orElse(null));
+                    String json = String.format("{\"id\": \"%s\", \"taskId\": \"%s\", \"type\": \"%s\", \"content\": \"%s\", \"createdAt\": \"%s\"}",
+                            inst.getId(), inst.getTaskId(), inst.getInstructionType().name(), escapeJson(inst.getContent()), inst.getCreatedAt());
+                    sendJsonResponse(exchange, 201, json);
+                } catch (TrystDomainException e) {
+                    sendJsonResponse(exchange, 400, "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}");
+                }
+                return;
+            }
 
             // Task cancellation: POST /api/tasks/{id}/cancel
             if (path.contains("/cancel") && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
@@ -3014,6 +3180,7 @@ public class TrystHttpServer implements TrystHttpService {
                     <header>
                         <h1>⚡ TRYST Production Platform</h1>
                         <div class="top-nav">
+                            <button id="btnNewTask" class="btn btn-primary" onclick="openNewTaskModal()">+ New Task</button>
                             <button id="navReviews" class="nav-btn active" onclick="switchTab('reviews')">Code Review Center</button>
                             <button id="navAdmin" class="nav-btn" onclick="switchTab('admin')">Administration & Observability</button>
                             <div style="position: relative; display: inline-block;">
@@ -3179,6 +3346,87 @@ public class TrystHttpServer implements TrystHttpService {
                                     <div class="section-title">Operational Data</div>
                                     <div id="adminTableContainer">Select an administration view.</div>
                                 </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Intelligent Task Intake Modal -->
+                    <div id="newTaskModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.7); z-index: 2000; align-items: center; justify-content: center;">
+                        <div style="background: var(--panel); border: 1px solid var(--border); border-radius: 8px; width: 720px; max-width: 95vw; max-height: 90vh; overflow-y: auto; padding: 24px; box-shadow: 0 8px 32px rgba(0,0,0,0.6); position: relative;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 16px;">
+                                <h2 style="margin: 0; font-size: 18px; color: var(--primary);">🚀 Intelligent Task Intake</h2>
+                                <button class="btn btn-sm btn-danger" onclick="closeNewTaskModal()">✕</button>
+                            </div>
+
+                            <!-- 1. Repository Selection -->
+                            <div style="margin-bottom: 14px;">
+                                <label style="font-size: 12px; color: var(--muted); font-weight: bold;">1. GitHub Repository & Branch:</label>
+                                <div class="flex-row" style="margin-top: 6px;">
+                                    <select id="intakeRepoSelect" class="input-ctrl" style="flex: 2;" onchange="onIntakeRepoSelected()">
+                                        <option value="">-- Select GitHub Repository or Local Project --</option>
+                                    </select>
+                                    <input id="intakeBranchInput" class="input-ctrl" type="text" placeholder="Branch (default: main)" style="flex: 1;" />
+                                    <button class="btn btn-sm btn-primary" onclick="refreshIntakeRepos()">↻ Refresh</button>
+                                </div>
+                                <div style="margin-top: 4px;">
+                                    <input id="intakeCustomRepoUrl" class="input-ctrl" type="text" placeholder="Or enter custom repository URL (https://github.com/...)..." style="width: 100%; font-size: 12px; margin-top: 4px;" />
+                                </div>
+                            </div>
+
+                            <!-- 2. Request Description & Voice Dictation -->
+                            <div style="margin-bottom: 14px;">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                                    <label style="font-size: 12px; color: var(--muted); font-weight: bold;">2. Request Description & Dictation:</label>
+                                    <div class="flex-row">
+                                        <button id="btnVoiceDictate" class="btn btn-sm btn-warning" onclick="toggleVoiceDictation()">🎙️ Start Dictation</button>
+                                        <span id="voiceStatus" style="font-size: 11px; color: var(--yellow); display: none;">● Listening...</span>
+                                    </div>
+                                </div>
+                                <textarea id="intakeDescription" class="code-editor" style="height: 120px;" placeholder="Describe the desired change (e.g., 'Add user avatar upload endpoint and validate image size. Update unit tests.'). Click 'Start Dictation' to dictate directly in browser or type here..."></textarea>
+                                <div id="voiceNotice" style="font-size: 11px; color: var(--muted); margin-top: 2px;">Voice speech recognition supported in Chrome/Edge/Safari. Recognized text can be freely edited before submission.</div>
+                            </div>
+
+                            <!-- 3. Supplementary Context & Criteria (Accordion/Expanded) -->
+                            <div style="margin-bottom: 14px; background: #131d2e; border: 1px solid var(--border); border-radius: 6px; padding: 12px;">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                    <label style="font-size: 12px; color: var(--muted); font-weight: bold;">3. Context, Expected Outcome & Criteria (Optional):</label>
+                                    <button class="btn btn-sm btn-primary" onclick="autoSuggestTitle()">Suggest Title</button>
+                                </div>
+                                <div class="flex-row" style="margin-bottom: 8px;">
+                                    <input id="intakeTitle" class="input-ctrl" type="text" placeholder="Task Title (auto-generated if empty)..." style="flex: 2;" />
+                                    <select id="intakePriority" class="input-ctrl" style="width: 130px;">
+                                        <option value="NORMAL">Priority: Normal</option>
+                                        <option value="LOW">Priority: Low</option>
+                                        <option value="HIGH">Priority: High</option>
+                                        <option value="URGENT">Priority: Urgent</option>
+                                    </select>
+                                </div>
+                                <div style="margin-bottom: 8px;">
+                                    <input id="intakeExpectedOutcome" class="input-ctrl" type="text" placeholder="Expected outcome / summary of behavior after change..." style="width: 100%;" />
+                                </div>
+                                <div style="margin-bottom: 8px;">
+                                    <textarea id="intakeAcceptanceCriteria" class="input-ctrl" style="width: 100%; height: 50px; resize: vertical;" placeholder="Acceptance criteria (one per line)..."></textarea>
+                                </div>
+                                <div>
+                                    <input id="intakeConstraints" class="input-ctrl" type="text" placeholder="Execution constraints (comma separated, e.g. 'Preserve public API, 5m timeout')..." style="width: 100%;" />
+                                </div>
+                            </div>
+
+                            <!-- 4. Preliminary Analysis & Validation Feedback Banner -->
+                            <div id="intakeAnalysisCard" style="display: none; margin-bottom: 14px; padding: 12px; border-radius: 6px; border: 1px solid var(--border); font-size: 12px;">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                                    <b id="intakeAnalysisHeading">Preliminary AI Intake Analysis</b>
+                                    <span id="intakeClassificationBadge" class="badge badge-info">FEATURE</span>
+                                </div>
+                                <div id="intakeAnalysisSummary" style="color: #cbd5e1; margin-bottom: 6px;"></div>
+                                <div id="intakeWarnings" style="color: var(--yellow);"></div>
+                                <div id="intakeErrors" style="color: var(--red);"></div>
+                            </div>
+
+                            <!-- Actions -->
+                            <div class="flex-row" style="justify-content: flex-end; gap: 10px; border-top: 1px solid var(--border); padding-top: 12px;">
+                                <button class="btn btn-warning" onclick="validateAndAnalyzeIntake()">🔍 Validate & Analyze Request</button>
+                                <button id="btnSubmitIntakeTask" class="btn btn-success" onclick="submitIntakeTask()">🚀 Submit Task</button>
                             </div>
                         </div>
                     </div>
@@ -3941,6 +4189,294 @@ public class TrystHttpServer implements TrystHttpService {
                             }
                         }
 
+                        // --- Intelligent Task Intake & Voice Dictation Logic ---
+                        let speechRecognizer = null;
+                        let isDictating = false;
+
+                        function openNewTaskModal() {
+                            const modal = document.getElementById('newTaskModal');
+                            modal.style.display = 'flex';
+                            refreshIntakeRepos();
+                        }
+
+                        function closeNewTaskModal() {
+                            const modal = document.getElementById('newTaskModal');
+                            modal.style.display = 'none';
+                            stopVoiceDictation();
+                        }
+
+                        async function refreshIntakeRepos() {
+                            const sel = document.getElementById('intakeRepoSelect');
+                            sel.innerHTML = '<option value="">Loading repositories...</option>';
+                            try {
+                                const [ghRes, projRes] = await Promise.all([
+                                    fetch(apiUrl('/api/github/repos'), { headers: getAuthHeaders() }),
+                                    fetch(apiUrl('/api/projects'), { headers: getAuthHeaders() })
+                                ]);
+
+                                let options = '<option value="">-- Select GitHub Repository or Local Project --</option>';
+
+                                if (ghRes.ok) {
+                                    const ghData = await ghRes.json();
+                                    if (ghData.repositories && ghData.repositories.length > 0) {
+                                        options += '<optgroup label="GitHub Repositories">';
+                                        for (const r of ghData.repositories) {
+                                            options += `<option value="gh:${r.cloneUrl}" data-branch="${r.defaultBranch || 'main'}">${r.fullName} (${r.defaultBranch || 'main'})${r.isPrivate ? ' 🔒' : ''}</option>`;
+                                        }
+                                        options += '</optgroup>';
+                                    }
+                                }
+
+                                if (projRes.ok) {
+                                    const projData = await projRes.json();
+                                    if (projData.projects && projData.projects.length > 0) {
+                                        options += '<optgroup label="Local Projects">';
+                                        for (const p of projData.projects) {
+                                            options += `<option value="local:${p.id}">${p.name} (${p.location})</option>`;
+                                        }
+                                        options += '</optgroup>';
+                                    }
+                                }
+
+                                sel.innerHTML = options;
+                            } catch (e) {
+                                sel.innerHTML = '<option value="">-- Failed to load repositories --</option>';
+                            }
+                        }
+
+                        function onIntakeRepoSelected() {
+                            const sel = document.getElementById('intakeRepoSelect');
+                            const opt = sel.selectedOptions[0];
+                            const branchInput = document.getElementById('intakeBranchInput');
+                            const customUrlInput = document.getElementById('intakeCustomRepoUrl');
+
+                            if (opt && opt.value) {
+                                if (opt.value.startsWith('gh:')) {
+                                    customUrlInput.value = opt.value.substring(3);
+                                    branchInput.value = opt.getAttribute('data-branch') || 'main';
+                                } else if (opt.value.startsWith('local:')) {
+                                    customUrlInput.value = '';
+                                    branchInput.value = 'main';
+                                }
+                            }
+                        }
+
+                        function initSpeechRecognition() {
+                            const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+                            if (!SpeechRec) {
+                                return null;
+                            }
+                            const rec = new SpeechRec();
+                            rec.continuous = true;
+                            rec.interimResults = true;
+                            rec.lang = navigator.language || 'en-US';
+
+                            rec.onresult = function(e) {
+                                let interim = '';
+                                let finalTranscript = '';
+                                for (let i = e.resultIndex; i < e.results.length; ++i) {
+                                    if (e.results[i].isFinal) {
+                                        finalTranscript += e.results[i][0].transcript;
+                                    } else {
+                                        interim += e.results[i][0].transcript;
+                                    }
+                                }
+                                const ta = document.getElementById('intakeDescription');
+                                if (finalTranscript) {
+                                    ta.value += (ta.value && !ta.value.endsWith(' ') ? ' ' : '') + finalTranscript;
+                                }
+                                const vs = document.getElementById('voiceStatus');
+                                if (interim) {
+                                    vs.textContent = '● Listening: "' + interim.trim() + '"';
+                                } else {
+                                    vs.textContent = '● Listening...';
+                                }
+                            };
+
+                            rec.onerror = function(e) {
+                                console.warn('Speech recognition error:', e.error);
+                                stopVoiceDictation();
+                                document.getElementById('voiceNotice').textContent = 'Voice error: ' + e.error + '. You can continue typing manually.';
+                            };
+
+                            rec.onend = function() {
+                                if (isDictating) {
+                                    try { rec.start(); } catch(e) { stopVoiceDictation(); }
+                                }
+                            };
+
+                            return rec;
+                        }
+
+                        function toggleVoiceDictation() {
+                            if (isDictating) {
+                                stopVoiceDictation();
+                            } else {
+                                startVoiceDictation();
+                            }
+                        }
+
+                        function startVoiceDictation() {
+                            if (!speechRecognizer) {
+                                speechRecognizer = initSpeechRecognition();
+                            }
+                            if (!speechRecognizer) {
+                                alert('Browser native SpeechRecognition API is not supported in this browser. Please use keyboard text input.');
+                                return;
+                            }
+                            try {
+                                speechRecognizer.start();
+                                isDictating = true;
+                                document.getElementById('btnVoiceDictate').textContent = '⏹️ Stop Dictation';
+                                document.getElementById('btnVoiceDictate').className = 'btn btn-sm btn-danger';
+                                document.getElementById('voiceStatus').style.display = 'inline';
+                                document.getElementById('voiceStatus').textContent = '● Listening...';
+                            } catch (e) {
+                                console.warn('Could not start speech recognition:', e);
+                            }
+                        }
+
+                        function stopVoiceDictation() {
+                            isDictating = false;
+                            if (speechRecognizer) {
+                                try { speechRecognizer.stop(); } catch(e) {}
+                            }
+                            const btn = document.getElementById('btnVoiceDictate');
+                            if (btn) {
+                                btn.textContent = '🎙️ Start Dictation';
+                                btn.className = 'btn btn-sm btn-warning';
+                            }
+                            const status = document.getElementById('voiceStatus');
+                            if (status) {
+                                status.style.display = 'none';
+                            }
+                        }
+
+                        function autoSuggestTitle() {
+                            const desc = document.getElementById('intakeDescription').value.trim();
+                            if (!desc) {
+                                alert('Please provide or dictate a task description first.');
+                                return;
+                            }
+                            let title = desc.split('\n')[0].replace(/^[-*#0-9.]+\s*/, '').trim();
+                            if (title.length > 55) {
+                                title = title.substring(0, 52) + '...';
+                            }
+                            document.getElementById('intakeTitle').value = title;
+                        }
+
+                        function collectIntakePayload() {
+                            const sel = document.getElementById('intakeRepoSelect');
+                            const selVal = sel.value || '';
+                            let projectId = null;
+                            let repoUrl = document.getElementById('intakeCustomRepoUrl').value.trim();
+
+                            if (selVal.startsWith('local:')) {
+                                projectId = selVal.substring(6);
+                            } else if (selVal.startsWith('gh:') && !repoUrl) {
+                                repoUrl = selVal.substring(3);
+                            }
+
+                            const branch = document.getElementById('intakeBranchInput').value.trim() || 'main';
+                            const title = document.getElementById('intakeTitle').value.trim();
+                            const description = document.getElementById('intakeDescription').value.trim();
+                            const priority = document.getElementById('intakePriority').value;
+                            const expectedOutcome = document.getElementById('intakeExpectedOutcome').value.trim();
+
+                            const criteriaRaw = document.getElementById('intakeAcceptanceCriteria').value;
+                            const acceptanceCriteria = criteriaRaw.split('\n').map(s => s.trim()).filter(s => s.length > 0);
+
+                            const constraintsRaw = document.getElementById('intakeConstraints').value;
+                            const constraints = constraintsRaw.split(',').map(s => s.trim()).filter(s => s.length > 0);
+
+                            return {
+                                projectId,
+                                repositoryUrl: repoUrl,
+                                branch,
+                                title,
+                                description,
+                                priority,
+                                expectedOutcome,
+                                acceptanceCriteria,
+                                constraints
+                            };
+                        }
+
+                        async function validateAndAnalyzeIntake() {
+                            const payload = collectIntakePayload();
+                            const card = document.getElementById('intakeAnalysisCard');
+                            card.style.display = 'block';
+                            document.getElementById('intakeAnalysisSummary').textContent = 'Analyzing task request and validating repository context...';
+                            document.getElementById('intakeWarnings').textContent = '';
+                            document.getElementById('intakeErrors').textContent = '';
+
+                            try {
+                                const res = await fetch(apiUrl('/api/tasks/intake/analyze'), {
+                                    method: 'POST',
+                                    headers: getAuthHeaders(),
+                                    body: JSON.stringify(payload)
+                                });
+                                const data = await res.json();
+
+                                if (data.suggestedTitle && !payload.title) {
+                                    document.getElementById('intakeTitle').value = data.suggestedTitle;
+                                }
+                                document.getElementById('intakeClassificationBadge').textContent = data.classification || 'FEATURE';
+
+                                let summary = `Repository: ${data.repositoryContext} | Estimated Complexity: ${data.complexityEstimate || 'NORMAL'}`;
+                                document.getElementById('intakeAnalysisSummary').textContent = summary;
+
+                                if (data.missingInformation && data.missingInformation.length > 0) {
+                                    document.getElementById('intakeWarnings').innerHTML = '<b>Suggestions / Missing Context:</b><ul>' +
+                                        data.missingInformation.map(m => `<li>${escapeHtml(m)}</li>`).join('') + '</ul>';
+                                }
+
+                                if (data.validationErrors && data.validationErrors.length > 0) {
+                                    document.getElementById('intakeErrors').innerHTML = '<b>Validation Errors:</b><ul>' +
+                                        data.validationErrors.map(e => `<li>${escapeHtml(e)}</li>`).join('') + '</ul>';
+                                    card.style.borderColor = 'var(--red)';
+                                } else {
+                                    card.style.borderColor = 'var(--green)';
+                                }
+                            } catch (e) {
+                                document.getElementById('intakeErrors').textContent = 'Analysis request failed: ' + e;
+                            }
+                        }
+
+                        async function submitIntakeTask() {
+                            const payload = collectIntakePayload();
+                            if (!payload.description) {
+                                alert('Please provide or dictate a task description.');
+                                return;
+                            }
+
+                            const btn = document.getElementById('btnSubmitIntakeTask');
+                            btn.disabled = true;
+                            btn.textContent = 'Submitting...';
+
+                            try {
+                                const res = await fetch(apiUrl('/api/tasks/intake/submit'), {
+                                    method: 'POST',
+                                    headers: getAuthHeaders(),
+                                    body: JSON.stringify(payload)
+                                });
+                                const data = await res.json();
+                                if (res.ok && data.taskId) {
+                                    alert(`Task submitted successfully!\\nTask ID: ${data.taskId}\\nTitle: ${data.title}\\nStatus: ${data.status}\\nPersisted Instructions: ${data.persistedInstructionsCount}`);
+                                    closeNewTaskModal();
+                                    loadReviews();
+                                    switchTab('reviews');
+                                } else {
+                                    alert('Failed to submit task:\\n' + (data.error || 'Server error'));
+                                }
+                            } catch (e) {
+                                alert('Submission error: ' + e);
+                            } finally {
+                                btn.disabled = false;
+                                btn.textContent = '🚀 Submit Task';
+                            }
+                        }
+
                         loadProjects();
                         loadReviews();
                         loadNotifications();
@@ -3980,6 +4516,25 @@ public class TrystHttpServer implements TrystHttpService {
                 os.write(content);
             }
         }
+    }
+
+    private static List<String> extractJsonStringArray(String json, String field) {
+        if (json == null) return List.of();
+        String arrayPattern = "\"" + field + "\"\\s*:\\s*\\[([^\\]]*)\\]";
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile(arrayPattern).matcher(json);
+        if (!m.find()) {
+            return List.of();
+        }
+        String inner = m.group(1).trim();
+        if (inner.isEmpty()) {
+            return List.of();
+        }
+        List<String> list = new ArrayList<>();
+        java.util.regex.Matcher itemMatcher = java.util.regex.Pattern.compile("\"([^\"]*)\"").matcher(inner);
+        while (itemMatcher.find()) {
+            list.add(itemMatcher.group(1).replace("\\\"", "\"").replace("\\\\", "\\"));
+        }
+        return list;
     }
 
     private static String extractJsonField(String json, String field) {

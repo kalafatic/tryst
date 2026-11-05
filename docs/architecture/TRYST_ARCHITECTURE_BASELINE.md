@@ -294,6 +294,7 @@ Tasks follow an explicit lifecycle supporting asynchronous, autonomous execution
   - **V9:** Task recovery checkpoints and granular persistence (`task_recovery_checkpoints`).
   - **V10:** Centralized notification preferences, deduplication, and sequential stream replay (`notification_preferences`, `notifications` deduplication and sequence columns).
   - **V11:** Final review approval, blocking comments, and Git delivery traceability (`code_reviews.approved_revision`, `review_comments.blocking`, `git_commits` table).
+  - **V12:** Intelligent task intake and supplementary instructions (`task_instructions` table and indexes).
 - **Backup and Maintenance:** Hot SQLite backups via `SqliteBackupService`, automated integrity checks (`PRAGMA integrity_check`), and compaction (`VACUUM`).
 
 ---

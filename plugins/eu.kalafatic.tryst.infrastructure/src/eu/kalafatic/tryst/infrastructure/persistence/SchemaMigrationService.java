@@ -619,6 +619,24 @@ public class SchemaMigrationService {
         );
         migrations.add(new Migration(11, "Final approval, blocking review comments, and Git delivery traceability", v11Statements));
 
+        // V12: Task Intake and Supplementary Instructions
+        List<String> v12Statements = List.of(
+                """
+                CREATE TABLE IF NOT EXISTS task_instructions (
+                    id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    instruction_type TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    author_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+                );
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_task_instructions_task ON task_instructions(task_id);",
+                "CREATE INDEX IF NOT EXISTS idx_task_instructions_type ON task_instructions(instruction_type);"
+        );
+        migrations.add(new Migration(12, "Intelligent task intake and supplementary instructions", v12Statements));
+
         return migrations;
     }
 }

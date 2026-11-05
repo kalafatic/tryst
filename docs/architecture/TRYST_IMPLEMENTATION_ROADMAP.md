@@ -368,4 +368,49 @@ The audit of the codebase and implementation progress tracks the following compo
 - **Known Deviations:**
   - None.
 - **Recommended Next Implementation Step:**
-  - Structured JSON Tool Invocation Schema (Phase 12).
+  - Intelligent Task Intake Interface & Voice Dictation Subsystem (Phase 12).
+
+---
+
+## 12. Completed Intelligent Task Intake Interface & Voice Dictation Subsystem (Phase 12 / Current Protocol)
+
+- **Completed Requirements:**
+  - **Simple Primary Interaction:**
+    - GitHub repository selection (with automatic listing from connected GitHub account or local project selection).
+    - Branch selection with default fallback.
+    - Change description composition with browser dictation and manual editing.
+    - Non-destructive request validation before task queuing.
+  - **Browser-Native Voice Dictation & Text Fallback:**
+    - Integrated native `webkitSpeechRecognition` / `SpeechRecognition` API directly in the web client without external JS frameworks.
+    - Real-time listening indicator, active speech feedback, error handling, interim transcription, and text editing before submission.
+    - Reliable keyboard text fallback when speech recognition is unsupported or permissions are denied.
+    - Support for adding supplementary instructions and context to active or queued tasks.
+  - **Intelligent Pre-Execution Validation & Analysis:**
+    - User authorization check (`EXECUTE_TASKS` permission).
+    - Automatic missing context and information detection (short prompt, missing acceptance criteria, expected outcome, repository selection).
+    - Automatic title generation and refinement from description.
+    - Request classification (`FEATURE`, `BUG_FIX`, `REFACTORING`, `TEST`, `DOCUMENTATION`, `SECURITY`, `CHORE`, `GENERAL`).
+    - Priority suggestion (`LOW`, `NORMAL`, `HIGH`, `URGENT`) and complexity estimation.
+    - Strict non-destructive pre-validation separating task intake validation from task execution.
+  - **Instruction & Context Persistence:**
+    - Permanent persistence of original user requests, expected outcomes, acceptance criteria, execution constraints, and supplementary instructions in SQLite via `task_instructions` table (Schema Migration V12).
+    - Appending task instructions, acceptance criteria, and constraints into `TaskWorker`'s AI execution prompts.
+  - **REST API Endpoints:**
+    - `POST /api/tasks/intake/analyze`: non-destructive analysis and validation returning classification, suggested title, missing info diagnostics, and complexity.
+    - `POST /api/tasks/intake/submit`: task intake submission and instruction persistence.
+    - `GET /api/tasks/{id}/instructions` and `POST /api/tasks/{id}/instructions`: retrieving and appending instructions.
+  - **Web UI Task Intake Modal:**
+    - Added "+ New Task" modal in `TrystHttpServer` header with multi-step intake flow, voice dictation, criteria input, and preliminary AI analysis feedback card.
+- **Modified Modules:**
+  - `eu.kalafatic.tryst.domain`: Added `eu.kalafatic.tryst.domain.intake` with `TaskIntakeService` and `DefaultTaskIntakeService`. Added `TaskInstruction` and `TaskInstructionRepository`. Updated `TaskWorker`, `TaskOrchestrator`, and `MANIFEST.MF`.
+  - `eu.kalafatic.tryst.infrastructure`: Added `SqliteTaskInstructionRepository`. Updated `SchemaMigrationService` (Migration V12) and `TrystHttpServer`.
+  - `eu.kalafatic.tryst.application`: Wired `TaskIntakeService` and `TaskInstructionRepository` into `ApplicationLifecycleCoordinator` and OSGi Service Registry.
+  - `eu.kalafatic.tryst.tests`: Added `TaskIntakeAndVoiceWorkflowTest` and updated `SchemaMigrationTest`.
+- **New Interfaces and Dependencies:**
+  - `TaskIntakeService`, `TaskInstructionRepository`, `SqliteTaskInstructionRepository`, `DefaultTaskIntakeService`.
+- **Outstanding Requirements:**
+  - None.
+- **Known Deviations:**
+  - None.
+- **Recommended Next Implementation Step:**
+  - Structured JSON Tool Invocation Schema (Phase 13).

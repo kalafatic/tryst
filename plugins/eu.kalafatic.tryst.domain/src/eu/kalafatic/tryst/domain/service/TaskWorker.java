@@ -59,6 +59,7 @@ public class TaskWorker implements Callable<ExecutionResult> {
     private GitHubService gitHubService;
     private NotificationService notificationService;
     private TaskRecoveryService taskRecoveryService;
+    private eu.kalafatic.tryst.domain.repository.TaskInstructionRepository taskInstructionRepository;
 
     public TaskWorker(
             TaskExecutionContext context,
@@ -184,6 +185,10 @@ public class TaskWorker implements Callable<ExecutionResult> {
 
     public void setTaskRecoveryService(TaskRecoveryService taskRecoveryService) {
         this.taskRecoveryService = taskRecoveryService;
+    }
+
+    public void setTaskInstructionRepository(eu.kalafatic.tryst.domain.repository.TaskInstructionRepository taskInstructionRepository) {
+        this.taskInstructionRepository = taskInstructionRepository;
     }
 
     private void recordRecoveryCheckpoint(Task task, TaskStatus stage, String data) {
@@ -557,6 +562,18 @@ public class TaskWorker implements Callable<ExecutionResult> {
 
         StringBuilder promptBuilder = new StringBuilder();
         promptBuilder.append(task.getTitle()).append("\n").append(task.getDescription() != null ? task.getDescription() : "");
+
+        // Append intake instructions, acceptance criteria, and constraints if available
+        if (taskInstructionRepository != null) {
+            List<eu.kalafatic.tryst.domain.model.TaskInstruction> instructionsList = taskInstructionRepository.findByTaskId(task.getId());
+            if (!instructionsList.isEmpty()) {
+                promptBuilder.append("\n\n=== TASK INTAKE CONTEXT, CRITERIA & SUPPLEMENTARY INSTRUCTIONS ===\n");
+                for (eu.kalafatic.tryst.domain.model.TaskInstruction inst : instructionsList) {
+                    promptBuilder.append("- [").append(inst.getInstructionType().name()).append("]: ")
+                            .append(inst.getContent()).append("\n");
+                }
+            }
+        }
 
         if (codeReviewRepository != null && task.getReworkCount() > 0) {
             List<eu.kalafatic.tryst.domain.review.ReviewComment> comments = codeReviewRepository.findCommentsByTaskId(task.getId());
