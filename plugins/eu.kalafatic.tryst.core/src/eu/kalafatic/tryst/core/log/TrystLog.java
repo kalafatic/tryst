@@ -69,7 +69,21 @@ public final class TrystLog {
 
     private static String formatMessage(Class<?> caller, String message) {
         String className = caller != null ? caller.getSimpleName() : "TRYST";
-        return "[" + className + "] " + Objects.requireNonNullElse(message, "");
+        StringBuilder sb = new StringBuilder();
+        sb.append("[").append(className).append("]");
+
+        String correlationId = CorrelationContext.getCorrelationId();
+        if (correlationId != null) {
+            sb.append(" [corr:").append(correlationId).append("]");
+        }
+
+        String taskId = CorrelationContext.getTaskId();
+        if (taskId != null) {
+            sb.append(" [task:").append(taskId).append("]");
+        }
+
+        sb.append(" ").append(Objects.requireNonNullElse(message, ""));
+        return sb.toString();
     }
 
     private static void fallbackLog(int severity, String pluginId, String formatted, Throwable throwable) {

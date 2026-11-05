@@ -31,6 +31,8 @@ public class DataRetentionService {
     private final RetentionStore retentionStore;
     private final UnitOfWork unitOfWork;
     private RetentionPolicy policy;
+    private java.util.concurrent.ScheduledExecutorService scheduler;
+    private final java.util.concurrent.atomic.AtomicBoolean running = new java.util.concurrent.atomic.AtomicBoolean(false);
 
     public DataRetentionService(RetentionStore retentionStore, UnitOfWork unitOfWork) {
         this(retentionStore, unitOfWork, RetentionPolicy.defaultPolicy());
@@ -48,6 +50,37 @@ public class DataRetentionService {
 
     public RetentionPolicy getPolicy() {
         return policy;
+    }
+
+    public synchronized void start() {
+        start(3600);
+    }
+
+    public synchronized void start(long intervalSeconds) {
+        if (running.compareAndSet(false, true)) {
+            if (scheduler == null || scheduler.isShutdown()) {
+                scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                    Thread t = new Thread(r, "tryst-retention-pruner");
+                    t.setDaemon(true);
+                    return t;
+                });
+            }
+            scheduler.scheduleAtFixedRate(this::executeRetentionPolicy, 10, Math.max(1, intervalSeconds), java.util.concurrent.TimeUnit.SECONDS);
+            TrystLog.info(DataRetentionService.class, "Data retention pruning service started (interval: " + intervalSeconds + "s).");
+        }
+    }
+
+    public synchronized void stop() {
+        if (running.compareAndSet(true, false)) {
+            if (scheduler != null) {
+                scheduler.shutdownNow();
+            }
+            TrystLog.info(DataRetentionService.class, "Data retention pruning service stopped.");
+        }
+    }
+
+    public boolean isRunning() {
+        return running.get();
     }
 
     /**

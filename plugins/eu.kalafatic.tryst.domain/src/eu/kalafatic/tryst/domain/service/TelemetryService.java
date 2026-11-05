@@ -21,7 +21,7 @@ public class TelemetryService {
     private final ServerMonitoringService monitoringService;
     private final UserSessionRepository sessionRepository;
     private final TaskRepository taskRepository;
-    private final ScheduledExecutorService scheduler;
+    private ScheduledExecutorService scheduler;
     private final AtomicBoolean running = new AtomicBoolean(false);
 
     public TelemetryService(TelemetryRepository telemetryRepository,
@@ -41,9 +41,24 @@ public class TelemetryService {
 
     public synchronized void start(long intervalSeconds) {
         if (running.compareAndSet(false, true)) {
+            if (scheduler == null || scheduler.isShutdown()) {
+                scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+                    Thread t = new Thread(r, "tryst-telemetry-collector");
+                    t.setDaemon(true);
+                    return t;
+                });
+            }
             scheduler.scheduleAtFixedRate(this::captureSnapshot, 2, Math.max(1, intervalSeconds), TimeUnit.SECONDS);
             TrystLog.info(TelemetryService.class, "Telemetry collection service started (interval: " + intervalSeconds + "s).");
         }
+    }
+
+    public synchronized void start() {
+        start(30);
+    }
+
+    public boolean isRunning() {
+        return running.get();
     }
 
     public void captureSnapshot() {

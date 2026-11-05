@@ -77,6 +77,7 @@ public class TrystHttpServer implements TrystHttpService {
     private eu.kalafatic.tryst.domain.github.GitHubCredentialRepository gitHubCredentialRepository;
     private eu.kalafatic.tryst.domain.github.GitHubCredentialEncryptionService gitHubCredentialEncryptionService;
     private eu.kalafatic.tryst.domain.repository.GitCommitRepository gitCommitRepository;
+    private eu.kalafatic.tryst.domain.service.ManagedServiceController managedServiceController;
 
     private final RateLimiter authRateLimiter = new RateLimiter(30, 60);
     private final RateLimiter apiRateLimiter = new RateLimiter(300, 60);
@@ -142,8 +143,13 @@ public class TrystHttpServer implements TrystHttpService {
         this.userRepository = userRepository;
         this.sessionRepository = sessionRepository;
         this.auditEventRepository = auditEventRepository;
-        if (this.permissionManager != null && userRepository != null) {
-            this.permissionManager.setUserRepository(userRepository);
+        if (this.permissionManager != null) {
+            if (userRepository != null) {
+                this.permissionManager.setUserRepository(userRepository);
+            }
+            if (auditEventRepository != null) {
+                this.permissionManager.setAuditEventRepository(auditEventRepository);
+            }
         }
         this.notificationRepository = notificationRepository;
         this.telemetryRepository = telemetryRepository;
@@ -177,6 +183,10 @@ public class TrystHttpServer implements TrystHttpService {
 
     public void setGitCommitRepository(eu.kalafatic.tryst.domain.repository.GitCommitRepository gitCommitRepository) {
         this.gitCommitRepository = gitCommitRepository;
+    }
+
+    public void setManagedServiceController(eu.kalafatic.tryst.domain.service.ManagedServiceController managedServiceController) {
+        this.managedServiceController = managedServiceController;
     }
 
     @Override
@@ -384,8 +394,13 @@ public class TrystHttpServer implements TrystHttpService {
         exchange.getResponseHeaders().set("Content-Type", "application/json; charset=UTF-8");
         exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
         exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-        exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-User-Id, X-CSRF-Token");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-User-Id, X-CSRF-Token, X-Correlation-Id");
         applySecurityHeaders(exchange);
+
+        String correlationId = eu.kalafatic.tryst.core.log.CorrelationContext.getCorrelationId();
+        if (correlationId != null) {
+            exchange.getResponseHeaders().set("X-Correlation-Id", correlationId);
+        }
 
         if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
             exchange.sendResponseHeaders(204, -1);
@@ -2193,6 +2208,9 @@ public class TrystHttpServer implements TrystHttpService {
     private class AdminHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
+            String reqCorrId = exchange.getRequestHeaders().getFirst("X-Correlation-Id");
+            try (var ignoredScope = eu.kalafatic.tryst.core.log.CorrelationContext.open(reqCorrId, null)) {
+
             if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
                 sendJsonResponse(exchange, 204, "");
                 return;
@@ -2207,11 +2225,293 @@ public class TrystHttpServer implements TrystHttpService {
             }
             String userId = ctx.get().getUserId();
 
-            String path = exchange.getRequestURI().getPath(); // /api/admin/...
-            String sub = path.substring("/api/admin".length());
+            String path = exchange.getRequestURI().getPath(); // /tryst/api/admin/... or /api/admin/...
+            int adminIdx = path.indexOf("/api/admin");
+            String sub = (adminIdx >= 0) ? path.substring(adminIdx + "/api/admin".length()) : "";
             if (sub.startsWith("/")) sub = sub.substring(1);
 
-            // 1. Overview metrics
+            // 1. Server Status: /api/admin/server
+            if (sub.equals("server")) {
+                boolean dbOk = databaseManager != null;
+                boolean httpOk = isRunning();
+                boolean aiOk = aiMonitoringService != null && aiMonitoringService.checkHealth().endpointAvailable();
+                String json = String.format("""
+                        {
+                          "componentStatus": {
+                            "DATABASE": "%s",
+                            "HTTP_SERVER": "%s",
+                            "AI_PROVIDER": "%s"
+                          },
+                          "overallStatus": "%s"
+                        }
+                        """,
+                        dbOk ? "AVAILABLE" : "UNAVAILABLE",
+                        httpOk ? "AVAILABLE" : "UNAVAILABLE",
+                        aiOk ? "AVAILABLE" : "DEGRADED",
+                        (dbOk && httpOk) ? "READY" : "DEGRADED");
+                sendJsonResponse(exchange, 200, json);
+                return;
+            }
+
+            // 2. OSGi Bundles Status: /api/admin/bundles
+            if (sub.equals("bundles")) {
+                org.osgi.framework.Bundle currentBundle = org.osgi.framework.FrameworkUtil.getBundle(TrystHttpServer.class);
+                org.osgi.framework.BundleContext bCtx = currentBundle != null ? currentBundle.getBundleContext() : null;
+                StringBuilder sb = new StringBuilder("{\"bundles\": [");
+                if (bCtx != null) {
+                    org.osgi.framework.Bundle[] bundles = bCtx.getBundles();
+                    for (int i = 0; i < bundles.length; i++) {
+                        org.osgi.framework.Bundle b = bundles[i];
+                        if (i > 0) sb.append(",");
+                        String stateStr = switch (b.getState()) {
+                            case org.osgi.framework.Bundle.ACTIVE -> "ACTIVE";
+                            case org.osgi.framework.Bundle.STARTING -> "STARTING";
+                            case org.osgi.framework.Bundle.STOPPING -> "STOPPING";
+                            case org.osgi.framework.Bundle.RESOLVED -> "RESOLVED";
+                            case org.osgi.framework.Bundle.INSTALLED -> "INSTALLED";
+                            default -> "UNINSTALLED";
+                        };
+                        sb.append(String.format("{\"bundleId\": %d, \"symbolicName\": \"%s\", \"version\": \"%s\", \"state\": \"%s\"}",
+                                b.getBundleId(), b.getSymbolicName(), b.getVersion().toString(), stateStr));
+                    }
+                } else {
+                    sb.append("{\"bundleId\": 1, \"symbolicName\": \"eu.kalafatic.tryst.standalone\", \"version\": \"1.0.0\", \"state\": \"ACTIVE\"}");
+                }
+                sb.append("]}");
+                sendJsonResponse(exchange, 200, sb.toString());
+                return;
+            }
+
+            // 3. Registered Services & Service Control: /api/admin/services
+            if (sub.startsWith("services")) {
+                if (sub.contains("/action") && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                    String[] parts = sub.split("/");
+                    String sName = parts[1];
+                    String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                    String action = extractJsonField(body, "action");
+                    boolean success = false;
+                    if (managedServiceController != null) {
+                        if ("start".equalsIgnoreCase(action)) {
+                            success = managedServiceController.startService(sName);
+                        } else if ("stop".equalsIgnoreCase(action)) {
+                            success = managedServiceController.stopService(sName);
+                        }
+                    }
+                    permissionManager.recordAudit(userId, "SERVICE_" + (action != null ? action.toUpperCase() : "ACTION"),
+                            "service", sName, null, null, success ? "SUCCESS" : "FAILED", "Action: " + action);
+                    sendJsonResponse(exchange, success ? 200 : 400, "{\"success\": " + success + "}");
+                    return;
+                }
+
+                StringBuilder sb = new StringBuilder("{\"services\": [");
+                if (managedServiceController != null) {
+                    var services = managedServiceController.listServices();
+                    int i = 0;
+                    for (var s : services.values()) {
+                        if (i > 0) sb.append(",");
+                        sb.append(String.format("{\"name\": \"%s\", \"displayName\": \"%s\", \"running\": %b, \"status\": \"%s\", \"details\": \"%s\"}",
+                                s.name(), s.displayName(), s.running(), s.status().name(), escapeJson(s.details())));
+                        i++;
+                    }
+                }
+                sb.append("]}");
+                sendJsonResponse(exchange, 200, sb.toString());
+                return;
+            }
+
+            // 4. HTTP Server Status: /api/admin/http
+            if (sub.equals("http")) {
+                String json = String.format("""
+                        {
+                          "running": %b,
+                          "port": %d,
+                          "canonicalUrl": "%s",
+                          "boundPort": %d,
+                          "host": "%s"
+                        }
+                        """, isRunning(), getPort(), getCanonicalUrl(), actualPort, host);
+                sendJsonResponse(exchange, 200, json);
+                return;
+            }
+
+            // 5. Worker utilization: /api/admin/workers
+            if (sub.equals("workers")) {
+                int capacity = taskOrchestrator != null ? taskOrchestrator.getConcurrency() : 1;
+                int activeWorkers = taskOrchestrator != null ? taskOrchestrator.getActiveTaskCount() : 0;
+                int queueDepth = taskOrchestrator != null ? taskOrchestrator.getQueueDepth() : 0;
+                String json = String.format("""
+                        {
+                          "capacity": %d,
+                          "activeWorkers": %d,
+                          "queuedCount": %d,
+                          "utilizationPercentage": %.2f
+                        }
+                        """, capacity, activeWorkers, queueDepth, capacity > 0 ? (activeWorkers * 100.0 / capacity) : 0.0);
+                sendJsonResponse(exchange, 200, json);
+                return;
+            }
+
+            // 6. Active Tasks, Contexts, and Cancellation: /api/admin/tasks
+            if (sub.startsWith("tasks")) {
+                if (sub.endsWith("/cancel") && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                    String[] parts = sub.split("/");
+                    String taskId = parts[1];
+                    String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                    String reason = extractJsonField(body, "reason");
+                    boolean cancelled = taskOrchestrator != null && taskOrchestrator.cancelTask(taskId, reason != null ? reason : "Administrative cancellation");
+                    permissionManager.recordAudit(userId, "ADMIN_TASK_CANCEL", "task", taskId, null, null, cancelled ? "SUCCESS" : "FAILED", "Reason: " + reason);
+                    sendJsonResponse(exchange, cancelled ? 200 : 400, "{\"success\": " + cancelled + "}");
+                    return;
+                }
+                if (sub.endsWith("/context") && "GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                    String[] parts = sub.split("/");
+                    String taskId = parts[1];
+                    if (taskOrchestrator != null) {
+                        var optCtx = taskOrchestrator.getExecutionContext(taskId);
+                        if (optCtx.isPresent()) {
+                            var tCtx = optCtx.get();
+                            String json = String.format("""
+                                    {
+                                      "taskId": "%s",
+                                      "userId": "%s",
+                                      "workerId": "%s",
+                                      "assignedModel": "%s",
+                                      "cancelled": %b,
+                                      "workspacePath": "%s"
+                                    }
+                                    """, tCtx.getTask().getId(), tCtx.getUserId(), tCtx.getWorkerId(),
+                                    tCtx.getModelName() != null ? tCtx.getModelName() : "", tCtx.isCancelled(),
+                                    tCtx.getWorkspace() != null ? escapeJson(tCtx.getWorkspace().getRootPath().toString()) : "");
+                            sendJsonResponse(exchange, 200, json);
+                            return;
+                        }
+                    }
+                    sendJsonResponse(exchange, 404, "{\"error\": \"Active execution context not found for task\"}");
+                    return;
+                }
+
+                if (taskRepository != null) {
+                    String query = exchange.getRequestURI().getQuery();
+                    List<Task> tasks;
+                    if (query != null && query.contains("status=RECOVERY_REQUIRED")) {
+                        tasks = taskRepository.findAllTasks().stream()
+                                .filter(t -> t.getStatus() == eu.kalafatic.tryst.domain.model.TaskStatus.RECOVERY_REQUIRED)
+                                .toList();
+                    } else {
+                        tasks = taskRepository.findAllTasks();
+                    }
+                    StringBuilder sb = new StringBuilder("{\"tasks\": [");
+                    for (int i = 0; i < tasks.size(); i++) {
+                        Task t = tasks.get(i);
+                        if (i > 0) sb.append(",");
+                        sb.append(String.format("{\"id\": \"%s\", \"title\": \"%s\", \"status\": \"%s\", \"priority\": \"%s\", \"projectId\": \"%s\", \"createdAt\": \"%s\"}",
+                                t.getId(), escapeJson(t.getTitle()), t.getStatus().name(), t.getPriority().name(),
+                                t.getProjectId() != null ? t.getProjectId() : "", t.getCreatedAt()));
+                    }
+                    sb.append("]}");
+                    sendJsonResponse(exchange, 200, sb.toString());
+                    return;
+                }
+                sendJsonResponse(exchange, 200, "{\"tasks\": []}");
+                return;
+            }
+
+            // 7. Workspaces & Sandboxes Inspection: /api/admin/workspaces
+            if (sub.startsWith("workspaces")) {
+                if (workspaceService != null) {
+                    if (sub.length() > "workspaces".length()) {
+                        String wsId = sub.substring("workspaces".length());
+                        if (wsId.startsWith("/")) wsId = wsId.substring(1);
+                        Workspace ws = workspaceService.getWorkspace(wsId);
+                        if (ws != null) {
+                            String json = String.format("""
+                                    {
+                                      "id": "%s",
+                                      "projectId": "%s",
+                                      "taskId": "%s",
+                                      "ownerId": "%s",
+                                      "state": "%s",
+                                      "path": "%s",
+                                      "branch": "%s",
+                                      "repositoryUrl": "%s"
+                                    }
+                                    """, ws.getId(), ws.getActiveProject().map(Project::getId).orElse(""),
+                                    ws.getTaskId() != null ? ws.getTaskId() : "", ws.getOwnerId() != null ? ws.getOwnerId() : "",
+                                    ws.getStatus().name(), escapeJson(ws.getRootPath().toString()),
+                                    ws.getBranch() != null ? ws.getBranch() : "", ws.getRepositoryUrl() != null ? ws.getRepositoryUrl() : "");
+                            sendJsonResponse(exchange, 200, json);
+                            return;
+                        } else {
+                            sendJsonResponse(exchange, 404, "{\"error\": \"Workspace not found\"}");
+                            return;
+                        }
+                    }
+
+                    List<Workspace> list = workspaceService.getAllWorkspaces();
+                    StringBuilder sb = new StringBuilder("{\"workspaces\": [");
+                    for (int i = 0; i < list.size(); i++) {
+                        Workspace ws = list.get(i);
+                        if (i > 0) sb.append(",");
+                        sb.append(String.format("{\"id\": \"%s\", \"projectId\": \"%s\", \"taskId\": \"%s\", \"ownerId\": \"%s\", \"state\": \"%s\", \"path\": \"%s\"}",
+                                ws.getId(), ws.getActiveProject().map(Project::getId).orElse(""),
+                                ws.getTaskId() != null ? ws.getTaskId() : "", ws.getOwnerId() != null ? ws.getOwnerId() : "",
+                                ws.getStatus().name(), escapeJson(ws.getRootPath().toString())));
+                    }
+                    sb.append("]}");
+                    sendJsonResponse(exchange, 200, sb.toString());
+                    return;
+                }
+                sendJsonResponse(exchange, 200, "{\"workspaces\": []}");
+                return;
+            }
+
+            // 8. Available Models: /api/admin/models
+            if (sub.equals("models")) {
+                if (aiModelRegistryService != null) {
+                    var models = aiModelRegistryService.getAllModels();
+                    StringBuilder sb = new StringBuilder("{\"models\": [");
+                    for (int i = 0; i < models.size(); i++) {
+                        var m = models.get(i);
+                        if (i > 0) sb.append(",");
+                        sb.append(String.format("{\"modelId\": \"%s\", \"providerId\": \"%s\", \"name\": \"%s\", \"contextLimit\": %d}",
+                                m.modelIdentifier(), m.providerId(), escapeJson(m.displayName()), m.contextLimit()));
+                    }
+                    sb.append("]}");
+                    sendJsonResponse(exchange, 200, sb.toString());
+                    return;
+                }
+                sendJsonResponse(exchange, 200, "{\"models\": []}");
+                return;
+            }
+
+            // 9. Git Operations status: /api/admin/git
+            if (sub.equals("git")) {
+                boolean gitAvail = gitService != null;
+                boolean ghAvail = gitHubService != null;
+                String json = String.format("""
+                        {
+                          "configured": %b,
+                          "isolated": true,
+                          "gitAvailable": %b,
+                          "gitHubIntegrationAvailable": %b
+                        }
+                        """, gitAvail, gitAvail, ghAvail);
+                sendJsonResponse(exchange, 200, json);
+                return;
+            }
+
+            // 10. Build Systems: /api/admin/builds
+            if (sub.equals("builds")) {
+                String json = """
+                        {
+                          "supportedBuildSystems": ["MAVEN", "GRADLE", "NPM", "CARGO", "PYTHON", "CUSTOM_TRYST_BUILD"]
+                        }
+                        """;
+                sendJsonResponse(exchange, 200, json);
+                return;
+            }
+
+            // 11. Overview metrics
             if (sub.equals("overview") || sub.isEmpty()) {
                 long totalUsers = userRepository != null ? userRepository.count() : 0;
                 long totalSessions = sessionRepository != null ? sessionRepository.findAllActive().size() : 0;
@@ -2291,13 +2591,26 @@ public class TrystHttpServer implements TrystHttpService {
             // 6. Diagnostics & logs: /api/admin/logs
             if (sub.startsWith("logs")) {
                 if (logDiagnosticService != null) {
-                    List<LogDiagnosticService.LogEntry> logs = logDiagnosticService.query(null, null, null, 100);
+                    Map<String, String> qParams = parseQueryParams(exchange.getRequestURI().getQuery());
+                    String qLevel = qParams.get("level");
+                    String qComp = qParams.get("component");
+                    String qSearch = qParams.get("search");
+                    String qCorr = qParams.get("correlationId");
+                    String qTask = qParams.get("taskId");
+                    int qLimit = 100;
+                    if (qParams.containsKey("limit")) {
+                        try { qLimit = Integer.parseInt(qParams.get("limit")); } catch (Exception ignored) {}
+                    }
+
+                    List<LogDiagnosticService.LogEntry> logs = logDiagnosticService.query(qLevel, qComp, qSearch, qCorr, qTask, qLimit);
                     StringBuilder sb = new StringBuilder("{\"logs\": [");
                     for (int i = 0; i < logs.size(); i++) {
                         LogDiagnosticService.LogEntry l = logs.get(i);
                         if (i > 0) sb.append(",");
-                        sb.append(String.format("{\"seq\": %d, \"time\": \"%s\", \"level\": \"%s\", \"component\": \"%s\", \"message\": \"%s\"}",
-                                l.sequence(), l.timestamp(), l.level(), escapeJson(l.component()), escapeJson(l.message())));
+                        sb.append(String.format("{\"seq\": %d, \"time\": \"%s\", \"level\": \"%s\", \"component\": \"%s\", \"message\": \"%s\", \"correlationId\": \"%s\", \"taskId\": \"%s\"}",
+                                l.sequence(), l.timestamp(), l.level(), escapeJson(l.component()), escapeJson(l.message()),
+                                l.correlationId() != null ? escapeJson(l.correlationId()) : "",
+                                l.taskId() != null ? escapeJson(l.taskId()) : ""));
                     }
                     sb.append("]}");
                     sendJsonResponse(exchange, 200, sb.toString());
@@ -2405,6 +2718,7 @@ public class TrystHttpServer implements TrystHttpService {
             }
 
             sendJsonResponse(exchange, 404, "{\"error\": \"Admin endpoint not found\"}");
+            }
         }
 
         private void handleAdminUsers(HttpExchange exchange, String sub) throws IOException {
@@ -2449,17 +2763,22 @@ public class TrystHttpServer implements TrystHttpService {
                 return;
             }
 
-            if (sub.contains("/")) {
-                String[] parts = sub.split("/");
-                String targetUserId = parts[1];
+            String pathWithoutQuery = exchange.getRequestURI().getPath();
+            int userIdx = pathWithoutQuery.indexOf("/api/admin/users");
+            String userSub = (userIdx >= 0) ? pathWithoutQuery.substring(userIdx + "/api/admin/users".length()) : "";
+            if (userSub.startsWith("/")) userSub = userSub.substring(1);
+
+            if (!userSub.isBlank()) {
+                String[] parts = userSub.split("/");
+                String targetUserId = parts[0];
                 Optional<User> optUser = userRepository.findById(targetUserId);
                 if (optUser.isEmpty()) {
                     sendJsonResponse(exchange, 404, "{\"error\": \"User not found\"}");
                     return;
                 }
                 User targetUser = optUser.get();
-                if (parts.length >= 3) {
-                    String op = parts[2];
+                if (parts.length >= 2) {
+                    String op = parts[1];
                     if ("lock".equalsIgnoreCase(op)) {
                         targetUser.setLocked(true);
                         userRepository.save(targetUser);
@@ -2483,6 +2802,22 @@ public class TrystHttpServer implements TrystHttpService {
                         userRepository.save(targetUser);
                         sendJsonResponse(exchange, 200, "{\"success\": true}");
                         return;
+                    } else if ("role".equalsIgnoreCase(op) && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                        String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                        String roleStr = extractJsonField(body, "role");
+                        if (roleStr != null) {
+                            try {
+                                UserRole role = UserRole.valueOf(roleStr.toUpperCase());
+                                targetUser.setRole(role);
+                                userRepository.save(targetUser);
+                                permissionManager.recordAudit("admin", "USER_ROLE_CHANGE", "user", targetUserId, null, null, "SUCCESS", "Role changed to " + role);
+                                sendJsonResponse(exchange, 200, "{\"success\": true, \"role\": \"" + role.name() + "\"}");
+                                return;
+                            } catch (Exception e) {
+                                sendJsonResponse(exchange, 400, "{\"error\": \"Invalid role: " + escapeJson(roleStr) + "\"}");
+                                return;
+                            }
+                        }
                     }
                 }
             }
@@ -2540,9 +2875,21 @@ public class TrystHttpServer implements TrystHttpService {
             if (sub.contains("/")) {
                 String[] parts = sub.split("/");
                 String procId = parts[1];
-                if (parts.length >= 3 && "kill".equalsIgnoreCase(parts[2])) {
+                if (parts.length >= 3 && ("kill".equalsIgnoreCase(parts[2]) || "terminate".equalsIgnoreCase(parts[2]))) {
                     boolean ok = processExecutionManager.terminateProcess(procId);
+                    permissionManager.recordAudit("admin", "PROCESS_TERMINATE", "process", procId, null, null, ok ? "SUCCESS" : "FAILED", "Admin process termination");
                     sendJsonResponse(exchange, 200, "{\"success\": " + ok + "}");
+                    return;
+                }
+                if (parts.length >= 3 && "output".equalsIgnoreCase(parts[2]) && "GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                    List<String> output = processExecutionManager.getProcessOutput(procId);
+                    StringBuilder sb = new StringBuilder("{\"processId\": \"" + procId + "\", \"lines\": [");
+                    for (int i = 0; i < output.size(); i++) {
+                        if (i > 0) sb.append(",");
+                        sb.append("\"").append(escapeJson(output.get(i))).append("\"");
+                    }
+                    sb.append("]}");
+                    sendJsonResponse(exchange, 200, sb.toString());
                     return;
                 }
             }
@@ -2803,12 +3150,17 @@ public class TrystHttpServer implements TrystHttpService {
                             <div style="padding: 16px;">
                                 <div class="section-title">Operational Intelligence</div>
                                 <div class="list-item active" onclick="switchAdminSub('overview')">Server Overview</div>
+                                <div class="list-item" onclick="switchAdminSub('bundles')">OSGi Bundles</div>
+                                <div class="list-item" onclick="switchAdminSub('services')">Managed Services</div>
+                                <div class="list-item" onclick="switchAdminSub('workers')">Worker Utilization</div>
+                                <div class="list-item" onclick="switchAdminSub('tasks')">Task Supervision</div>
+                                <div class="list-item" onclick="switchAdminSub('workspaces')">Workspaces & Sandboxes</div>
+                                <div class="list-item" onclick="switchAdminSub('processes')">Managed OS Processes</div>
                                 <div class="list-item" onclick="switchAdminSub('users')">Users & Roles (RBAC)</div>
                                 <div class="list-item" onclick="switchAdminSub('sessions')">Active Sessions</div>
-                                <div class="list-item" onclick="switchAdminSub('processes')">Managed OS Processes</div>
                                 <div class="list-item" onclick="switchAdminSub('telemetry')">Resource Telemetry</div>
                                 <div class="list-item" onclick="switchAdminSub('audit')">Audit & Security Log</div>
-                                <div class="list-item" onclick="switchAdminSub('diagnostics')">Centralized Logs</div>
+                                <div class="list-item" onclick="switchAdminSub('diagnostics')">Structured Logs</div>
                                 <div class="list-item" onclick="switchAdminSub('database')">Database & Backups</div>
                                 <div class="list-item" onclick="switchAdminSub('github')">GitHub Integration</div>
                             </div>
@@ -2897,6 +3249,30 @@ public class TrystHttpServer implements TrystHttpService {
                             try {
                                 if (sub === 'overview') {
                                     loadAdminOverview();
+                                } else if (sub === 'bundles') {
+                                    const res = await fetch(apiUrl('/api/admin/bundles'), { headers: getAuthHeaders() });
+                                    const data = await res.json();
+                                    container.innerHTML = '<table><tr><th>ID</th><th>Symbolic Name</th><th>Version</th><th>State</th></tr>' +
+                                        data.bundles.map(b => `<tr><td>${b.bundleId}</td><td>${b.symbolicName}</td><td>${b.version}</td><td><span class="badge ${b.state==='ACTIVE'?'badge-success':'badge-warning'}">${b.state}</span></td></tr>`).join('') + '</table>';
+                                } else if (sub === 'services') {
+                                    const res = await fetch(apiUrl('/api/admin/services'), { headers: getAuthHeaders() });
+                                    const data = await res.json();
+                                    container.innerHTML = '<table><tr><th>Service</th><th>Status</th><th>Details</th><th>Action</th></tr>' +
+                                        data.services.map(s => `<tr><td><b>${s.displayName}</b> (${s.name})</td><td><span class="badge ${s.running?'badge-success':'badge-error'}">${s.status}</span></td><td>${s.details}</td><td><button class="btn btn-sm ${s.running?'btn-danger':'btn-success'}" onclick="toggleService('${s.name}', '${s.running?'stop':'start'}')">${s.running?'Stop':'Start'}</button></td></tr>`).join('') + '</table>';
+                                } else if (sub === 'workers') {
+                                    const res = await fetch(apiUrl('/api/admin/workers'), { headers: getAuthHeaders() });
+                                    const data = await res.json();
+                                    container.innerHTML = `<div><p><b>Worker Thread Capacity:</b> ${data.capacity}</p><p><b>Active Workers:</b> ${data.activeWorkers}</p><p><b>Queued Tasks:</b> ${data.queuedCount}</p><p><b>Utilization:</b> ${data.utilizationPercentage}%</p></div>`;
+                                } else if (sub === 'tasks') {
+                                    const res = await fetch(apiUrl('/api/admin/tasks'), { headers: getAuthHeaders() });
+                                    const data = await res.json();
+                                    container.innerHTML = '<table><tr><th>ID</th><th>Title</th><th>Status</th><th>Priority</th><th>Action</th></tr>' +
+                                        data.tasks.map(t => `<tr><td>${t.id.substring(0,8)}</td><td>${t.title}</td><td><span class="badge badge-info">${t.status}</span></td><td>${t.priority}</td><td><button class="btn btn-sm btn-danger" onclick="cancelAdminTask('${t.id}')">Cancel</button></td></tr>`).join('') + '</table>';
+                                } else if (sub === 'workspaces') {
+                                    const res = await fetch(apiUrl('/api/admin/workspaces'), { headers: getAuthHeaders() });
+                                    const data = await res.json();
+                                    container.innerHTML = '<table><tr><th>ID</th><th>Project</th><th>Task</th><th>State</th><th>Root Path</th></tr>' +
+                                        data.workspaces.map(w => `<tr><td>${w.id.substring(0,8)}</td><td>${w.projectId||'-'}</td><td>${w.taskId||'-'}</td><td><span class="badge badge-info">${w.state}</span></td><td>${w.path}</td></tr>`).join('') + '</table>';
                                 } else if (sub === 'users') {
                                     const res = await fetch(apiUrl('/api/admin/users'), { headers: getAuthHeaders() });
                                     const data = await res.json();

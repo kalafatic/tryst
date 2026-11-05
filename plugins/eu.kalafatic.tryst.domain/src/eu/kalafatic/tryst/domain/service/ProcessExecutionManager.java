@@ -21,7 +21,47 @@ public class ProcessExecutionManager {
         ManagedProcessRecord record = new ManagedProcessRecord(taskId, pid, commandClass, workingDir);
         trackedRecords.put(record.getId(), record);
         activeProcesses.put(record.getId(), process);
+        attachOutputPumps(record, process);
         return record;
+    }
+
+    public void appendProcessOutput(String recordId, String line) {
+        ManagedProcessRecord record = trackedRecords.get(recordId);
+        if (record != null) {
+            record.appendOutput(line);
+        }
+    }
+
+    public List<String> getProcessOutput(String recordId) {
+        ManagedProcessRecord record = trackedRecords.get(recordId);
+        if (record != null) {
+            return record.getOutputLines();
+        }
+        return List.of();
+    }
+
+    private void attachOutputPumps(ManagedProcessRecord record, Process process) {
+        Thread outPump = new Thread(() -> {
+            try (java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    record.appendOutput(line);
+                }
+            } catch (Exception ignored) {}
+        }, "tryst-proc-stdout-" + record.getId());
+        outPump.setDaemon(true);
+        outPump.start();
+
+        Thread errPump = new Thread(() -> {
+            try (java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.InputStreamReader(process.getErrorStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    record.appendOutput("[stderr] " + line);
+                }
+            } catch (Exception ignored) {}
+        }, "tryst-proc-stderr-" + record.getId());
+        errPump.setDaemon(true);
+        errPump.start();
     }
 
     public void processCompleted(String recordId, int exitCode, long durationMs) {

@@ -89,11 +89,19 @@ The audit of the codebase and implementation progress tracks the following compo
        - Gated review revision results ensuring builds without tests are not reported as passed tests
 
 [PENDING / SUBSEQUENT PHASES]
-  P11: Structured JSON Tool Invocation Schema
+  P11: Administration and Operational Management Subsystem (Phase 11 / Current Protocol)
+       - Comprehensive 17-domain operational management interface (server, bundles, services, http, database, ai, models, tasks, workers, workspaces, processes, git, builds, sessions, users, audit, logs)
+       - Controlled administrative actions (service start/stop, task cancel, context inspection, process output inspection, workspace inspection, user role management)
+       - Structured observability: CorrelationContext, X-Correlation-Id header propagation, and structured log formatting
+       - Bounded in-memory output ring buffers for child processes
+       - Production packaging verification with Tycho build and RCP product export
+
+[PENDING / SUBSEQUENT PHASES]
+  P12: Structured JSON Tool Invocation Schema
        - Formal JSON schema tool calling for Ollama inference
        - Tool validation and hallucination resilience
 
-  P12: Web Client Asset Decoupling
+  P13: Web Client Asset Decoupling
        - Static asset separation into modular resources
        - Bundle classloader asset resolution
 ```

@@ -394,6 +394,8 @@ public class ApplicationLifecycleCoordinator {
         this.processExecutionManager = new eu.kalafatic.tryst.domain.service.ProcessExecutionManager();
         this.notificationService = new eu.kalafatic.tryst.domain.service.NotificationService(this.notificationRepository, this.notificationPreferenceRepository, this.eventBus);
         this.logDiagnosticService = new eu.kalafatic.tryst.domain.service.LogDiagnosticService();
+        eu.kalafatic.tryst.domain.service.ManagedServiceController serviceController =
+                new eu.kalafatic.tryst.domain.service.ManagedServiceController(this.telemetryService, this.dataRetentionService, this.taskOrchestrator);
         if (this.taskOrchestrator != null) {
             this.taskOrchestrator.setNotificationService(this.notificationService);
         }
@@ -438,6 +440,7 @@ public class ApplicationLifecycleCoordinator {
             server.setTaskOrchestrator(this.taskOrchestrator);
             server.setGitHubService(this.gitHubService, this.gitHubCredentialRepository, this.gitHubCredentialEncryptionService);
             server.setGitCommitRepository(this.gitCommitRepository);
+            server.setManagedServiceController(serviceController);
             this.httpService = server;
             this.httpService.start();
             if (serverReadinessService != null) {
@@ -510,6 +513,7 @@ public class ApplicationLifecycleCoordinator {
             registerService(eu.kalafatic.tryst.domain.service.ProcessExecutionManager.class, this.processExecutionManager);
             registerService(eu.kalafatic.tryst.domain.service.NotificationService.class, this.notificationService);
             registerService(eu.kalafatic.tryst.domain.service.LogDiagnosticService.class, this.logDiagnosticService);
+            registerService(eu.kalafatic.tryst.domain.service.ManagedServiceController.class, serviceController);
 
             if (tcpService != null) {
                 registerService(TrystTcpService.class, this.tcpService);
