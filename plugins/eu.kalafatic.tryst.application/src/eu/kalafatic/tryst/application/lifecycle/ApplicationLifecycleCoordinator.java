@@ -90,6 +90,8 @@ public class ApplicationLifecycleCoordinator {
     private AgentRepository agentRepository;
     private CodeReviewRepository codeReviewRepository;
     private eu.kalafatic.tryst.domain.repository.GitCommitRepository gitCommitRepository;
+    private eu.kalafatic.tryst.domain.repository.TaskInstructionRepository taskInstructionRepository;
+    private eu.kalafatic.tryst.domain.intake.TaskIntakeService taskIntakeService;
     private eu.kalafatic.tryst.domain.repository.TaskRecoveryCheckpointRepository taskRecoveryCheckpointRepository;
     private eu.kalafatic.tryst.domain.service.DataRetentionService dataRetentionService;
     private eu.kalafatic.tryst.domain.service.WorkspaceRecoveryService workspaceRecoveryService;
@@ -240,6 +242,7 @@ public class ApplicationLifecycleCoordinator {
         this.agentRepository = new SqliteAgentRepository(databaseManager);
         this.codeReviewRepository = new SqliteCodeReviewRepository(databaseManager);
         this.gitCommitRepository = new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteGitCommitRepository(databaseManager);
+        this.taskInstructionRepository = new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteTaskInstructionRepository(databaseManager);
 
         // Phase 4 Repositories
         this.userRepository = new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteUserRepository(databaseManager);
@@ -378,7 +381,20 @@ public class ApplicationLifecycleCoordinator {
         this.taskOrchestrator.setGitHubService(this.gitHubService);
         this.taskOrchestrator.setTaskRecoveryService(this.taskRecoveryService);
         this.taskOrchestrator.setBuildAndQualityService(this.buildAndTestService);
+        this.taskOrchestrator.setTaskInstructionRepository(this.taskInstructionRepository);
         this.taskOrchestrator.start();
+
+        // Task Intake Service
+        this.taskIntakeService = new eu.kalafatic.tryst.domain.intake.DefaultTaskIntakeService(
+                this.taskOrchestrator,
+                this.taskRepository,
+                this.taskInstructionRepository,
+                this.projectRepository,
+                this.workspaceService,
+                this.gitHubService,
+                this.gitHubCredentialRepository,
+                this.permissionManager
+        );
 
         // Phase 4 Observability & Operational Services
         this.serverMonitoringService = new eu.kalafatic.tryst.domain.service.ServerMonitoringService(configuration.defaultWorkspaceDirectory());
@@ -441,6 +457,7 @@ public class ApplicationLifecycleCoordinator {
             server.setGitHubService(this.gitHubService, this.gitHubCredentialRepository, this.gitHubCredentialEncryptionService);
             server.setGitCommitRepository(this.gitCommitRepository);
             server.setManagedServiceController(serviceController);
+            server.setTaskIntakeService(this.taskIntakeService);
             this.httpService = server;
             this.httpService.start();
             if (serverReadinessService != null) {
@@ -477,6 +494,8 @@ public class ApplicationLifecycleCoordinator {
             registerService(AgentRepository.class, this.agentRepository);
             registerService(CodeReviewRepository.class, this.codeReviewRepository);
             registerService(eu.kalafatic.tryst.domain.repository.GitCommitRepository.class, this.gitCommitRepository);
+            registerService(eu.kalafatic.tryst.domain.repository.TaskInstructionRepository.class, this.taskInstructionRepository);
+            registerService(eu.kalafatic.tryst.domain.intake.TaskIntakeService.class, this.taskIntakeService);
             registerService(WorkspaceService.class, this.workspaceService);
             registerService(AsyncExecutionService.class, this.asyncExecutionService);
             registerService(PermissionManager.class, this.permissionManager);
