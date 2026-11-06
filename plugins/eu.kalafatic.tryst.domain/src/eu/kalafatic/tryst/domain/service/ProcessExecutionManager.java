@@ -17,11 +17,17 @@ public class ProcessExecutionManager {
     private final ConcurrentHashMap<String, Process> activeProcesses = new ConcurrentHashMap<>();
 
     public ManagedProcessRecord registerProcess(String taskId, Process process, String commandClass, String workingDir) {
+        return registerProcess(taskId, process, commandClass, workingDir, true);
+    }
+
+    public ManagedProcessRecord registerProcess(String taskId, Process process, String commandClass, String workingDir, boolean attachPumps) {
         long pid = process.pid();
         ManagedProcessRecord record = new ManagedProcessRecord(taskId, pid, commandClass, workingDir);
         trackedRecords.put(record.getId(), record);
         activeProcesses.put(record.getId(), process);
-        attachOutputPumps(record, process);
+        if (attachPumps) {
+            attachOutputPumps(record, process);
+        }
         return record;
     }
 

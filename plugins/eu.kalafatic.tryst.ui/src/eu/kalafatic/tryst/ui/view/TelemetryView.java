@@ -98,6 +98,7 @@ public class TelemetryView extends ViewPart {
         if (viewer != null && !viewer.getControl().isDisposed()) {
             viewer.getControl().setFocus();
         }
+        refreshData();
     }
 
     @Override

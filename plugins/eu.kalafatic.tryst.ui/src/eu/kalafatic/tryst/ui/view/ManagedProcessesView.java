@@ -98,6 +98,7 @@ public class ManagedProcessesView extends ViewPart {
         if (viewer != null && !viewer.getControl().isDisposed()) {
             viewer.getControl().setFocus();
         }
+        refreshData();
     }
 
     @Override

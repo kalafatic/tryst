@@ -33,8 +33,9 @@ public class EmbeddedBrowserView extends ViewPart {
         Label lblUrl = new Label(parent, SWT.NONE);
         lblUrl.setText("Server URL:");
 
-        urlText = new Text(parent, SWT.BORDER | SWT.READ_ONLY);
+        urlText = new Text(parent, SWT.BORDER);
         urlText.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        urlText.addListener(SWT.DefaultSelection, e -> navigateToUrl(urlText.getText()));
 
         Button btnNavigate = new Button(parent, SWT.PUSH);
         btnNavigate.setText("Go");
@@ -68,7 +69,7 @@ public class EmbeddedBrowserView extends ViewPart {
 
     private void resolveAndNavigate() {
         RuntimeEndpointRegistry reg = TrystUiServices.getService(RuntimeEndpointRegistry.class);
-        String targetUrl = "http://127.0.0.1:8080/tryst";
+        String targetUrl = "http://127.0.0.1:38080/tryst";
         if (reg != null && reg.getCurrentEndpoint() != null) {
             RuntimeEndpoint ep = reg.getCurrentEndpoint();
             targetUrl = resolveBestUrl(ep);
@@ -79,7 +80,7 @@ public class EmbeddedBrowserView extends ViewPart {
     }
 
     private String resolveBestUrl(RuntimeEndpoint ep) {
-        if (ep == null) return "http://127.0.0.1:8080/tryst";
+        if (ep == null) return "http://127.0.0.1:38080/tryst";
         // Prefer canonical or external URL when available, otherwise internal URL
         if (ep.canonicalUrl() != null && !ep.canonicalUrl().isBlank()) {
             return ep.canonicalUrl();
