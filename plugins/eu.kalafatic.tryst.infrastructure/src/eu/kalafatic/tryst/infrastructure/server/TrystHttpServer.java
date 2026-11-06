@@ -88,6 +88,7 @@ public class TrystHttpServer implements TrystHttpService {
     private HttpServer server;
     private ExecutorService httpExecutor;
     private final AtomicBoolean running = new AtomicBoolean(false);
+    private final Map<String, HttpHandler> pendingHandlers = new java.util.concurrent.ConcurrentHashMap<>();
 
     public TrystHttpServer(String host, int port, WorkspaceService workspaceService) {
         this(host, port, workspaceService, null, null, null, null, null, null);
@@ -347,6 +348,27 @@ public class TrystHttpServer implements TrystHttpService {
         }
 
         server.createContext("/", new RootRedirectOrStaticAssetHandler(ctxPath, staticH));
+
+        // Register any buffered handlers
+        for (Map.Entry<String, HttpHandler> entry : pendingHandlers.entrySet()) {
+            bindHandlerToContexts(entry.getKey(), entry.getValue(), ctxPath);
+        }
+    }
+
+    public void registerHandler(String path, HttpHandler handler) {
+        if (path == null || handler == null) return;
+        pendingHandlers.put(path, handler);
+        if (server != null) {
+            String ctxPath = (configurationService != null) ? configurationService.getConfiguration().contextPath() : "/tryst";
+            bindHandlerToContexts(path, handler, ctxPath);
+        }
+    }
+
+    private void bindHandlerToContexts(String path, HttpHandler handler, String ctxPath) {
+        server.createContext(path, handler);
+        if (ctxPath != null && !ctxPath.isEmpty() && !"/".equals(ctxPath) && !path.startsWith(ctxPath)) {
+            server.createContext(ctxPath + (path.startsWith("/") ? path : "/" + path), handler);
+        }
     }
 
     private static class RootRedirectOrStaticAssetHandler implements HttpHandler {
@@ -3212,6 +3234,7 @@ public class TrystHttpServer implements TrystHttpService {
                         <div class="top-nav">
                             <button id="btnNewTask" class="btn btn-primary" onclick="openNewTaskModal()">+ New Task</button>
                             <button id="navReviews" class="nav-btn active" onclick="switchTab('reviews')">Code Review Center</button>
+                            <button id="navEvo" class="nav-btn" onclick="switchTab('evo')">AI Integration Center</button>
                             <button id="navAdmin" class="nav-btn" onclick="switchTab('admin')">Administration & Observability</button>
                             <div style="position: relative; display: inline-block;">
                                 <button id="btnNotifBell" class="nav-btn" onclick="toggleNotificationDropdown()" title="Notifications">
@@ -3338,6 +3361,66 @@ public class TrystHttpServer implements TrystHttpService {
                                         <button class="btn btn-primary" onclick="saveFileEdit()">Save Changes & Invalidate Approval</button>
                                     </div>
                                 </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="evoTab" class="container" style="display: none;">
+                        <div class="sidebar">
+                            <div style="padding: 16px; border-bottom: 1px solid var(--border);">
+                                <div class="section-title">TEIP 1.0 EVO Configuration</div>
+                                <div style="margin-bottom: 8px;">
+                                    <label style="font-size: 11px; color: var(--muted);">Endpoint:</label>
+                                    <input id="evoEndpointInput" type="text" class="input-ctrl" style="width: 100%; font-size: 12px;" value="http://localhost:39080" />
+                                </div>
+                                <div style="margin-bottom: 8px;">
+                                    <label style="font-size: 11px; color: var(--muted);">Bearer Auth Token:</label>
+                                    <input id="evoAuthTokenInput" type="password" class="input-ctrl" style="width: 100%; font-size: 12px;" placeholder="Optional bearer token" />
+                                </div>
+                                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+                                    <label style="font-size: 12px;"><input id="evoEnabledInput" type="checkbox" /> Enable EVO Engine</label>
+                                    <button class="btn btn-sm btn-success" onclick="saveEvoConfig()">Save</button>
+                                </div>
+                                <div class="flex-row">
+                                    <button class="btn btn-sm btn-primary" onclick="testEvoHealth()">⚡ Test Health</button>
+                                    <button class="btn btn-sm btn-warning" onclick="loadEvoCapabilities()">Capabilities</button>
+                                </div>
+                                <div id="evoHealthBadge" style="margin-top: 10px; font-size: 12px;">Status: Unchecked</div>
+                            </div>
+                            <div style="padding: 16px; flex: 1;">
+                                <div class="section-title">Discovered Capabilities & Models</div>
+                                <div id="evoCapabilitiesList" style="font-size: 12px; color: var(--muted);">Click 'Capabilities' to query remote EVO node.</div>
+                            </div>
+                        </div>
+
+                        <div class="main-content">
+                            <div class="card">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                                    <h2 style="margin: 0; font-size: 18px; color: var(--primary);">🤖 TEIP 1.0 Autonomous Executions Monitor</h2>
+                                    <button class="btn btn-sm btn-primary" onclick="refreshEvoExecutions()">↻ Refresh Executions</button>
+                                </div>
+                                <div id="evoExecutionsList">Loading executions...</div>
+                            </div>
+
+                            <div class="card">
+                                <div class="section-title">Scoped TRYST MCP Tools for EVO</div>
+                                <div style="font-size: 12px; color: var(--muted); margin-bottom: 10px;">
+                                    Tools dynamically exposed to EVO Darwin agents under strict least-privilege sandbox authorization:
+                                </div>
+                                <table>
+                                    <thead>
+                                        <tr><th>Tool Name</th><th>Scope</th><th>Description</th></tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr><td><b>get_project_metadata</b></td><td><code>read:task</code></td><td>Returns project configuration and repository information</td></tr>
+                                        <tr><td><b>list_workspace_files</b></td><td><code>read:workspace</code></td><td>Lists directory contents within task workspace sandbox</td></tr>
+                                        <tr><td><b>read_workspace_file</b></td><td><code>read:workspace</code></td><td>Reads file contents within task workspace sandbox</td></tr>
+                                        <tr><td><b>search_workspace_code</b></td><td><code>read:workspace</code></td><td>Searches text patterns within task workspace files</td></tr>
+                                        <tr><td><b>get_task_context</b></td><td><code>read:task</code></td><td>Returns task title, description, instructions, and criteria</td></tr>
+                                        <tr><td><b>propose_patch</b></td><td><code>write:workspace</code></td><td>Applies unified diff patch to sandbox (write permission required)</td></tr>
+                                        <tr><td><b>run_build_and_test</b></td><td><code>execute:build</code></td><td>Runs build and test verification in workspace</td></tr>
+                                    </tbody>
+                                </table>
                             </div>
                         </div>
                     </div>
@@ -3507,17 +3590,147 @@ public class TrystHttpServer implements TrystHttpService {
                         }
 
                         function switchTab(tab) {
-                            if (tab === 'reviews') {
-                                document.getElementById('reviewsTab').style.display = 'flex';
-                                document.getElementById('adminTab').style.display = 'none';
-                                document.getElementById('navReviews').classList.add('active');
-                                document.getElementById('navAdmin').classList.remove('active');
-                            } else {
-                                document.getElementById('reviewsTab').style.display = 'none';
-                                document.getElementById('adminTab').style.display = 'flex';
-                                document.getElementById('navAdmin').classList.add('active');
-                                document.getElementById('navReviews').classList.remove('active');
+                            document.getElementById('reviewsTab').style.display = (tab === 'reviews') ? 'flex' : 'none';
+                            document.getElementById('evoTab').style.display = (tab === 'evo') ? 'flex' : 'none';
+                            document.getElementById('adminTab').style.display = (tab === 'admin') ? 'flex' : 'none';
+
+                            document.getElementById('navReviews').classList.toggle('active', tab === 'reviews');
+                            document.getElementById('navEvo').classList.toggle('active', tab === 'evo');
+                            document.getElementById('navAdmin').classList.toggle('active', tab === 'admin');
+
+                            if (tab === 'evo') {
+                                loadEvoConfig();
+                                refreshEvoExecutions();
+                            } else if (tab === 'admin') {
                                 loadAdminOverview();
+                            }
+                        }
+
+                        async function loadEvoConfig() {
+                            try {
+                                const res = await fetch(`${getContextBase()}/api/integration/evo/config`, { credentials: 'omit' });
+                                if (res.ok) {
+                                    const d = await res.json();
+                                    document.getElementById('evoEndpointInput').value = d.endpoint || '';
+                                    document.getElementById('evoEnabledInput').checked = !!d.enabled;
+                                }
+                            } catch (e) {
+                                console.error('Failed to load EVO config:', e);
+                            }
+                        }
+
+                        async function saveEvoConfig() {
+                            const endpoint = document.getElementById('evoEndpointInput').value;
+                            const authToken = document.getElementById('evoAuthTokenInput').value;
+                            const enabled = document.getElementById('evoEnabledInput').checked;
+                            try {
+                                const res = await fetch(`${getContextBase()}/api/integration/evo/config`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ endpoint, authToken, enabled, timeoutSeconds: 60, maxRetries: 3 })
+                                });
+                                if (res.ok) {
+                                    alert('EVO configuration saved.');
+                                } else {
+                                    alert('Failed to save EVO config: ' + res.status);
+                                }
+                            } catch (e) {
+                                alert('Save error: ' + e.message);
+                            }
+                        }
+
+                        async function testEvoHealth() {
+                            const b = document.getElementById('evoHealthBadge');
+                            b.innerHTML = 'Testing connection...';
+                            try {
+                                const res = await fetch(`${getContextBase()}/api/integration/evo/health`);
+                                const d = await res.json();
+                                if (d.connected) {
+                                    b.innerHTML = `<span class="badge badge-success">ONLINE</span> Node: ${d.nodeId || 'unknown'} (TEIP ${d.version || '1.0'})`;
+                                } else {
+                                    b.innerHTML = `<span class="badge badge-error">OFFLINE</span> ${d.error || 'Connection failed'}`;
+                                }
+                            } catch (e) {
+                                b.innerHTML = `<span class="badge badge-error">ERROR</span> ${e.message}`;
+                            }
+                        }
+
+                        async function loadEvoCapabilities() {
+                            const c = document.getElementById('evoCapabilitiesList');
+                            c.innerHTML = 'Querying capabilities...';
+                            try {
+                                const res = await fetch(`${getContextBase()}/api/integration/evo/capabilities`);
+                                if (!res.ok) {
+                                    c.innerHTML = '<span style="color:var(--red);">Capabilities unavailable.</span>';
+                                    return;
+                                }
+                                const d = await res.json();
+                                let html = '<b>Capabilities:</b><ul style="padding-left:16px; margin:4px 0 10px 0;">';
+                                (d.capabilities || []).forEach(cap => {
+                                    html += `<li><b>${cap.name}</b> (${cap.id})<br/><small>Modes: ${(cap.supportedModes || []).join(', ')}</small></li>`;
+                                });
+                                html += '</ul><b>Available Models:</b><ul style="padding-left:16px; margin:4px 0;">';
+                                (d.availableModels || []).forEach(m => {
+                                    html += `<li><b>${m.name}</b> ${m.recommended ? '<span class="badge badge-info">Recommended</span>' : ''}</li>`;
+                                });
+                                html += '</ul>';
+                                c.innerHTML = html;
+                            } catch (e) {
+                                c.innerHTML = '<span style="color:var(--red);">Error: ' + e.message + '</span>';
+                            }
+                        }
+
+                        async function refreshEvoExecutions() {
+                            const container = document.getElementById('evoExecutionsList');
+                            container.innerHTML = 'Loading executions...';
+                            try {
+                                const res = await fetch(`${getContextBase()}/api/integration/evo/executions`);
+                                if (!res.ok) {
+                                    container.innerHTML = 'Failed to load executions.';
+                                    return;
+                                }
+                                const list = await res.json();
+                                if (!list || list.length === 0) {
+                                    container.innerHTML = '<div style="color:var(--muted); text-align:center; padding:16px;">No EVO executions recorded yet.</div>';
+                                    return;
+                                }
+                                let html = '<table><thead><tr><th>Task</th><th>EVO Exec ID</th><th>Capability</th><th>Status</th><th>Progress</th><th>Summary</th><th>Actions</th></tr></thead><tbody>';
+                                list.forEach(ex => {
+                                    let badge = 'badge-info';
+                                    if (ex.status === 'COMPLETED') badge = 'badge-success';
+                                    else if (ex.status === 'FAILED') badge = 'badge-error';
+                                    else if (ex.status === 'CANCELLED') badge = 'badge-warning';
+
+                                    html += `<tr>
+                                        <td><b>${ex.trystTaskId}</b></td>
+                                        <td><code>${ex.evoExecutionId || ex.id}</code></td>
+                                        <td>${ex.capability}</td>
+                                        <td><span class="badge ${badge}">${ex.status}</span></td>
+                                        <td>${Math.round((ex.progress || 0) * 100)}%</td>
+                                        <td>${ex.summary || ex.error || '-'}</td>
+                                        <td>
+                                            ${(ex.status === 'RUNNING' || ex.status === 'QUEUED') ? `<button class="btn btn-sm btn-danger" onclick="cancelEvoExecution('${ex.id}')">Cancel</button>` : ''}
+                                        </td>
+                                    </tr>`;
+                                });
+                                html += '</tbody></table>';
+                                container.innerHTML = html;
+                            } catch (e) {
+                                container.innerHTML = 'Error: ' + e.message;
+                            }
+                        }
+
+                        async function cancelEvoExecution(id) {
+                            if (!confirm('Cancel this active EVO execution?')) return;
+                            try {
+                                const res = await fetch(`${getContextBase()}/api/integration/evo/executions/${id}/cancel`, { method: 'POST' });
+                                if (res.ok) {
+                                    refreshEvoExecutions();
+                                } else {
+                                    alert('Cancellation failed');
+                                }
+                            } catch (e) {
+                                alert('Error: ' + e.message);
                             }
                         }
 

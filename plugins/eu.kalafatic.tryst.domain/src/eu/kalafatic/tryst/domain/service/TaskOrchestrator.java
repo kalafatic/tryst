@@ -60,6 +60,7 @@ public class TaskOrchestrator {
     private NotificationService notificationService;
     private TaskRecoveryService taskRecoveryService;
     private eu.kalafatic.tryst.domain.repository.TaskInstructionRepository taskInstructionRepository;
+    private eu.kalafatic.tryst.domain.ai.ExternalAiDelegator externalAiDelegator;
 
     private final int concurrency;
     private final ExecutorService workerExecutor;
@@ -334,6 +335,10 @@ public class TaskOrchestrator {
         this.taskInstructionRepository = taskInstructionRepository;
     }
 
+    public void setExternalAiDelegator(eu.kalafatic.tryst.domain.ai.ExternalAiDelegator externalAiDelegator) {
+        this.externalAiDelegator = externalAiDelegator;
+    }
+
     public TaskRecoveryService getTaskRecoveryService() {
         return taskRecoveryService;
     }
@@ -446,6 +451,7 @@ public class TaskOrchestrator {
         );
         worker.setTaskRecoveryService(this.taskRecoveryService);
         worker.setTaskInstructionRepository(this.taskInstructionRepository);
+        worker.setExternalAiDelegator(this.externalAiDelegator);
 
         Future<?> future = workerExecutor.submit(() -> {
             try {

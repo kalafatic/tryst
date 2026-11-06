@@ -11,7 +11,8 @@ Require-Bundle: org.eclipse.core.runtime,
  org.eclipse.osgi,
  eu.kalafatic.tryst.core;bundle-version="0.1.0",
  eu.kalafatic.tryst.domain;bundle-version="0.1.0",
- eu.kalafatic.tryst.infrastructure;bundle-version="0.1.0"
+ eu.kalafatic.tryst.infrastructure;bundle-version="0.1.0",
+ eu.kalafatic.tryst.evo.integration;bundle-version="0.1.0";resolution:=optional
 Export-Package: eu.kalafatic.tryst.application,
  eu.kalafatic.tryst.application.lifecycle
 Automatic-Module-Name: eu.kalafatic.tryst.application

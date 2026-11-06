@@ -60,6 +60,7 @@ public class TaskWorker implements Callable<ExecutionResult> {
     private NotificationService notificationService;
     private TaskRecoveryService taskRecoveryService;
     private eu.kalafatic.tryst.domain.repository.TaskInstructionRepository taskInstructionRepository;
+    private eu.kalafatic.tryst.domain.ai.ExternalAiDelegator externalAiDelegator;
 
     public TaskWorker(
             TaskExecutionContext context,
@@ -189,6 +190,10 @@ public class TaskWorker implements Callable<ExecutionResult> {
 
     public void setTaskInstructionRepository(eu.kalafatic.tryst.domain.repository.TaskInstructionRepository taskInstructionRepository) {
         this.taskInstructionRepository = taskInstructionRepository;
+    }
+
+    public void setExternalAiDelegator(eu.kalafatic.tryst.domain.ai.ExternalAiDelegator externalAiDelegator) {
+        this.externalAiDelegator = externalAiDelegator;
     }
 
     private void recordRecoveryCheckpoint(Task task, TaskStatus stage, String data) {
@@ -614,6 +619,20 @@ public class TaskWorker implements Callable<ExecutionResult> {
         }
 
         String prompt = promptBuilder.toString();
+
+        if (externalAiDelegator != null && externalAiDelegator.isAvailableForTask(task)) {
+            log.append("[Worker ").append(context.getWorkerId()).append("] Delegating implementation step to External AI (EVO TEIP 1.0)\n");
+            eu.kalafatic.tryst.domain.ai.ExternalAiDelegator.DelegationResult delRes =
+                    externalAiDelegator.delegateImplementation(task, ws, instructions, prompt, chunk -> log.append(chunk));
+            if (delRes.handled()) {
+                if (!delRes.success()) {
+                    log.append("[External AI delegation error]: ").append(delRes.errorMessage()).append("\n");
+                } else {
+                    log.append("[External AI delegation succeeded]: ").append(delRes.summary()).append("\n");
+                    return;
+                }
+            }
+        }
 
         CodeAgent.AgentExecutionResult res = codeAgent.runStep(
                 task,

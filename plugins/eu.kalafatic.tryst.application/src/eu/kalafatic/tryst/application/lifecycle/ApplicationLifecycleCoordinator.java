@@ -396,6 +396,27 @@ public class ApplicationLifecycleCoordinator {
                 this.permissionManager
         );
 
+        // TEIP 1.0 EVO Integration Repositories & Services
+        eu.kalafatic.tryst.domain.repository.EvoConfigurationRepository evoConfigRepo =
+                new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteEvoConfigurationRepository(databaseManager);
+        eu.kalafatic.tryst.domain.repository.EvoExecutionRepository evoExecRepo =
+                new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteEvoExecutionRepository(databaseManager);
+        eu.kalafatic.tryst.evo.integration.service.EvoIntegrationService evoService =
+                new eu.kalafatic.tryst.evo.integration.service.EvoIntegrationService(evoConfigRepo, evoExecRepo, null);
+        evoService.reconcileUnfinishedExecutions();
+        this.taskOrchestrator.setExternalAiDelegator(new eu.kalafatic.tryst.evo.integration.service.EvoAiDelegator(evoService));
+
+        // Scoped MCP Server
+        eu.kalafatic.tryst.evo.integration.mcp.McpServer mcpServer =
+                new eu.kalafatic.tryst.evo.integration.mcp.McpServer(this.permissionManager);
+        mcpServer.registerTool(new eu.kalafatic.tryst.evo.integration.mcp.ScopedMcpTools.GetProjectMetadataTool(this.projectRepository));
+        mcpServer.registerTool(new eu.kalafatic.tryst.evo.integration.mcp.ScopedMcpTools.ListWorkspaceFilesTool(this.workspaceRepository, this.permissionManager));
+        mcpServer.registerTool(new eu.kalafatic.tryst.evo.integration.mcp.ScopedMcpTools.ReadWorkspaceFileTool(this.workspaceRepository, this.permissionManager));
+        mcpServer.registerTool(new eu.kalafatic.tryst.evo.integration.mcp.ScopedMcpTools.SearchWorkspaceCodeTool(this.workspaceRepository, this.permissionManager));
+        mcpServer.registerTool(new eu.kalafatic.tryst.evo.integration.mcp.ScopedMcpTools.GetTaskContextTool(this.taskRepository, this.taskInstructionRepository));
+        mcpServer.registerTool(new eu.kalafatic.tryst.evo.integration.mcp.ScopedMcpTools.ProposePatchTool(this.workspaceRepository, this.permissionManager));
+        mcpServer.registerTool(new eu.kalafatic.tryst.evo.integration.mcp.ScopedMcpTools.RunBuildAndTestTool(this.workspaceRepository, this.buildAndTestService));
+
         // Phase 4 Observability & Operational Services
         this.serverMonitoringService = new eu.kalafatic.tryst.domain.service.ServerMonitoringService(configuration.defaultWorkspaceDirectory());
         this.telemetryService = new eu.kalafatic.tryst.domain.service.TelemetryService(
@@ -487,6 +508,11 @@ public class ApplicationLifecycleCoordinator {
             server.setManagedServiceController(serviceController);
             server.setTaskIntakeService(this.taskIntakeService);
             server.setPortRegistry(portRegistry);
+
+            // Register TEIP EVO Integration and MCP routes
+            server.registerHandler("/api/integration/evo", new eu.kalafatic.tryst.evo.integration.service.EvoHttpHandlers.EvoIntegrationHandler(evoService, this.permissionManager));
+            server.registerHandler("/api/mcp", new eu.kalafatic.tryst.evo.integration.service.EvoHttpHandlers.McpHttpHandler(mcpServer));
+
             this.httpService = server;
             this.httpService.start();
             if (serverReadinessService != null) {
@@ -528,6 +554,10 @@ public class ApplicationLifecycleCoordinator {
             registerService(eu.kalafatic.tryst.domain.repository.GitCommitRepository.class, this.gitCommitRepository);
             registerService(eu.kalafatic.tryst.domain.repository.TaskInstructionRepository.class, this.taskInstructionRepository);
             registerService(eu.kalafatic.tryst.domain.intake.TaskIntakeService.class, this.taskIntakeService);
+            registerService(eu.kalafatic.tryst.domain.repository.EvoConfigurationRepository.class, evoConfigRepo);
+            registerService(eu.kalafatic.tryst.domain.repository.EvoExecutionRepository.class, evoExecRepo);
+            registerService(eu.kalafatic.tryst.evo.integration.service.EvoIntegrationService.class, evoService);
+            registerService(eu.kalafatic.tryst.evo.integration.mcp.McpServer.class, mcpServer);
             registerService(WorkspaceService.class, this.workspaceService);
             registerService(AsyncExecutionService.class, this.asyncExecutionService);
             registerService(PermissionManager.class, this.permissionManager);
