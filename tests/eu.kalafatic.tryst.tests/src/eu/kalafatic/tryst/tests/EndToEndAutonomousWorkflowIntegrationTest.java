@@ -55,6 +55,7 @@ class EndToEndAutonomousWorkflowIntegrationTest {
 
     @AfterEach
     void tearDown() {
+        eu.kalafatic.tryst.domain.tool.GitTools.resetRunner();
         if (databaseManager != null) {
             databaseManager.close();
         }
