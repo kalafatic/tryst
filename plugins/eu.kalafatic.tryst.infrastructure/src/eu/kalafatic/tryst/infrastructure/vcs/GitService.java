@@ -378,7 +378,12 @@ public class GitService {
             outThread.join();
             errThread.join();
 
-            return new GitCommandResult(process.exitValue(), out.toString().trim(), err.toString().trim());
+            int exitCode = process.exitValue();
+            String errStr = err.toString().trim();
+            if (exitCode != 0 && !args.contains("status")) {
+                TrystLog.warn(GitService.class, "Git command failed (exit " + exitCode + "): " + args + " -> " + errStr);
+            }
+            return new GitCommandResult(exitCode, out.toString().trim(), errStr);
         } catch (Exception e) {
             TrystLog.error(GitService.class, "Git execution failed: " + args, e);
             return new GitCommandResult(-1, "", e.getMessage());

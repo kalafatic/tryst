@@ -14,5 +14,6 @@ Export-Package: eu.kalafatic.tryst.core,
  eu.kalafatic.tryst.core.event,
  eu.kalafatic.tryst.core.lifecycle,
  eu.kalafatic.tryst.core.log,
- eu.kalafatic.tryst.core.port
+ eu.kalafatic.tryst.core.port,
+ eu.kalafatic.tryst.core.server
 Automatic-Module-Name: eu.kalafatic.tryst.core

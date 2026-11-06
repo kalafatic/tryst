@@ -28,6 +28,7 @@ public class TrystApplicationPlugin extends AbstractUIPlugin {
             lifecycleCoordinator = null;
         }
         plugin = null;
+        eu.kalafatic.tryst.core.log.TrystLog.shutdown();
         super.stop(context);
     }
 

@@ -179,6 +179,9 @@ public class TaskOrchestrator {
         taskRepository.saveTask(task);
         taskQueue.enqueue(task);
 
+        TrystLog.info(TaskOrchestrator.class,
+                "Task submitted and queued: [" + task.getId() + "] " + task.getTitle() + " (Priority: " + task.getPriority() + ")");
+
         if (notificationService != null && userId != null && !userId.isBlank()) {
             notificationService.notifyUser(
                     userId,
@@ -215,6 +218,8 @@ public class TaskOrchestrator {
         }
 
         Task task = optTask.get();
+        TrystLog.info(TaskOrchestrator.class,
+                "Worker " + workerId + " claimed task: [" + task.getId() + "] " + task.getTitle());
         executeTaskAsync(task, workerId);
         return true;
     }

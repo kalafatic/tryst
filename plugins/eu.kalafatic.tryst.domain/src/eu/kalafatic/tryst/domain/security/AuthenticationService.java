@@ -133,6 +133,7 @@ public class AuthenticationService {
 
         Optional<User> userOpt = userRepository.findByUsername(username.trim());
         if (userOpt.isEmpty()) {
+            TrystLog.warn(AuthenticationService.class, "Authentication failed: Unknown username '" + username.trim() + "' from " + clientIp);
             permissionManager.recordAudit(username, "LOGIN", "session", null, null, null, "FAILED", "Unknown username");
             return new AuthResult(false, null, null, "Invalid username or password");
         }
@@ -151,6 +152,7 @@ public class AuthenticationService {
         if (!passwordValid) {
             user.incrementFailedAttempts();
             userRepository.save(user);
+            TrystLog.warn(AuthenticationService.class, "Authentication failed: Invalid credentials for user '" + username.trim() + "' from " + clientIp);
             permissionManager.recordAudit(username, "LOGIN", "session", null, null, null, "FAILED",
                     "Password incorrect (attempts: " + user.getFailedAttempts() + ")");
             if (user.isLocked()) {

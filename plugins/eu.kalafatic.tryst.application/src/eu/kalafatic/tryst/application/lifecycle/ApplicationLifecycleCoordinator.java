@@ -736,6 +736,7 @@ public class ApplicationLifecycleCoordinator {
 
     private void onApplicationTerminated() {
         TrystLog.info(ApplicationLifecycleCoordinator.class, "TRYST Application terminated cleanly.");
+        TrystLog.shutdown();
     }
 
     private void notifyListeners(ApplicationLifecycleEvent event) {

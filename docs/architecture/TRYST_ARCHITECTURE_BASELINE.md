@@ -139,7 +139,7 @@ Furthermore, TRYST Core is completely decoupled from EVO, permitting future inte
   - Persistence: `SqliteDatabaseManager`, `SchemaMigrationService`, `SqliteBackupService`, and SQLite repository implementations (`SqliteProjectRepository`, `SqliteTaskRepository`, `SqliteCodeReviewRepository`, `SqliteUserRepository`, `SqliteGitHubCredentialRepository`, etc.).
   - AI: `OllamaClient`.
   - VCS & Build: `GitService`, `BuildAndTestService`, `DefaultBuildTechnologyDetector`, `DefaultGitHubService`, `DefaultGitHubCredentialEncryptionService`.
-  - Server: `TrystHttpServer`, `TrystHttpService`, `TrystTcpServer`, `TrystTcpService`.
+  - Server: `TrystHttpServer` (implements public `eu.kalafatic.tryst.core.server.TrystHttpService`), `TrystTcpServer` (implements public `eu.kalafatic.tryst.core.server.TrystTcpService`).
 - **Dependencies:** `eu.kalafatic.tryst.core`, `eu.kalafatic.tryst.domain`, `org.sqlite.JDBC`, `slf4j.api`.
 - **Lifecycle Ownership:** HTTP and TCP servers, database connections, and background backup tasks are managed and shutdown cleanly by `ApplicationLifecycleCoordinator`.
 - **Threading Model:** `HttpServer` uses dedicated thread executors; `SqliteDatabaseManager` enforces single-writer / serialized transaction boundaries via internal monitor locks (`databaseManager.getLock()`).

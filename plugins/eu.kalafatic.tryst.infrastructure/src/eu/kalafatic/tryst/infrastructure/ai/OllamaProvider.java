@@ -110,6 +110,7 @@ public class OllamaProvider implements AIProvider {
                 .thenApply(res -> {
                     long duration = System.currentTimeMillis() - start;
                     if (res.statusCode() != 200) {
+                        TrystLog.error(OllamaProvider.class, "Ollama inference error HTTP " + res.statusCode() + ": " + res.body());
                         throw new TrystInfrastructureException("Ollama chat failed with HTTP " + res.statusCode() + ": " + res.body());
                     }
                     String content = extractContentFromChatResponse(res.body());
@@ -133,6 +134,7 @@ public class OllamaProvider implements AIProvider {
         return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofLines())
                 .thenAccept(res -> {
                     if (res.statusCode() != 200) {
+                        TrystLog.error(OllamaProvider.class, "Ollama streaming inference error HTTP " + res.statusCode());
                         throw new TrystInfrastructureException("Ollama streaming chat failed: HTTP " + res.statusCode());
                     }
                     res.body().forEach(line -> {

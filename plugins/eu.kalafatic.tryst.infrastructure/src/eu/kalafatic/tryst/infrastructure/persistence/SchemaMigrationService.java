@@ -35,11 +35,15 @@ public class SchemaMigrationService {
             int currentVersion = getCurrentVersion(conn);
             List<Migration> availableMigrations = getMigrations();
 
+            int appliedCount = 0;
             for (Migration migration : availableMigrations) {
                 if (migration.version() > currentVersion) {
                     applyMigration(conn, migration);
+                    appliedCount++;
                 }
             }
+            TrystLog.info(SchemaMigrationService.class, "Database schema migration check complete. Applied migrations: " +
+                    appliedCount + " (Current schema version: " + getCurrentVersion(conn) + ")");
         }
     }
 

@@ -428,6 +428,13 @@ public class TrystHttpServer implements TrystHttpService {
         try (OutputStream os = exchange.getResponseBody()) {
             os.write(bytes);
         }
+
+        // Avoid logging streaming notifications endpoint on every poll
+        String path = exchange.getRequestURI().getPath();
+        if (!path.endsWith("/stream")) {
+            TrystLog.info(TrystHttpServer.class, String.format("HTTP %s %s -> %d",
+                    exchange.getRequestMethod(), path, statusCode));
+        }
     }
 
     /**
