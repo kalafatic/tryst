@@ -46,8 +46,9 @@ class ConfigurationTest {
         ));
 
         ApplicationConfiguration valid = ApplicationConfiguration.createDefault();
-        assertThrows(TrystApplicationException.class, () -> valid.withServerSettings("", 8080, 9090));
-        assertThrows(TrystApplicationException.class, () -> valid.withServerSettings("127.0.0.1", -1, 9090));
-        assertThrows(TrystApplicationException.class, () -> valid.withServerSettings("127.0.0.1", 8080, 70000));
+        assertThrows(TrystApplicationException.class, () -> valid.withServerSettings("", 38080, 38280));
+        assertThrows(TrystApplicationException.class, () -> valid.withServerSettings("127.0.0.1", -1, 38280));
+        assertThrows(TrystApplicationException.class, () -> valid.withServerSettings("127.0.0.1", 38080, 70000));
+        assertThrows(TrystApplicationException.class, () -> valid.withServerSettings("127.0.0.1", 8080, 38280));
     }
 }

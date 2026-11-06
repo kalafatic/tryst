@@ -262,7 +262,7 @@ Tasks follow an explicit lifecycle supporting asynchronous, autonomous execution
 ## 7. Web Application and API Architecture
 
 - **HTTP Engine:** Pure Java 21 `com.sun.net.httpserver.HttpServer`.
-- **Port Management:** Configured port with automatic fallback range (e.g. 8080-8180) and ephemeral port 0 on collision. Bound URLs published to `RuntimeEndpointRegistry`.
+- **Port Management:** Configured port adhering to TRYST standard base offset +30000 (HTTP: 38080, TCP: 38280) with automatic coherent group shifting (+100 offset) and ephemeral port 0 on collision. Port 8080 is strictly prohibited. Bound URLs published to `RuntimeEndpointRegistry`.
 - **Canonical Decoupled URL:** Browser connects to `http://localhost/tryst`, which routes to the dynamic internal listener.
 - **REST API Endpoints:**
   - `/api/status`: System health and component readiness.

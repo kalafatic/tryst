@@ -42,6 +42,7 @@ class FullPlatformLifecycleAndSecurityIntegrationTest {
     void tearDown() {
         if (coordinator != null) {
             try {
+                coordinator.transitionTo(ApplicationLifecycleStage.WORKBENCH_RUNNING);
                 coordinator.transitionTo(ApplicationLifecycleStage.APPLICATION_SHUTDOWN);
                 coordinator.transitionTo(ApplicationLifecycleStage.SERVICE_DISPOSAL);
                 coordinator.transitionTo(ApplicationLifecycleStage.APPLICATION_TERMINATED);

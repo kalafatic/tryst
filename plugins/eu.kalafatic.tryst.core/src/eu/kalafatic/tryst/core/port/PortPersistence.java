@@ -46,6 +46,12 @@ public class PortPersistence {
             String tsStr = props.getProperty("allocation.timestamp");
             Instant timestamp = (tsStr != null && !tsStr.isBlank()) ? Instant.parse(tsStr) : Instant.now();
 
+            boolean migrationRequired = false;
+            if (baseOffset < PortAllocationGroup.TRYST_BASE_OFFSET) {
+                baseOffset = PortAllocationGroup.TRYST_BASE_OFFSET;
+                migrationRequired = true;
+            }
+
             Map<String, PortConfiguration> map = new LinkedHashMap<>();
             for (String key : props.stringPropertyNames()) {
                 if (key.startsWith("service.") && key.endsWith(".assignedPort")) {
@@ -60,6 +66,36 @@ public class PortPersistence {
                     String sTs = props.getProperty("service." + serviceId + ".timestamp");
                     Instant sTime = (sTs != null) ? Instant.parse(sTs) : timestamp;
 
+                    // Migrate legacy 8080 or EVO range ports for TRYST HTTP/TCP
+                    if (assignedPort == 8080 || (assignedPort >= 8080 && assignedPort <= 8500)) {
+                        TrystLog.warn(PortPersistence.class, "Migrating legacy forbidden port " + assignedPort + " for service " + serviceId + " to standard TRYST port range.");
+                        if (ServicePortIdentifier.HTTP_SERVICE.equals(serviceId)) {
+                            assignedPort = PortAllocationGroup.DEFAULT_TRYST_HTTP_PORT + offset;
+                            defaultPort = PortAllocationGroup.DEFAULT_TRYST_HTTP_PORT;
+                        } else if (ServicePortIdentifier.API_SERVICE.equals(serviceId)) {
+                            assignedPort = PortAllocationGroup.DEFAULT_TRYST_API_PORT + offset;
+                            defaultPort = PortAllocationGroup.DEFAULT_TRYST_API_PORT;
+                        } else if (ServicePortIdentifier.TCP_SERVICE.equals(serviceId)) {
+                            assignedPort = PortAllocationGroup.DEFAULT_TRYST_TCP_PORT + offset;
+                            defaultPort = PortAllocationGroup.DEFAULT_TRYST_TCP_PORT;
+                        } else if (ServicePortIdentifier.MANAGEMENT_SERVICE.equals(serviceId)) {
+                            assignedPort = PortAllocationGroup.DEFAULT_TRYST_MGMT_PORT + offset;
+                            defaultPort = PortAllocationGroup.DEFAULT_TRYST_MGMT_PORT;
+                        } else if (ServicePortIdentifier.WEBSOCKET_SERVICE.equals(serviceId)) {
+                            assignedPort = PortAllocationGroup.DEFAULT_TRYST_WS_PORT + offset;
+                            defaultPort = PortAllocationGroup.DEFAULT_TRYST_WS_PORT;
+                        } else {
+                            assignedPort = PortAllocationGroup.TRYST_BASE_OFFSET + assignedPort;
+                            defaultPort = PortAllocationGroup.TRYST_BASE_OFFSET + defaultPort;
+                        }
+                        migrationRequired = true;
+                    }
+
+                    if (defaultPort == 8080 || (defaultPort >= 8080 && defaultPort <= 8500)) {
+                        defaultPort = PortAllocationGroup.DEFAULT_TRYST_HTTP_PORT;
+                        migrationRequired = true;
+                    }
+
                     map.put(serviceId, new PortConfiguration(
                             serviceId, defaultPort, assignedPort, offset, protocol, bindHost, enabled, sVer, sTime
                     ));
@@ -70,7 +106,12 @@ public class PortPersistence {
                 return Optional.empty();
             }
 
-            return Optional.of(new PortAllocationGroup(baseOffset, groupOffset, host, version, timestamp, map));
+            PortAllocationGroup group = new PortAllocationGroup(baseOffset, groupOffset, host, version, timestamp, map);
+            if (migrationRequired) {
+                TrystLog.info(PortPersistence.class, "Saving migrated port allocations without forbidden port 8080 to " + storageFile);
+                saveAllocations(group);
+            }
+            return Optional.of(group);
         } catch (Exception e) {
             TrystLog.warn(PortPersistence.class, "Failed to load port allocations from " + storageFile + ": " + e.getMessage());
             return Optional.empty();

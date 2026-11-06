@@ -68,7 +68,7 @@ For production headless servers (Docker containers, Linux systemd services):
 
 | Variable / Property | Description | Default |
 |---|---|---|
-| `TRYST_HTTP_PORT` / `tryst.http.port` | Preferred internal HTTP listener port | `8080` (falls back to range 8080-8180 or 0) |
+| `TRYST_HTTP_PORT` / `tryst.http.port` | Preferred internal HTTP listener port | `38080` (falls back to range 38080-38580 or 0) |
 | `TRYST_ADMIN_PASSWORD` | Initial administrator password on first boot | Setup token generated if unset |
 | `TRYST_OLLAMA_ENDPOINT` | Local or remote Ollama HTTP endpoint | `http://localhost:11434` |
 | `TRYST_WORKSPACE_DIR` | Base directory for workspaces and sandboxes | `~/.tryst/workspace` |

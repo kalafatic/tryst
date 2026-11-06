@@ -95,14 +95,23 @@ public record ApplicationConfiguration(
         if (httpPort < 0 || httpPort > 65535) {
             throw new TrystApplicationException("httpPort must be between 0 and 65535");
         }
+        if (httpPort == 8080) {
+            throw new TrystApplicationException("Port 8080 is strictly reserved and forbidden for TRYST. TRYST HTTP must never bind to port 8080.");
+        }
         if (tcpPort < 0 || tcpPort > 65535) {
             throw new TrystApplicationException("tcpPort must be between 0 and 65535");
+        }
+        if (tcpPort == 8080) {
+            throw new TrystApplicationException("Port 8080 is strictly reserved and forbidden for TRYST. TRYST TCP must never bind to port 8080.");
         }
         if (portRangeStart < 0 || portRangeStart > 65535) {
             throw new TrystApplicationException("portRangeStart must be between 0 and 65535");
         }
         if (portRangeEnd < portRangeStart || portRangeEnd > 65535) {
             throw new TrystApplicationException("portRangeEnd must be >= portRangeStart and <= 65535");
+        }
+        if (portRangeStart <= 8080 && 8080 <= portRangeEnd && portRangeStart != 0) {
+            throw new TrystApplicationException("Port 8080 is strictly reserved and forbidden for TRYST. Fallback range must not include port 8080.");
         }
         if (contextPath == null || contextPath.isBlank()) {
             throw new TrystApplicationException("contextPath must not be blank");
