@@ -410,10 +410,16 @@ public class TaskOrchestrator {
                 project = projectRepository.findById(task.getProjectId()).orElse(null);
             }
             if (workspaceService != null) {
-                workspace = workspaceService.getWorkspaceForProject(task.getProjectId());
+                workspace = workspaceService.getWorkspaceForTask(task.getId());
+                if (workspace == null) {
+                    workspace = workspaceService.getWorkspaceForProject(task.getProjectId());
+                }
             }
         } else if (workspaceService != null) {
-            workspace = workspaceService.getCurrentWorkspace();
+            workspace = workspaceService.getWorkspaceForTask(task.getId());
+            if (workspace == null) {
+                workspace = workspaceService.getCurrentWorkspace();
+            }
             if (workspace != null) {
                 project = workspace.getActiveProject().orElse(null);
             }

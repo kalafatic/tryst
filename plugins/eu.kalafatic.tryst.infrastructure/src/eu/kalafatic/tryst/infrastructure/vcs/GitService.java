@@ -45,6 +45,7 @@ public class GitService {
     }
 
     public GitCommandResult getDiff(Path repoDir) {
+        runGit(repoDir, List.of("add", "-N", "."));
         return runGit(repoDir, List.of("diff"));
     }
 
@@ -285,13 +286,13 @@ public class GitService {
         String currentFingerprint = CodeReview.calculateFingerprint(currentDiff);
 
         if (!currentFingerprint.equals(review.getApprovedFingerprint())) {
-            // Concurrent workspace modification or tampered state: invalidate approval immediately
+            String origApproved = review.getApprovedFingerprint();
             review.invalidateApproval("Working tree was modified after approval: content fingerprint mismatch (" +
-                    currentFingerprint + " vs approved " + review.getApprovedFingerprint() + ")");
+                    currentFingerprint + " vs approved " + origApproved + ")");
             return new AuthorizedCommitResult(false, null, commitMessage,
                     "Commit rejected: Working tree content fingerprint (" + currentFingerprint +
-                            ") does not match approved review fingerprint (" + review.getApprovedFingerprint() +
-                            "). Content was modified after approval. Approval has been invalidated.");
+                            ") does not match approved review fingerprint (" + origApproved +
+                            "). Diff in repo:\n[" + currentDiff + "]\nDiff in review:\n[" + review.getEffectiveDiff() + "]");
         }
 
         // 5. Stage all authorized changes

@@ -90,7 +90,7 @@ public class ServerBootstrapAndNetworkingTest {
         SchemaMigrationService migrationService = new SchemaMigrationService(databaseManager);
         migrationService.migrate();
 
-        assertEquals(12, migrationService.getCurrentVersion(), "Database should be migrated to V12");
+        assertEquals(13, migrationService.getCurrentVersion(), "Database should be migrated to V13");
     }
 
     @Test

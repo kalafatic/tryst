@@ -16,7 +16,7 @@ public class GitTools {
         int run(Path workingDir, List<String> args, StringBuilder output, StringBuilder error);
     }
 
-    private static volatile GitRunner runner = (dir, args, out, err) -> {
+        private static final GitRunner DEFAULT_RUNNER = (dir, args, out, err) -> {
         try {
             List<String> cmd = new java.util.ArrayList<>();
             cmd.add("git");
@@ -37,6 +37,12 @@ public class GitTools {
             return -1;
         }
     };
+
+    private static volatile GitRunner runner = DEFAULT_RUNNER;
+
+    public static void resetRunner() {
+        runner = DEFAULT_RUNNER;
+    }
 
     public static void setRunner(GitRunner customRunner) {
         runner = customRunner;
@@ -64,6 +70,7 @@ public class GitTools {
             Path root = workspace.getRootPath();
             StringBuilder out = new StringBuilder();
             StringBuilder err = new StringBuilder();
+            runner.run(root, List.of("add", "-N", "."), new StringBuilder(), new StringBuilder());
             int code = runner.run(root, List.of("diff"), out, err);
             if (code == 0) {
                 return ToolResult.ok(out.toString());
