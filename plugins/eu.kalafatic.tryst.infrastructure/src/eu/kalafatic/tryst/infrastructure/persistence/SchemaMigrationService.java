@@ -641,6 +641,59 @@ public class SchemaMigrationService {
         );
         migrations.add(new Migration(12, "Intelligent task intake and supplementary instructions", v12Statements));
 
+        // V13: TEIP 1.0 EVO Integration Configuration, Executions and Events
+        List<String> v13Statements = List.of(
+                """
+                CREATE TABLE IF NOT EXISTS evo_configurations (
+                    id TEXT PRIMARY KEY,
+                    endpoint TEXT NOT NULL,
+                    auth_token TEXT NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 0,
+                    timeout_seconds INTEGER NOT NULL DEFAULT 60,
+                    max_retries INTEGER NOT NULL DEFAULT 3,
+                    updated_at TEXT NOT NULL
+                );
+                """,
+                """
+                CREATE TABLE IF NOT EXISTS evo_executions (
+                    id TEXT PRIMARY KEY,
+                    tryst_task_id TEXT NOT NULL,
+                    tryst_session_id TEXT,
+                    evo_execution_id TEXT,
+                    evo_session_id TEXT,
+                    capability TEXT NOT NULL,
+                    ai_mode TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    phase TEXT,
+                    progress REAL DEFAULT 0.0,
+                    last_sequence INTEGER DEFAULT 0,
+                    idempotency_key TEXT,
+                    summary TEXT,
+                    error TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (tryst_task_id) REFERENCES tasks(id) ON DELETE CASCADE
+                );
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_evo_executions_task ON evo_executions(tryst_task_id);",
+                "CREATE INDEX IF NOT EXISTS idx_evo_executions_evo_id ON evo_executions(evo_execution_id);",
+                "CREATE INDEX IF NOT EXISTS idx_evo_executions_idempotency ON evo_executions(idempotency_key);",
+                """
+                CREATE TABLE IF NOT EXISTS evo_execution_events (
+                    event_id TEXT PRIMARY KEY,
+                    execution_id TEXT NOT NULL,
+                    sequence INTEGER NOT NULL,
+                    event_type TEXT NOT NULL,
+                    correlation_id TEXT,
+                    timestamp TEXT NOT NULL,
+                    data_json TEXT NOT NULL,
+                    FOREIGN KEY (execution_id) REFERENCES evo_executions(id) ON DELETE CASCADE
+                );
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_evo_events_exec_seq ON evo_execution_events(execution_id, sequence);"
+        );
+        migrations.add(new Migration(13, "TEIP 1.0 EVO integration configuration, executions and events", v13Statements));
+
         return migrations;
     }
 }

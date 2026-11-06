@@ -11,6 +11,7 @@ Require-Bundle: junit-jupiter-api;bundle-version="5.10.2",
  eu.kalafatic.tryst.core;bundle-version="0.1.0",
  eu.kalafatic.tryst.domain;bundle-version="0.1.0",
  eu.kalafatic.tryst.infrastructure;bundle-version="0.1.0",
+ eu.kalafatic.tryst.evo.integration;bundle-version="0.1.0",
  eu.kalafatic.tryst.application;bundle-version="0.1.0",
  eu.kalafatic.tryst.ui;bundle-version="0.1.0"
 Export-Package: eu.kalafatic.tryst.tests

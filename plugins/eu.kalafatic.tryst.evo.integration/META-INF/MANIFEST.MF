@@ -1,0 +1,17 @@
+Manifest-Version: 1.0
+Bundle-ManifestVersion: 2
+Bundle-Name: TRYST Evolution Integration
+Bundle-SymbolicName: eu.kalafatic.tryst.evo.integration;singleton:=true
+Bundle-Version: 0.1.0.qualifier
+Bundle-RequiredExecutionEnvironment: JavaSE-21
+Require-Bundle: org.eclipse.osgi,
+ org.eclipse.equinox.common,
+ org.eclipse.core.runtime,
+ eu.kalafatic.tryst.core;bundle-version="0.1.0",
+ eu.kalafatic.tryst.domain;bundle-version="0.1.0",
+ eu.kalafatic.tryst.infrastructure;bundle-version="0.1.0"
+Export-Package: eu.kalafatic.tryst.evo.integration.client,
+ eu.kalafatic.tryst.evo.integration.mcp,
+ eu.kalafatic.tryst.evo.integration.model,
+ eu.kalafatic.tryst.evo.integration.service
+Automatic-Module-Name: eu.kalafatic.tryst.evo.integration
