@@ -97,6 +97,7 @@ public class TasksAndAgentsView extends ViewPart {
         if (taskViewer != null && !taskViewer.getControl().isDisposed()) {
             taskViewer.getControl().setFocus();
         }
+        refreshData();
     }
 
     @Override

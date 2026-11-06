@@ -111,6 +111,7 @@ public class ServerOverviewView extends ViewPart {
         if (lblSystemCpu != null && !lblSystemCpu.isDisposed()) {
             lblSystemCpu.setFocus();
         }
+        refreshMetrics();
     }
 
     @Override

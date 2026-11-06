@@ -261,7 +261,7 @@ public class BuildAndTestService implements BuildAndQualityService {
 
             if (processExecutionManager != null) {
                 processRecord = processExecutionManager.registerProcess(
-                        taskId, process, "build-qa:" + stageName, workingDirectory.toString()
+                        taskId, process, "build-qa:" + stageName, workingDirectory.toString(), false
                 );
                 recordId = processRecord != null ? processRecord.getId() : null;
             }

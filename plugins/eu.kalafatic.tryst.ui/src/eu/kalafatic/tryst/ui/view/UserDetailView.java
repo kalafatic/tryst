@@ -135,7 +135,7 @@ public class UserDetailView extends ViewPart {
 
     private void createOverviewTab(CTabFolder tabFolder) {
         CTabItem item = new CTabItem(tabFolder, SWT.NONE);
-        item.setText("Overview & Identity");
+        item.setText("Overview && Identity");
 
         Composite comp = new Composite(tabFolder, SWT.NONE);
         comp.setLayout(new GridLayout(2, false));
@@ -167,7 +167,7 @@ public class UserDetailView extends ViewPart {
 
     private void createProjectsTab(CTabFolder tabFolder) {
         CTabItem item = new CTabItem(tabFolder, SWT.NONE);
-        item.setText("Projects & Repositories");
+        item.setText("Projects && Repositories");
 
         Composite comp = new Composite(tabFolder, SWT.NONE);
         comp.setLayout(new GridLayout(1, false));
@@ -209,7 +209,7 @@ public class UserDetailView extends ViewPart {
 
     private void createSessionsTab(CTabFolder tabFolder) {
         CTabItem item = new CTabItem(tabFolder, SWT.NONE);
-        item.setText("User & Application Sessions");
+        item.setText("User && Application Sessions");
 
         Composite comp = new Composite(tabFolder, SWT.NONE);
         comp.setLayout(new GridLayout(1, false));
@@ -291,7 +291,7 @@ public class UserDetailView extends ViewPart {
 
     private void createTasksTab(CTabFolder tabFolder) {
         CTabItem item = new CTabItem(tabFolder, SWT.NONE);
-        item.setText("Tasks & Execution History");
+        item.setText("Tasks && Execution History");
 
         Composite comp = new Composite(tabFolder, SWT.NONE);
         comp.setLayout(new GridLayout(1, false));
@@ -425,7 +425,7 @@ public class UserDetailView extends ViewPart {
 
     private void createAuditTab(CTabFolder tabFolder) {
         CTabItem item = new CTabItem(tabFolder, SWT.NONE);
-        item.setText("Audit & Activity Timeline");
+        item.setText("Audit && Activity Timeline");
 
         Composite comp = new Composite(tabFolder, SWT.NONE);
         comp.setLayout(new GridLayout(1, false));
