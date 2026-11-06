@@ -1,6 +1,10 @@
 package eu.kalafatic.tryst.core.config;
 
 import eu.kalafatic.tryst.core.log.TrystLog;
+import eu.kalafatic.tryst.core.port.PortAllocationGroup;
+import eu.kalafatic.tryst.core.port.PortAllocationManager;
+import eu.kalafatic.tryst.core.port.PortPersistence;
+import eu.kalafatic.tryst.core.port.PortRegistry;
 
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -14,7 +18,7 @@ import java.util.function.Consumer;
 
 /**
  * Centralized configuration service providing configuration loading, persistence,
- * validation, and dynamic change notification.
+ * validation, dynamic change notification, and integrated port management.
  */
 public class ConfigurationService {
 
@@ -24,6 +28,8 @@ public class ConfigurationService {
     private volatile ApplicationConfiguration currentConfiguration;
     private final CopyOnWriteArrayList<Consumer<ApplicationConfiguration>> listeners = new CopyOnWriteArrayList<>();
     private final RuntimeEndpointRegistry endpointRegistry;
+    private final PortAllocationManager portAllocationManager;
+    private final PortRegistry portRegistry;
 
     public ConfigurationService(Path configurationDirectory) {
         Objects.requireNonNull(configurationDirectory, "configurationDirectory must not be null");
@@ -36,6 +42,12 @@ public class ConfigurationService {
                         currentConfiguration.httpPort()
                 )
         );
+        PortPersistence portPersistence = new PortPersistence(configurationDirectory);
+        this.portAllocationManager = new PortAllocationManager(portPersistence);
+        PortAllocationGroup initialGroup = portPersistence.loadAllocations()
+                .orElseGet(() -> PortAllocationGroup.createDefault(currentConfiguration.serverHost()));
+        this.portRegistry = new PortRegistry(initialGroup);
+        this.portAllocationManager.setEffectiveGroup(initialGroup);
     }
 
     public ConfigurationService(ApplicationConfiguration initialConfig) {
@@ -49,6 +61,12 @@ public class ConfigurationService {
                         initialConfig.httpPort()
                 )
         );
+        PortPersistence portPersistence = new PortPersistence(initialConfig.configurationDirectory());
+        this.portAllocationManager = new PortAllocationManager(portPersistence);
+        PortAllocationGroup initialGroup = portPersistence.loadAllocations()
+                .orElseGet(() -> PortAllocationGroup.createDefault(initialConfig.serverHost()));
+        this.portRegistry = new PortRegistry(initialGroup);
+        this.portAllocationManager.setEffectiveGroup(initialGroup);
     }
 
     public ApplicationConfiguration getConfiguration() {
@@ -57,6 +75,14 @@ public class ConfigurationService {
 
     public RuntimeEndpointRegistry getEndpointRegistry() {
         return endpointRegistry;
+    }
+
+    public PortAllocationManager getPortAllocationManager() {
+        return portAllocationManager;
+    }
+
+    public PortRegistry getPortRegistry() {
+        return portRegistry;
     }
 
     public synchronized void updateConfiguration(ApplicationConfiguration newConfiguration) {

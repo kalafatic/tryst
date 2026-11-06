@@ -35,8 +35,8 @@ public record ApplicationConfiguration(
         String canonicalUrl
 ) {
     public static final boolean DEFAULT_DYNAMIC_PORT_FALLBACK = true;
-    public static final int DEFAULT_PORT_RANGE_START = 8080;
-    public static final int DEFAULT_PORT_RANGE_END = 8180;
+    public static final int DEFAULT_PORT_RANGE_START = 38080;
+    public static final int DEFAULT_PORT_RANGE_END = 38580;
     public static final String DEFAULT_PUBLIC_URL = "";
     public static final boolean DEFAULT_REVERSE_PROXY = false;
     public static final String DEFAULT_CONTEXT_PATH = "/tryst";
@@ -52,8 +52,8 @@ public record ApplicationConfiguration(
     public static final int DEFAULT_MAX_RETRY_ATTEMPTS = 3;
     public static final boolean DEFAULT_SECURE_SANDBOX = true;
     public static final String DEFAULT_SERVER_HOST = "127.0.0.1";
-    public static final int DEFAULT_HTTP_PORT = 8080;
-    public static final int DEFAULT_TCP_PORT = 9090;
+    public static final int DEFAULT_HTTP_PORT = 38080;
+    public static final int DEFAULT_TCP_PORT = 38280;
 
     public ApplicationConfiguration {
         Objects.requireNonNull(applicationName, "applicationName must not be null");

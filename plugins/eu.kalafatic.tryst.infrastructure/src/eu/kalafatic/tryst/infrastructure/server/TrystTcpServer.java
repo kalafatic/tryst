@@ -32,6 +32,7 @@ public class TrystTcpServer implements TrystTcpService {
     private final String host;
     private final int port;
     private final WorkspaceService workspaceService;
+    private eu.kalafatic.tryst.core.port.PortRegistry portRegistry;
 
     private ServerSocket serverSocket;
     private ExecutorService connectionPool;
@@ -40,9 +41,18 @@ public class TrystTcpServer implements TrystTcpService {
     private final Set<Socket> activeSockets = ConcurrentHashMap.newKeySet();
 
     public TrystTcpServer(String host, int port, WorkspaceService workspaceService) {
+        this(host, port, workspaceService, null);
+    }
+
+    public TrystTcpServer(String host, int port, WorkspaceService workspaceService, eu.kalafatic.tryst.core.port.PortRegistry portRegistry) {
         this.host = Objects.requireNonNull(host, "host must not be null");
         this.port = port;
         this.workspaceService = workspaceService;
+        this.portRegistry = portRegistry;
+    }
+
+    public void setPortRegistry(eu.kalafatic.tryst.core.port.PortRegistry portRegistry) {
+        this.portRegistry = portRegistry;
     }
 
     @Override
@@ -65,6 +75,10 @@ public class TrystTcpServer implements TrystTcpService {
             this.acceptorThread = new Thread(this::acceptConnections, "tryst-tcp-acceptor");
             this.acceptorThread.setDaemon(true);
             this.acceptorThread.start();
+
+            if (portRegistry != null) {
+                portRegistry.registerBoundPort(eu.kalafatic.tryst.core.port.ServicePortIdentifier.TCP_SERVICE, serverSocket.getLocalPort());
+            }
 
             TrystLog.info(TrystTcpServer.class, "TCP Server successfully started on " + host + ":" + serverSocket.getLocalPort());
         } catch (IOException e) {
