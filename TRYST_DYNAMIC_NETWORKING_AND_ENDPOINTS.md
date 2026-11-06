@@ -16,7 +16,7 @@ The `RuntimeEndpoint` record captures:
 - `applicationId`: Server identity name.
 - `bindAddress`: Local bind host IP (e.g., `127.0.0.1`).
 - `httpPort`: Actual bound HTTP port.
-- `internalUrl`: Derived internal URL (e.g., `http://127.0.0.1:8080`).
+- `internalUrl`: Derived internal URL (e.g., `http://127.0.0.1:38080`).
 - `externalUrl`: External/public URL, respecting `reverseProxyEnabled` and `publicServerUrl`.
 - `listenerState`: Status (`RUNNING` / `STOPPED`).
 - `startupTime`: Instant when listener bound successfully.

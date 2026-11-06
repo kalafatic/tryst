@@ -76,7 +76,7 @@ public class TrystServerApplication implements IApplication {
             if (tcp != null) {
                 TrystLog.info(TrystServerApplication.class, "TCP Service      : 127.0.0.1:" + (cfg != null ? cfg.tcpPort() : "unknown"));
             }
-            String canonicalUrl = (cfg != null && http != null) ? cfg.resolveEffectiveExternalUrl(http.getPort()) : "http://localhost:8080";
+            String canonicalUrl = (cfg != null && http != null) ? cfg.resolveEffectiveExternalUrl(http.getPort()) : "http://localhost/tryst";
             TrystLog.info(TrystServerApplication.class, "Canonical URL    : " + canonicalUrl);
 
             if (readiness != null) {

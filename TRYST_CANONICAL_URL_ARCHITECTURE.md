@@ -5,7 +5,7 @@ TRYST establishes `http://localhost/tryst` as its canonical browser-facing appli
 
 ## 2. Distinction of Endpoints
 The platform explicitly differentiates:
-- **Internal Bind Address & Port**: The IP address and local port to which the underlying HTTP server socket binds (e.g. `127.0.0.1:8080` or dynamically chosen fallback port `8081`).
+- **Internal Bind Address & Port**: The IP address and local port to which the underlying HTTP server socket binds (e.g. `127.0.0.1:38080` or dynamically chosen fallback port `38081`).
 - **Actual Bound Server Endpoint**: The active socket endpoint queried directly from `server.getAddress().getPort()`.
 - **Application Context Path**: The URL prefix under which the application resources reside (default: `/tryst`).
 - **Browser-Facing Canonical URL**: The canonical external URL accessed by clients and browsers (`http://localhost/tryst`).
@@ -23,7 +23,7 @@ The platform explicitly differentiates:
 - **Dynamic Port Allocation & Port 80 Diagnostics**:
   - If preferred port 80 is configured and unavailable due to non-root privileges (e.g. `Permission denied`) or port collision:
     - Diagnostic log warning is emitted: *"Canonical port 80 is unavailable or requires privileged access... TRYST will allocate an internal listener port while preserving canonical external endpoint mapping."*
-    - The server dynamically falls back to an available port in `server.portRangeStart` - `server.portRangeEnd` (8080-8180) or an ephemeral port.
+    - The server dynamically falls back to an available port in `server.portRangeStart` - `server.portRangeEnd` (38080-38580) or an ephemeral port.
     - The canonical URL (`http://localhost/tryst`) and external URL remain consistent and authoritative in `RuntimeEndpointRegistry`.
 - **RCP Embedded Browser Integration**:
   - `EmbeddedBrowserView` resolves the authoritative URL from `RuntimeEndpointRegistry`.

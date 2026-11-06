@@ -16,7 +16,7 @@ TRYST configuration is managed centrally via `ConfigurationService` and persiste
   - `security.sandboxEnabled`: Strict filesystem sandbox enforcement (default `true`).
 - **Server Communication**:
   - `server.host`: Bind address (default `127.0.0.1`).
-  - `server.http.port`: Embedded HTTP server port (default `8080`).
+  - `server.http.port`: Embedded HTTP server port (default `38080`).
   - `server.tcp.port`: Native TCP command interface port (default `9090`).
 
 ## 3. Dynamic Configuration API

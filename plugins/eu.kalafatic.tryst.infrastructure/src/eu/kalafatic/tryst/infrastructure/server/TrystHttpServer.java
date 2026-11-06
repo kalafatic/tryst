@@ -254,6 +254,11 @@ public class TrystHttpServer implements TrystHttpService {
     }
 
     private HttpServer bindHttpServer() throws IOException {
+        // Enforce strict prohibition of port 8080 and EVO range (8080-8500)
+        if (preferredPort == 8080 || (preferredPort >= 8080 && preferredPort <= 8500)) {
+            throw new TrystInfrastructureException("TRYST must NEVER bind to port 8080 or EVO port range (8080-8500). Requested port: " + preferredPort);
+        }
+
         // 1. Try preferred port directly
         try {
             return HttpServer.create(new InetSocketAddress(host, preferredPort), 0);
@@ -269,10 +274,11 @@ public class TrystHttpServer implements TrystHttpService {
             TrystLog.warn(TrystHttpServer.class, "Preferred port " + preferredPort + " is unavailable. Attempting dynamic allocation...");
         }
 
-        // 2. Try port range if defined
+        // 2. Try port range if defined (strictly avoiding 8080 and 8080-8500)
         if (portRangeStart > 0 && portRangeEnd >= portRangeStart) {
             for (int p = portRangeStart; p <= portRangeEnd; p++) {
                 if (p == preferredPort) continue;
+                if (p == 8080 || (p >= 8080 && p <= 8500)) continue;
                 try {
                     HttpServer s = HttpServer.create(new InetSocketAddress(host, p), 0);
                     TrystLog.info(TrystHttpServer.class, "Bound to alternative port " + p + " from range [" + portRangeStart + ", " + portRangeEnd + "]");
@@ -283,7 +289,12 @@ public class TrystHttpServer implements TrystHttpService {
 
         // 3. Fallback to OS assigned ephemeral port (port 0)
         HttpServer ephemeralServer = HttpServer.create(new InetSocketAddress(host, 0), 0);
-        TrystLog.info(TrystHttpServer.class, "Bound to OS ephemeral port " + ephemeralServer.getAddress().getPort());
+        int ephemPort = ephemeralServer.getAddress().getPort();
+        if (ephemPort == 8080) {
+            ephemeralServer.stop(0);
+            throw new TrystInfrastructureException("OS assigned forbidden port 8080. Aborting server bind.");
+        }
+        TrystLog.info(TrystHttpServer.class, "Bound to OS ephemeral port " + ephemPort);
         return ephemeralServer;
     }
 

@@ -49,7 +49,18 @@ public record PortAllocationGroup(
     public PortAllocationGroup {
         Objects.requireNonNull(bindingAddress, "bindingAddress must not be null");
         Objects.requireNonNull(allocationTimestamp, "allocationTimestamp must not be null");
-        configurations = Collections.unmodifiableMap(new LinkedHashMap<>(configurations));
+        if (configurations != null) {
+            for (Map.Entry<String, PortConfiguration> entry : configurations.entrySet()) {
+                int assignedPort = entry.getValue().assignedPort();
+                if (assignedPort == 8080) {
+                    throw new IllegalArgumentException("Port 8080 is strictly reserved and forbidden for TRYST service: " + entry.getKey());
+                }
+                if (assignedPort >= 8080 && assignedPort <= 8500) {
+                    throw new IllegalArgumentException("Ports in EVO range (8080-8500) are forbidden for TRYST service: " + entry.getKey() + " (port: " + assignedPort + ")");
+                }
+            }
+        }
+        configurations = Collections.unmodifiableMap(new LinkedHashMap<>(configurations != null ? configurations : Map.of()));
     }
 
     /**

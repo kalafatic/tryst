@@ -45,12 +45,12 @@ Transform TRYST from a desktop Eclipse Workbench application into an independent
 - Web Application Frontend: Static web assets (`index.html`, CSS, vanilla JS) embedded and served by HTTP server.
 
 ### 2.4 Implementation Scope & Exclusions
-- **Included:** Headless boot without GUI display; HTTP server listening on configurable port (default 8080); `/api/auth/login`, `/api/auth/logout`, `/api/auth/me`; `/api/projects`, `/api/tasks`, `/api/events` (SSE); password hashing with PBKDF2; persistent task queueing with startup recovery reconciler; web Workbench and Execution Center views.
+- **Included:** Headless boot without GUI display; HTTP server listening on configurable port (default 38080); `/api/auth/login`, `/api/auth/logout`, `/api/auth/me`; `/api/projects`, `/api/tasks`, `/api/events` (SSE); password hashing with PBKDF2; persistent task queueing with startup recovery reconciler; web Workbench and Execution Center views.
 - **Excluded:** Inline diff editor (Phase 2); full administrative telemetry dashboard (Phase 3).
 
 ### 2.5 Acceptance Criteria
 1. Server starts cleanly via CLI without `$DISPLAY` or `xvfb-run`.
-2. HTTP server responds with HTTP 200 and serves SPA at `http://localhost:8080/`.
+2. HTTP server responds with HTTP 200 and serves SPA at `http://localhost:38080/tryst`.
 3. Default admin user is created on first startup (`admin` / secure generated or configured password).
 4. Web client logs in successfully via `/api/auth/login`, receives token, and fetches user details.
 5. User submits a task via web UI; task is persisted in SQLite, executed in background, and logs stream via SSE `/api/events`.

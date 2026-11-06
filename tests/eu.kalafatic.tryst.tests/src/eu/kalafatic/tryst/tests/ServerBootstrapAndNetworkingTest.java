@@ -69,7 +69,7 @@ public class ServerBootstrapAndNetworkingTest {
         configService.updateConfiguration(cfg);
 
         httpServer = new TrystHttpServer("127.0.0.1", occupiedPort, null);
-        httpServer.setDynamicPortConfiguration(true, 8080, 8180);
+        httpServer.setDynamicPortConfiguration(true, 38080, 38180);
         httpServer.start();
 
         int actualPort = httpServer.getPort();

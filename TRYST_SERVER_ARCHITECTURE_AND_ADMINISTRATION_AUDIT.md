@@ -142,7 +142,7 @@ ExecStart=/opt/tryst/tryst -nosplash -application eu.kalafatic.tryst.server.appl
 Restart=on-failure
 RestartSec=5
 Environment=TRYST_CONFIG_DIR=/etc/tryst
-Environment=TRYST_PORT=8080
+Environment=TRYST_PORT=38080
 
 [Install]
 WantedBy=multi-user.target

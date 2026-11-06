@@ -172,7 +172,7 @@ public class CanonicalUrlAndRoutingIntegrationTest {
         int occupiedPort = socket.getLocalPort();
 
         httpServer = new TrystHttpServer("127.0.0.1", occupiedPort, null);
-        httpServer.setDynamicPortConfiguration(true, 8080, 8180);
+        httpServer.setDynamicPortConfiguration(true, 38080, 38180);
         httpServer.setPhase4Dependencies(
                 authenticationService, userRepository, sessionRepository,
                 null, null, null, null, null, null, null, null, null,
@@ -195,7 +195,7 @@ public class CanonicalUrlAndRoutingIntegrationTest {
     @Test
     void testReverseProxyConfigurationResolution() {
         ApplicationConfiguration cfg = configurationService.getConfiguration()
-                .withDynamicNetworking(true, 8080, 8180, "https://developer.kalafatic.eu/tryst", true);
+                .withDynamicNetworking(true, 38080, 38180, "https://developer.kalafatic.eu/tryst", true);
         configurationService.updateConfiguration(cfg);
 
         String effectiveUrl = cfg.resolveEffectiveExternalUrl(8123);

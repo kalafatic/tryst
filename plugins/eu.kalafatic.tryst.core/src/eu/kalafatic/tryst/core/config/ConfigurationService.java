@@ -116,13 +116,18 @@ public class ConfigurationService {
 
     private ApplicationConfiguration loadConfiguration(Path configDir) {
         ApplicationConfiguration base = ApplicationConfiguration.createDefault();
-        if (!Files.exists(configFilePath)) {
-            return base;
-        }
+        boolean migrationRequired = false;
 
         Properties props = new Properties();
-        try (FileInputStream fis = new FileInputStream(configFilePath.toFile())) {
-            props.load(fis);
+        if (Files.exists(configFilePath)) {
+            try (FileInputStream fis = new FileInputStream(configFilePath.toFile())) {
+                props.load(fis);
+            } catch (Exception e) {
+                TrystLog.warn(ConfigurationService.class, "Failed to load preferences from " + configFilePath + "; using defaults: " + e.getMessage());
+            }
+        }
+
+        try {
             String endpoint = props.getProperty("ollama.endpoint", base.ollamaEndpoint());
             String model = props.getProperty("ollama.model", base.defaultModel());
             int timeout = Integer.parseInt(props.getProperty("execution.timeoutSeconds", String.valueOf(base.requestTimeoutSeconds())));
@@ -132,17 +137,58 @@ public class ConfigurationService {
             int retry = Integer.parseInt(props.getProperty("execution.maxRetryAttempts", String.valueOf(base.maxRetryAttempts())));
             boolean sandbox = Boolean.parseBoolean(props.getProperty("security.sandboxEnabled", String.valueOf(base.secureSandboxEnabled())));
             String host = props.getProperty("server.host", base.serverHost());
-            int httpPort = Integer.parseInt(props.getProperty("server.http.port", String.valueOf(base.httpPort())));
-            int tcpPort = Integer.parseInt(props.getProperty("server.tcp.port", String.valueOf(base.tcpPort())));
+
+            // Handle system property or environment overrides if present
+            String httpPortStr = System.getProperty("tryst.http.port");
+            if (httpPortStr == null || httpPortStr.isBlank()) {
+                httpPortStr = System.getenv("TRYST_HTTP_PORT");
+            }
+            if (httpPortStr == null || httpPortStr.isBlank()) {
+                httpPortStr = System.getenv("TRYST_PORT");
+            }
+            if (httpPortStr == null || httpPortStr.isBlank()) {
+                httpPortStr = props.getProperty("server.http.port", String.valueOf(base.httpPort()));
+            }
+
+            int httpPort = Integer.parseInt(httpPortStr);
+            if (httpPort == 8080 || (httpPort >= 8080 && httpPort <= 8500)) {
+                TrystLog.warn(ConfigurationService.class, "Legacy or invalid HTTP port " + httpPort + " detected. Port 8080 is reserved. Migrating to 38080.");
+                httpPort = ApplicationConfiguration.DEFAULT_HTTP_PORT;
+                migrationRequired = true;
+            }
+
+            String tcpPortStr = System.getProperty("tryst.tcp.port");
+            if (tcpPortStr == null || tcpPortStr.isBlank()) {
+                tcpPortStr = System.getenv("TRYST_TCP_PORT");
+            }
+            if (tcpPortStr == null || tcpPortStr.isBlank()) {
+                tcpPortStr = props.getProperty("server.tcp.port", String.valueOf(base.tcpPort()));
+            }
+
+            int tcpPort = Integer.parseInt(tcpPortStr);
+            if (tcpPort == 8080 || (tcpPort >= 8080 && tcpPort <= 8500)) {
+                TrystLog.warn(ConfigurationService.class, "Legacy or invalid TCP port " + tcpPort + " detected. Migrating to 38280.");
+                tcpPort = ApplicationConfiguration.DEFAULT_TCP_PORT;
+                migrationRequired = true;
+            }
+
             boolean dynamicFallback = Boolean.parseBoolean(props.getProperty("server.dynamicPortFallback", String.valueOf(base.dynamicPortFallbackEnabled())));
             int rangeStart = Integer.parseInt(props.getProperty("server.portRangeStart", String.valueOf(base.portRangeStart())));
             int rangeEnd = Integer.parseInt(props.getProperty("server.portRangeEnd", String.valueOf(base.portRangeEnd())));
+
+            if (rangeStart <= 8080 && 8080 <= rangeEnd && rangeStart != 0) {
+                TrystLog.warn(ConfigurationService.class, "Fallback port range [" + rangeStart + ", " + rangeEnd + "] contains forbidden port 8080. Migrating range to 38080-38580.");
+                rangeStart = ApplicationConfiguration.DEFAULT_PORT_RANGE_START;
+                rangeEnd = ApplicationConfiguration.DEFAULT_PORT_RANGE_END;
+                migrationRequired = true;
+            }
+
             String publicUrl = props.getProperty("server.publicUrl", base.publicServerUrl());
             boolean reverseProxy = Boolean.parseBoolean(props.getProperty("server.reverseProxyEnabled", String.valueOf(base.reverseProxyEnabled())));
             String contextPath = props.getProperty("server.contextPath", base.contextPath());
             String canonicalUrl = props.getProperty("server.canonicalUrl", base.canonicalUrl());
 
-            return new ApplicationConfiguration(
+            ApplicationConfiguration config = new ApplicationConfiguration(
                     base.applicationName(),
                     base.version(),
                     base.userHomeDirectory(),
@@ -167,6 +213,13 @@ public class ConfigurationService {
                     contextPath,
                     canonicalUrl
             );
+
+            if (migrationRequired) {
+                TrystLog.info(ConfigurationService.class, "Persisting migrated configuration without port 8080 to " + configFilePath);
+                saveConfiguration(config);
+            }
+
+            return config;
         } catch (Exception e) {
             TrystLog.warn(ConfigurationService.class, "Failed to load preferences from " + configFilePath + "; using defaults: " + e.getMessage());
             return base;
