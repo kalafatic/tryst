@@ -42,7 +42,7 @@
             category="eu.kalafatic.tryst.ui.category"
             class="eu.kalafatic.tryst.ui.view.ConsoleOutputView"
             id="eu.kalafatic.tryst.ui.view.consoleOutput"
-            name="Console / Output / Status"
+            name="TRYST Console"
             restorable="true">
       </view>
       <view

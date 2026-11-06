@@ -455,6 +455,12 @@ public class WorkspaceService {
         Objects.requireNonNull(message, "message must not be null");
         consoleMessages.add(message);
         notifyMessageLogged(message);
+
+        // Forward to central TrystLog facility
+        try {
+            eu.kalafatic.tryst.core.log.LogLevel lvl = eu.kalafatic.tryst.core.log.LogLevel.fromString(message.level());
+            eu.kalafatic.tryst.core.log.TrystLog.log(lvl, WorkspaceService.class, "[" + message.source() + "] " + message.message(), null);
+        } catch (Throwable ignored) {}
     }
 
     public List<ConsoleMessage> getConsoleMessages() {

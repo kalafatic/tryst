@@ -49,6 +49,19 @@ public class LogDiagnosticService {
         while (logBuffer.size() > MAX_BUFFER_SIZE) {
             logBuffer.pollFirst();
         }
+
+        // Bridge to central TrystLog facility
+        try {
+            eu.kalafatic.tryst.core.log.LogLevel lvl = eu.kalafatic.tryst.core.log.LogLevel.fromString(level);
+            eu.kalafatic.tryst.core.log.TrystLog.log(
+                    lvl,
+                    LogDiagnosticService.class,
+                    "[" + (component != null ? component : "Diagnostic") + "] " + cleanMessage +
+                            (cleanDetails != null && !cleanDetails.isBlank() ? " | Details: " + cleanDetails : ""),
+                    null
+            );
+        } catch (Throwable ignored) {
+        }
     }
 
     public List<LogEntry> query(String level, String component, String search, int limit) {

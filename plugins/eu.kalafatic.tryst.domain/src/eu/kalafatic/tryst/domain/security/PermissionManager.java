@@ -1,6 +1,7 @@
 package eu.kalafatic.tryst.domain.security;
 
 import eu.kalafatic.tryst.core.error.TrystDomainException;
+import eu.kalafatic.tryst.core.log.TrystLog;
 import eu.kalafatic.tryst.domain.model.Permission;
 import eu.kalafatic.tryst.domain.model.Project;
 import eu.kalafatic.tryst.domain.model.Task;
@@ -253,7 +254,8 @@ public class PermissionManager {
 
     public void recordAudit(String actorId, String action, String targetType, String targetId,
                             String projectId, String taskId, String outcome, String detailsJson) {
-        auditLog.add(new AuditRecord(java.time.Instant.now().toString(), action, targetId != null ? targetId : targetType, "GRANTED".equalsIgnoreCase(outcome) || "ALLOWED".equalsIgnoreCase(outcome), detailsJson));
+        boolean granted = "GRANTED".equalsIgnoreCase(outcome) || "ALLOWED".equalsIgnoreCase(outcome);
+        auditLog.add(new AuditRecord(java.time.Instant.now().toString(), action, targetId != null ? targetId : targetType, granted, detailsJson));
         if (auditEventRepository != null) {
             try {
                 auditEventRepository.save(eu.kalafatic.tryst.domain.model.AuditEvent.create(
@@ -262,6 +264,11 @@ public class PermissionManager {
             } catch (Exception e) {
                 // Keep resilient
             }
+        }
+
+        if (!granted) {
+            TrystLog.warn(PermissionManager.class,
+                    "Authorization DENIED: Actor '" + actorId + "' action '" + action + "' on " + targetType + " " + targetId + ": " + detailsJson);
         }
     }
 
