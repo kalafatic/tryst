@@ -23,8 +23,8 @@ class ConfigurationTest {
         assertTrue(config.configurationDirectory().endsWith(".tryst"));
         assertTrue(config.defaultWorkspaceDirectory().endsWith("workspace"));
         assertEquals("127.0.0.1", config.serverHost());
-        assertEquals(8080, config.httpPort());
-        assertEquals(9090, config.tcpPort());
+        assertEquals(ApplicationConfiguration.DEFAULT_HTTP_PORT, config.httpPort());
+        assertEquals(ApplicationConfiguration.DEFAULT_TCP_PORT, config.tcpPort());
     }
 
     @Test

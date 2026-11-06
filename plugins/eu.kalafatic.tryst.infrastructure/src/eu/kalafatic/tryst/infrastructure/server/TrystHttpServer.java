@@ -43,8 +43,9 @@ public class TrystHttpServer implements TrystHttpService {
     private final int preferredPort;
     private int actualPort;
     private boolean dynamicPortFallback = true;
-    private int portRangeStart = 8080;
-    private int portRangeEnd = 8180;
+    private int portRangeStart = 38080;
+    private int portRangeEnd = 38580;
+    private eu.kalafatic.tryst.core.port.PortRegistry portRegistry;
     private final WorkspaceService workspaceService;
     private final ProjectRepository projectRepository;
     private final TaskRepository taskRepository;
@@ -194,6 +195,10 @@ public class TrystHttpServer implements TrystHttpService {
         this.taskIntakeService = taskIntakeService;
     }
 
+    public void setPortRegistry(eu.kalafatic.tryst.core.port.PortRegistry portRegistry) {
+        this.portRegistry = portRegistry;
+    }
+
     @Override
     public synchronized void start() {
         if (running.get()) {
@@ -215,7 +220,10 @@ public class TrystHttpServer implements TrystHttpService {
             this.server.start();
             this.running.set(true);
 
-            // Publish runtime endpoint
+            // Publish runtime endpoint and bound port in PortRegistry
+            if (portRegistry != null) {
+                portRegistry.registerBoundPort(eu.kalafatic.tryst.core.port.ServicePortIdentifier.HTTP_SERVICE, actualPort);
+            }
             if (configurationService != null) {
                 ApplicationConfiguration cfg = configurationService.getConfiguration();
                 String extUrl = cfg.resolveEffectiveExternalUrl(actualPort);
@@ -225,6 +233,10 @@ public class TrystHttpServer implements TrystHttpService {
                         cfg.canonicalUrl(), cfg.contextPath(), "RUNNING", Instant.now()
                 );
                 configurationService.getEndpointRegistry().updateEndpoint(ep);
+                if (configurationService.getPortRegistry() != null) {
+                    configurationService.getPortRegistry().registerBoundPort(
+                            eu.kalafatic.tryst.core.port.ServicePortIdentifier.HTTP_SERVICE, actualPort);
+                }
             }
 
             TrystLog.info(TrystHttpServer.class, "HTTP Server started on http://" + host + ":" + actualPort + "/ (Canonical: " + getCanonicalUrl() + ")");

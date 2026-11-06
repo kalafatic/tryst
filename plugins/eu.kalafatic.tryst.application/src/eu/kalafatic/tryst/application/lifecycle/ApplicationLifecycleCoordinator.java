@@ -419,12 +419,40 @@ public class ApplicationLifecycleCoordinator {
             this.buildAndTestService.setProcessExecutionManager(this.processExecutionManager);
         }
 
-        // 7. Initialize and start TCP and HTTP communication services
+        // 7. Resolve port allocations coherently using PortAllocationManager
+        eu.kalafatic.tryst.core.port.PortRegistry portRegistry = this.configurationService.getPortRegistry();
+        eu.kalafatic.tryst.core.port.PortAllocationManager portMgr = this.configurationService.getPortAllocationManager();
+        eu.kalafatic.tryst.core.port.PortAllocationGroup resolvedGroup = null;
+
+        if (portMgr != null) {
+            try {
+                boolean isHeadless = Boolean.getBoolean("tryst.headless")
+                        || "true".equalsIgnoreCase(System.getProperty("tryst.headless"));
+                eu.kalafatic.tryst.core.port.PortConflictPrompt prompt = isHeadless
+                        ? new eu.kalafatic.tryst.application.port.HeadlessPortConflictPrompt()
+                        : createUiPortConflictPrompt();
+                resolvedGroup = portMgr.resolveAllocations(configuration.serverHost(), prompt);
+                if (portRegistry != null && resolvedGroup != null) {
+                    portRegistry.setAllocationGroup(resolvedGroup);
+                }
+            } catch (Exception pe) {
+                TrystLog.error(ApplicationLifecycleCoordinator.class, "Port resolution failed: " + pe.getMessage(), pe);
+            }
+        }
+
+        int effectiveHttpPort = (resolvedGroup != null)
+                ? resolvedGroup.getPort(eu.kalafatic.tryst.core.port.ServicePortIdentifier.HTTP_SERVICE)
+                : configuration.httpPort();
+        int effectiveTcpPort = (resolvedGroup != null)
+                ? resolvedGroup.getPort(eu.kalafatic.tryst.core.port.ServicePortIdentifier.TCP_SERVICE)
+                : configuration.tcpPort();
+
+        // Initialize and start TCP and HTTP communication services
         try {
-            this.tcpService = new TrystTcpServer(configuration.serverHost(), configuration.tcpPort(), workspaceService);
+            this.tcpService = new TrystTcpServer(configuration.serverHost(), effectiveTcpPort, workspaceService, portRegistry);
             this.tcpService.start();
             if (serverReadinessService != null) {
-                serverReadinessService.markHealthy("TcpServer", java.util.Map.of("port", Integer.toString(configuration.tcpPort())));
+                serverReadinessService.markHealthy("TcpServer", java.util.Map.of("port", Integer.toString(this.tcpService.getPort())));
             }
         } catch (Exception e) {
             TrystLog.error(ApplicationLifecycleCoordinator.class, "Failed to start TCP service: " + e.getMessage(), e);
@@ -435,7 +463,7 @@ public class ApplicationLifecycleCoordinator {
 
         try {
             TrystHttpServer server = new TrystHttpServer(
-                    configuration.serverHost(), configuration.httpPort(),
+                    configuration.serverHost(), effectiveHttpPort,
                     workspaceService, projectRepository, taskRepository,
                     codeReviewRepository, gitService, buildAndTestService, permissionManager
             );
@@ -458,6 +486,7 @@ public class ApplicationLifecycleCoordinator {
             server.setGitCommitRepository(this.gitCommitRepository);
             server.setManagedServiceController(serviceController);
             server.setTaskIntakeService(this.taskIntakeService);
+            server.setPortRegistry(portRegistry);
             this.httpService = server;
             this.httpService.start();
             if (serverReadinessService != null) {
@@ -478,6 +507,9 @@ public class ApplicationLifecycleCoordinator {
             registerService(ApplicationConfiguration.class, this.configuration);
             registerService(ConfigurationService.class, this.configurationService);
             registerService(eu.kalafatic.tryst.core.config.RuntimeEndpointRegistry.class, this.configurationService.getEndpointRegistry());
+            if (portRegistry != null) {
+                registerService(eu.kalafatic.tryst.core.port.PortRegistry.class, portRegistry);
+            }
             registerService(EventBus.class, this.eventBus);
             if (this.serverReadinessService != null) {
                 registerService(eu.kalafatic.tryst.core.lifecycle.ServerReadinessService.class, this.serverReadinessService);
@@ -546,6 +578,15 @@ public class ApplicationLifecycleCoordinator {
         } else {
             TrystLog.warn(ApplicationLifecycleCoordinator.class,
                     "BundleContext unavailable; services initialized in standalone/test mode.");
+        }
+    }
+
+    private eu.kalafatic.tryst.core.port.PortConflictPrompt createUiPortConflictPrompt() {
+        try {
+            Class<?> clazz = Class.forName("eu.kalafatic.tryst.ui.port.SwtPortConflictPrompt");
+            return (eu.kalafatic.tryst.core.port.PortConflictPrompt) clazz.getDeclaredConstructor().newInstance();
+        } catch (Throwable t) {
+            return new eu.kalafatic.tryst.application.port.HeadlessPortConflictPrompt();
         }
     }
 
