@@ -185,4 +185,25 @@ class CommunicationServiceTest {
         coordinator.transitionTo(ApplicationLifecycleStage.APPLICATION_TERMINATED);
         assertEquals(ApplicationLifecycleStage.APPLICATION_TERMINATED, coordinator.getCurrentStage());
     }
+
+    @Test
+    void testCanonicalCoreHttpServiceRegistrationAndInterface() {
+        ApplicationLifecycleCoordinator coordinator = new ApplicationLifecycleCoordinator();
+        coordinator.transitionTo(ApplicationLifecycleStage.PLATFORM_INITIALIZATION);
+        coordinator.transitionTo(ApplicationLifecycleStage.CONFIGURATION_INITIALIZATION);
+        coordinator.transitionTo(ApplicationLifecycleStage.CORE_SERVICE_INITIALIZATION);
+
+        eu.kalafatic.tryst.core.server.TrystHttpService http = coordinator.getHttpService();
+        assertNotNull(http, "HTTP service must be initialized and available as core TrystHttpService");
+        assertTrue(http.isRunning(), "HTTP service must be in running state");
+        assertTrue(http.getPort() > 0, "HTTP service must be bound to a valid port");
+        assertNotNull(http.getHost(), "HTTP service host must not be null");
+
+        // Clean up
+        coordinator.transitionTo(ApplicationLifecycleStage.APPLICATION_READY);
+        coordinator.transitionTo(ApplicationLifecycleStage.WORKBENCH_RUNNING);
+        coordinator.transitionTo(ApplicationLifecycleStage.APPLICATION_SHUTDOWN);
+        coordinator.transitionTo(ApplicationLifecycleStage.SERVICE_DISPOSAL);
+        coordinator.transitionTo(ApplicationLifecycleStage.APPLICATION_TERMINATED);
+    }
 }

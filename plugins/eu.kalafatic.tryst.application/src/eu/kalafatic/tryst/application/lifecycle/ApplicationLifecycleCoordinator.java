@@ -45,9 +45,9 @@ import eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteSessionRep
 import eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteTaskRepository;
 import eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteWorkspaceRepository;
 import eu.kalafatic.tryst.infrastructure.server.TrystHttpServer;
-import eu.kalafatic.tryst.infrastructure.server.TrystHttpService;
+import eu.kalafatic.tryst.core.server.TrystHttpService;
 import eu.kalafatic.tryst.infrastructure.server.TrystTcpServer;
-import eu.kalafatic.tryst.infrastructure.server.TrystTcpService;
+import eu.kalafatic.tryst.core.server.TrystTcpService;
 import eu.kalafatic.tryst.infrastructure.vcs.GitService;
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.ServiceRegistration;

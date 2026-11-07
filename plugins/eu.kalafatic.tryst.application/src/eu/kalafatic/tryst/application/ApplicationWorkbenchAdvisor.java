@@ -53,29 +53,8 @@ public class ApplicationWorkbenchAdvisor extends WorkbenchAdvisor {
     @Override
     public void postStartup() {
         super.postStartup();
-        setupPerspectiveListener();
         if (coordinator != null) {
             coordinator.transitionTo(ApplicationLifecycleStage.WORKBENCH_RUNNING);
-        }
-    }
-
-    private void setupPerspectiveListener() {
-        try {
-            Class<?> listenerClass = Class.forName("eu.kalafatic.tryst.ui.perspective.TrystPerspectiveLifecycleListener");
-            org.eclipse.ui.IPerspectiveListener listener = (org.eclipse.ui.IPerspectiveListener) listenerClass.getDeclaredConstructor().newInstance();
-            org.eclipse.ui.IWorkbenchWindow activeWindow = org.eclipse.ui.PlatformUI.getWorkbench().getActiveWorkbenchWindow();
-            if (activeWindow != null) {
-                activeWindow.addPerspectiveListener(listener);
-                org.eclipse.ui.IWorkbenchPage activePage = activeWindow.getActivePage();
-                if (activePage != null && activePage.getPerspective() != null
-                        && PERSPECTIVE_ID.equals(activePage.getPerspective().getId())) {
-                    Class<?> mgrClass = Class.forName("eu.kalafatic.tryst.ui.editor.TrystEditorManager");
-                    var method = mgrClass.getMethod("ensureEditorOpen", org.eclipse.ui.IWorkbenchPage.class);
-                    method.invoke(null, activePage);
-                }
-            }
-        } catch (Exception e) {
-            TrystLog.warn(ApplicationWorkbenchAdvisor.class, "Could not attach perspective lifecycle listener: " + e.getMessage());
         }
     }
 

@@ -27,7 +27,7 @@ public class AiIntegrationPage extends AbstractTrystEditorPage {
     private Label lblRequests;
 
     public AiIntegrationPage(TrystWorkbenchEditor editor) {
-        super(ID, "AI / Darwin", editor);
+        super(ID, "AI Integration", editor);
     }
 
     @Override

@@ -13,7 +13,7 @@ public final class StandardEditorPagesBootstrap {
         TrystEditorPageRegistry reg = TrystEditorPageRegistry.getInstance();
 
         reg.registerPage(new TrystEditorPageDescriptor(
-                OverviewDashboardPage.ID, "Dashboard", 10, OverviewDashboardPage::new));
+                OverviewDashboardPage.ID, "Overview", 10, OverviewDashboardPage::new));
 
         reg.registerPage(new TrystEditorPageDescriptor(
                 ProjectExplorerPage.ID, "Project Explorer", 20, ProjectExplorerPage::new));
@@ -37,7 +37,7 @@ public final class StandardEditorPagesBootstrap {
                 TestQualityPage.ID, "Tests & Quality", 80, TestQualityPage::new));
 
         reg.registerPage(new TrystEditorPageDescriptor(
-                AiIntegrationPage.ID, "AI / Darwin", 90, AiIntegrationPage::new));
+                AiIntegrationPage.ID, "AI Integration", 90, AiIntegrationPage::new));
 
         reg.registerPage(new TrystEditorPageDescriptor(
                 McpPage.ID, "MCP", 100, McpPage::new));
@@ -46,7 +46,7 @@ public final class StandardEditorPagesBootstrap {
                 TeipIntegrationPage.ID, "TEIP Integration", 110, TeipIntegrationPage::new));
 
         reg.registerPage(new TrystEditorPageDescriptor(
-                ServerMonitoringPage.ID, "Monitoring", 120, ServerMonitoringPage::new));
+                ServerMonitoringPage.ID, "Server Monitoring", 120, ServerMonitoringPage::new));
 
         reg.registerPage(new TrystEditorPageDescriptor(
                 ConfigurationPage.ID, "Configuration", 130, ConfigurationPage::new));
