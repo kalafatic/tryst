@@ -946,6 +946,135 @@ public class ApplicationLifecycleCoordinator {
         return httpService;
     }
 
+    private ServiceRegistration<TrystHttpService> httpServiceRegistration;
+
+    /**
+     * Starts or ensures running state of the embedded HTTP server.
+     * Idempotent, thread-safe, and independent of UI lifecycle.
+     */
+    public synchronized TrystHttpService startHttpService() throws Exception {
+        if (this.currentStage.ordinal() < ApplicationLifecycleStage.CORE_SERVICE_INITIALIZATION.ordinal()) {
+            if (this.currentStage.ordinal() < ApplicationLifecycleStage.PLATFORM_INITIALIZATION.ordinal()) {
+                transitionTo(ApplicationLifecycleStage.PLATFORM_INITIALIZATION);
+            }
+            if (this.currentStage.ordinal() < ApplicationLifecycleStage.CONFIGURATION_INITIALIZATION.ordinal()) {
+                transitionTo(ApplicationLifecycleStage.CONFIGURATION_INITIALIZATION);
+            }
+            transitionTo(ApplicationLifecycleStage.CORE_SERVICE_INITIALIZATION);
+        }
+
+        if (this.httpService != null && this.httpService.isRunning()) {
+            ensureHttpServiceRegistered();
+            return this.httpService;
+        }
+
+        if (this.httpService == null) {
+            initializeHttpServerInstance();
+        }
+
+        try {
+            this.httpService.start();
+            if (serverReadinessService != null) {
+                serverReadinessService.markHealthy("HttpServer", java.util.Map.of(
+                        "host", this.httpService.getHost(),
+                        "port", Integer.toString(this.httpService.getPort())
+                ));
+            }
+            ensureHttpServiceRegistered();
+            TrystLog.info(ApplicationLifecycleCoordinator.class, "HTTP Service started successfully on port " + this.httpService.getPort());
+            return this.httpService;
+        } catch (Exception e) {
+            TrystLog.error(ApplicationLifecycleCoordinator.class, "Failed to start HTTP service: " + e.getMessage(), e);
+            if (serverReadinessService != null) {
+                serverReadinessService.markFailed("HttpServer", e.getMessage(), java.util.Map.of(
+                        "exception", e.getClass().getName()
+                ));
+            }
+            throw e;
+        }
+    }
+
+    /**
+     * Stops the embedded HTTP server safely.
+     */
+    public synchronized void stopHttpService() {
+        if (this.httpService != null && this.httpService.isRunning()) {
+            try {
+                this.httpService.stop();
+                if (serverReadinessService != null) {
+                    serverReadinessService.updateHealth("HttpServer",
+                            eu.kalafatic.tryst.core.lifecycle.ServerReadinessService.ComponentState.STOPPED,
+                            null, java.util.Map.of());
+                }
+                TrystLog.info(ApplicationLifecycleCoordinator.class, "HTTP Service stopped successfully.");
+            } catch (Exception e) {
+                TrystLog.error(ApplicationLifecycleCoordinator.class, "Error stopping HTTP service: " + e.getMessage(), e);
+            }
+        }
+    }
+
+    /**
+     * Restarts the embedded HTTP server safely.
+     */
+    public synchronized TrystHttpService restartHttpService() throws Exception {
+        stopHttpService();
+        return startHttpService();
+    }
+
+    private void ensureHttpServiceRegistered() {
+        if (bundleContext != null && this.httpService != null) {
+            boolean alreadyReg = serviceRegistrations.stream()
+                    .anyMatch(r -> {
+                        try {
+                            Object s = bundleContext.getService(r.getReference());
+                            return s == this.httpService;
+                        } catch (Exception ex) {
+                            return false;
+                        }
+                    });
+            if (!alreadyReg && httpServiceRegistration == null) {
+                httpServiceRegistration = bundleContext.registerService(TrystHttpService.class, this.httpService, null);
+                serviceRegistrations.add(httpServiceRegistration);
+            }
+        }
+    }
+
+    private void initializeHttpServerInstance() {
+        if (configuration == null) {
+            onConfigurationInitialization();
+        }
+        int effectiveHttpPort = (configurationService.getPortRegistry() != null && configurationService.getPortRegistry().getAllocationGroup() != null)
+                ? configurationService.getPortRegistry().getAllocationGroup().getPort(eu.kalafatic.tryst.core.port.ServicePortIdentifier.HTTP_SERVICE)
+                : configuration.httpPort();
+
+        TrystHttpServer server = new TrystHttpServer(
+                configuration.serverHost(), effectiveHttpPort,
+                workspaceService, projectRepository, taskRepository,
+                codeReviewRepository, gitService, buildAndTestService, permissionManager
+        );
+        server.setPhase4Dependencies(
+                authenticationService, userRepository, userSessionRepository,
+                auditEventRepository, notificationRepository, telemetryRepository,
+                serverMonitoringService, telemetryService, aiMonitoringService,
+                processExecutionManager, notificationService, logDiagnosticService,
+                configurationService, databaseManager, backupService, agentRepository
+        );
+        server.setDataRetentionService(this.dataRetentionService);
+        server.setDynamicPortConfiguration(
+                configuration.dynamicPortFallbackEnabled(),
+                configuration.portRangeStart(),
+                configuration.portRangeEnd()
+        );
+        server.setAiModelRegistryService(this.aiModelRegistryService);
+        server.setTaskOrchestrator(this.taskOrchestrator);
+        server.setGitHubService(this.gitHubService, this.gitHubCredentialRepository, this.gitHubCredentialEncryptionService);
+        server.setGitCommitRepository(this.gitCommitRepository);
+        server.setTaskIntakeService(this.taskIntakeService);
+        server.setPortRegistry(configurationService.getPortRegistry());
+
+        this.httpService = server;
+    }
+
     public List<ServiceRegistration<?>> getServiceRegistrations() {
         return Collections.unmodifiableList(serviceRegistrations);
     }

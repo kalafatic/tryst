@@ -274,4 +274,40 @@ class CommunicationServiceTest {
         tcp.stop();
         assertFalse(tcp.isRunning());
     }
+
+    @Test
+    void testCoordinatorLifecycleOperationsStartStopRestart() throws Exception {
+        ApplicationLifecycleCoordinator coordinator = new ApplicationLifecycleCoordinator();
+
+        // 1. Start from cold
+        eu.kalafatic.tryst.core.server.TrystHttpService http1 = coordinator.startHttpService();
+        assertNotNull(http1);
+        assertTrue(http1.isRunning());
+        int port = http1.getPort();
+        assertTrue(port > 0);
+
+        // 2. Start when already running (idempotent)
+        eu.kalafatic.tryst.core.server.TrystHttpService http2 = coordinator.startHttpService();
+        assertSame(http1, http2);
+        assertTrue(http2.isRunning());
+        assertEquals(port, http2.getPort());
+
+        // 3. Verify /api/status responds 200
+        HttpURLConnection conn = (HttpURLConnection) URI.create("http://127.0.0.1:" + port + "/api/status").toURL().openConnection();
+        conn.setRequestMethod("GET");
+        assertEquals(200, conn.getResponseCode());
+
+        // 4. Stop
+        coordinator.stopHttpService();
+        assertFalse(http1.isRunning());
+
+        // 5. Restart
+        eu.kalafatic.tryst.core.server.TrystHttpService http3 = coordinator.restartHttpService();
+        assertNotNull(http3);
+        assertTrue(http3.isRunning());
+
+        // Clean up
+        coordinator.stopHttpService();
+        assertFalse(http3.isRunning());
+    }
 }

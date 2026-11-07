@@ -67,21 +67,21 @@ public class ServerMonitoringPage extends AbstractTrystEditorPage {
         Button btnStartServer = new Button(serverBtnBar, SWT.PUSH);
         btnStartServer.setText("▶ Start Server");
         btnStartServer.addListener(SWT.Selection, e -> {
-            var http = TrystUiServices.getHttpService();
-            if (http == null) {
+            try {
+                var s = TrystUiServices.startHttpServer();
+                org.eclipse.jface.dialogs.MessageDialog.openInformation(
+                        parent.getShell(),
+                        "Server Started",
+                        "Embedded HTTP server is active and listening on " + s.getHost() + ":" + s.getPort() + "."
+                );
+            } catch (Throwable ex) {
+                Throwable cause = (ex instanceof java.lang.reflect.InvocationTargetException ite && ite.getCause() != null)
+                        ? ite.getCause() : ex;
                 org.eclipse.jface.dialogs.MessageDialog.openError(
                         parent.getShell(),
-                        "Server Lifecycle Error",
-                        "TrystHttpService is not registered in the OSGi Service Registry. Please verify application core initialization."
+                        "Server Startup Failure",
+                        "Failed to start embedded HTTP server:\n\n" + cause.getMessage()
                 );
-            } else if (!http.isRunning()) {
-                try {
-                    http.start();
-                } catch (Exception ex) {
-                    org.eclipse.jface.dialogs.MessageDialog.openError(parent.getShell(), "Server Error", "Failed to start HTTP server: " + ex.getMessage());
-                }
-            } else {
-                org.eclipse.jface.dialogs.MessageDialog.openInformation(parent.getShell(), "Server Running", "HTTP server is already active and listening on port " + http.getPort() + ".");
             }
             refresh();
         });
@@ -89,20 +89,17 @@ public class ServerMonitoringPage extends AbstractTrystEditorPage {
         Button btnStopServer = new Button(serverBtnBar, SWT.PUSH);
         btnStopServer.setText("⏹ Stop Server");
         btnStopServer.addListener(SWT.Selection, e -> {
-            var http = TrystUiServices.getHttpService();
-            if (http == null) {
-                org.eclipse.jface.dialogs.MessageDialog.openWarning(parent.getShell(), "Server Lifecycle", "HTTP service reference is not available.");
-            } else if (http.isRunning()) {
-                boolean confirm = org.eclipse.jface.dialogs.MessageDialog.openConfirm(parent.getShell(), "Stop Server", "Are you sure you want to stop the embedded HTTP server?");
-                if (confirm) {
-                    try {
-                        http.stop();
-                    } catch (Exception ex) {
-                        org.eclipse.jface.dialogs.MessageDialog.openError(parent.getShell(), "Server Error", "Failed to stop HTTP server: " + ex.getMessage());
-                    }
+            boolean confirm = org.eclipse.jface.dialogs.MessageDialog.openConfirm(
+                    parent.getShell(), "Stop Server", "Are you sure you want to stop the embedded HTTP server?");
+            if (confirm) {
+                try {
+                    TrystUiServices.stopHttpServer();
+                } catch (Throwable ex) {
+                    Throwable cause = (ex instanceof java.lang.reflect.InvocationTargetException ite && ite.getCause() != null)
+                            ? ite.getCause() : ex;
+                    org.eclipse.jface.dialogs.MessageDialog.openError(
+                            parent.getShell(), "Server Error", "Failed to stop HTTP server: " + cause.getMessage());
                 }
-            } else {
-                org.eclipse.jface.dialogs.MessageDialog.openInformation(parent.getShell(), "Server Stopped", "HTTP server is already stopped.");
             }
             refresh();
         });
@@ -110,22 +107,21 @@ public class ServerMonitoringPage extends AbstractTrystEditorPage {
         Button btnRestartServer = new Button(serverBtnBar, SWT.PUSH);
         btnRestartServer.setText("🔄 Restart Server");
         btnRestartServer.addListener(SWT.Selection, e -> {
-            var http = TrystUiServices.getHttpService();
-            if (http == null) {
+            try {
+                var s = TrystUiServices.restartHttpServer();
+                org.eclipse.jface.dialogs.MessageDialog.openInformation(
+                        parent.getShell(),
+                        "Server Restarted",
+                        "Embedded HTTP server restarted and listening on " + s.getHost() + ":" + s.getPort() + "."
+                );
+            } catch (Throwable ex) {
+                Throwable cause = (ex instanceof java.lang.reflect.InvocationTargetException ite && ite.getCause() != null)
+                        ? ite.getCause() : ex;
                 org.eclipse.jface.dialogs.MessageDialog.openError(
                         parent.getShell(),
-                        "Server Lifecycle Error",
-                        "TrystHttpService is not registered in the OSGi Service Registry."
+                        "Server Restart Failure",
+                        "Failed to restart embedded HTTP server:\n\n" + cause.getMessage()
                 );
-            } else {
-                try {
-                    if (http.isRunning()) {
-                        http.stop();
-                    }
-                    http.start();
-                } catch (Exception ex) {
-                    org.eclipse.jface.dialogs.MessageDialog.openError(parent.getShell(), "Server Error", "Failed to restart HTTP server: " + ex.getMessage());
-                }
             }
             refresh();
         });

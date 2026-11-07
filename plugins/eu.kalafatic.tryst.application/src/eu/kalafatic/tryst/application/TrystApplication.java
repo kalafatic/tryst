@@ -51,13 +51,20 @@ public class TrystApplication implements IApplication {
             return headlessDelegate.runHeadless(context, coordinator);
         }
 
-        TrystLog.info(TrystApplication.class, "Startup Mode: STANDARD ECLIPSE RCP (initializing Core Services and Communication before SWT Display)");
+        String launchId = java.util.UUID.randomUUID().toString().substring(0, 8);
+        TrystLog.info(TrystApplication.class, "=======================================================");
+        TrystLog.info(TrystApplication.class, " TRYST APPLICATION ENTRY POINT [AppId: eu.kalafatic.tryst.application.application]");
+        TrystLog.info(TrystApplication.class, " Launch ID    : " + launchId);
+        TrystLog.info(TrystApplication.class, " Startup Mode : STANDARD ECLIPSE RCP (Core Services & Servers start BEFORE Display)");
+        TrystLog.info(TrystApplication.class, "=======================================================");
+
         try {
             if (coordinator != null) {
                 coordinator.transitionTo(ApplicationLifecycleStage.PLATFORM_INITIALIZATION);
                 coordinator.transitionTo(ApplicationLifecycleStage.CONFIGURATION_INITIALIZATION);
                 coordinator.transitionTo(ApplicationLifecycleStage.CORE_SERVICE_INITIALIZATION);
                 coordinator.transitionTo(ApplicationLifecycleStage.APPLICATION_READY);
+                TrystLog.info(TrystApplication.class, "TRYST Core Initialization complete. Ready for SWT Display creation.");
             }
 
             Display display = PlatformUI.createDisplay();
