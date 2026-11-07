@@ -1,0 +1,107 @@
+!SESSION 2026-11-07 18:37:24.639 -----------------------------------------------
+eclipse.buildId=unknown
+java.version=21.0.10
+java.vendor=Ubuntu
+BootLoader constants: OS=linux, ARCH=x86_64, WS=gtk, NL=en
+Command-line arguments:  -os linux -ws gtk -arch x86_64 -consoleLog -consoleLog -data /tmp/test-diag
+
+!ENTRY eu.kalafatic.tryst.ui 1 0 2026-11-07 18:37:26.640
+!MESSAGE [TrystUiPlugin] TrystUiPlugin activated with OSGi ServiceTrackers.
+
+!ENTRY eu.kalafatic.tryst.application 1 0 2026-11-07 18:37:26.699
+!MESSAGE [TrystApplication] Startup Mode: STANDARD ECLIPSE RCP (initializing SWT Display and Workbench)
+
+!ENTRY eu.kalafatic.tryst.application 1 0 2026-11-07 18:37:26.704
+!MESSAGE [ApplicationLifecycleCoordinator] Lifecycle transition: APPLICATION_START -> PLATFORM_INITIALIZATION
+
+!ENTRY eu.kalafatic.tryst.application 1 0 2026-11-07 18:37:26.706
+!MESSAGE [ApplicationLifecycleCoordinator] Platform initialization complete. EventBus and ServerReadinessService ready.
+
+!ENTRY eu.kalafatic.tryst.application 1 0 2026-11-07 18:37:26.708
+!MESSAGE [ApplicationLifecycleCoordinator] Lifecycle transition: PLATFORM_INITIALIZATION -> CONFIGURATION_INITIALIZATION
+
+!ENTRY eu.kalafatic.tryst.core 1 0 2026-11-07 18:37:26.738
+!MESSAGE [PortPersistence] Persisted port allocations to /home/jules/.tryst/port-allocations.properties (group offset: 0)
+
+!ENTRY eu.kalafatic.tryst.application 1 0 2026-11-07 18:37:26.739
+!MESSAGE [ApplicationLifecycleCoordinator] Configuration initialized for application: TRYST – AI Development Environment (workspace: /home/jules/.tryst/workspace)
+SWT SessionManagerDBus: Failed to connect to org.gnome.SessionManager: Failed to execute child process “dbus-launch” (No such file or directory)
+SWT SessionManagerDBus: Failed to connect to org.xfce.SessionManager: Failed to execute child process “dbus-launch” (No such file or directory)
+
+!ENTRY eu.kalafatic.tryst.application 1 0 2026-11-07 18:37:27.603
+!MESSAGE [ApplicationLifecycleCoordinator] Lifecycle transition: CONFIGURATION_INITIALIZATION -> CORE_SERVICE_INITIALIZATION
+SLF4J(W): No SLF4J providers were found.
+SLF4J(W): Defaulting to no-operation (NOP) logger implementation
+SLF4J(W): See https://www.slf4j.org/codes.html#noProviders for further details.
+
+!ENTRY eu.kalafatic.tryst.infrastructure 1 0 2026-11-07 18:37:27.768
+!MESSAGE [SqliteDatabaseManager] SQLite database integrity verified: ok
+
+!ENTRY eu.kalafatic.tryst.infrastructure 1 0 2026-11-07 18:37:27.770
+!MESSAGE [SqliteDatabaseManager] SQLite database connection established and verified at /home/jules/.tryst/tryst.db
+
+!ENTRY eu.kalafatic.tryst.infrastructure 1 0 2026-11-07 18:37:27.793
+!MESSAGE [SchemaMigrationService] Database schema migration check complete. Applied migrations: 0 (Current schema version: 13)
+
+!ENTRY eu.kalafatic.tryst.infrastructure 1 0 2026-11-07 18:37:27.795
+!MESSAGE [SqliteDatabaseManager] SQLite database integrity verified: ok
+
+!ENTRY eu.kalafatic.tryst.domain 1 0 2026-11-07 18:37:27.812
+!MESSAGE [WorkspaceRecoveryService] Initiating workspace crash-restart recovery check...
+
+!ENTRY eu.kalafatic.tryst.domain 1 0 2026-11-07 18:37:27.821
+!MESSAGE [WorkspaceRecoveryService] Workspace recovery completed. Recovered 0 workspaces.
+
+!ENTRY eu.kalafatic.tryst.domain 1 0 2026-11-07 18:37:27.826
+!MESSAGE [WorkspaceService] [WorkspaceService] Default workspace active at /home/jules/.tryst/workspace
+
+!ENTRY eu.kalafatic.tryst.domain 2 0 2026-11-07 18:37:27.829
+!MESSAGE [AuthenticationService] Generated One-Time Setup Token=[REDACTED]
+
+!ENTRY eu.kalafatic.tryst.application 2 0 2026-11-07 18:37:27.830
+!MESSAGE [ApplicationLifecycleCoordinator] No administrator account detected and no bootstrap password supplied. Initial setup token=[REDACTED]
+
+!ENTRY eu.kalafatic.tryst.infrastructure 2 0 2026-11-07 18:37:28.037
+!MESSAGE [OllamaProvider] Ollama connection check failed for http://localhost:11434: java.net.ConnectException
+
+!ENTRY eu.kalafatic.tryst.domain 1 0 2026-11-07 18:37:28.050
+!MESSAGE [TaskOrchestrator] TaskOrchestrator started with concurrency 2
+
+!ENTRY eu.kalafatic.tryst.domain 1 0 2026-11-07 18:37:28.073
+!MESSAGE [TelemetryService] Telemetry collection service started (interval: 30s).
+
+!ENTRY eu.kalafatic.tryst.core 1 0 2026-11-07 18:37:28.081
+!MESSAGE [PortPersistence] Persisted port allocations to /home/jules/.tryst/port-allocations.properties (group offset: 0)
+
+!ENTRY eu.kalafatic.tryst.core 1 0 2026-11-07 18:37:28.082
+!MESSAGE [PortRegistry] Port allocation group updated: groupOffset=0, HTTP=38080, TCP=38280
+
+!ENTRY eu.kalafatic.tryst.core 1 0 2026-11-07 18:37:28.085
+!MESSAGE [PortRegistry] Runtime listener bound: service=tcp on port 38280
+
+!ENTRY eu.kalafatic.tryst.infrastructure 1 0 2026-11-07 18:37:28.086
+!MESSAGE [TrystTcpServer] TCP Server successfully started on 127.0.0.1:38280
+
+!ENTRY eu.kalafatic.tryst.core 1 0 2026-11-07 18:37:28.137
+!MESSAGE [PortRegistry] Runtime listener bound: service=http on port 38080
+
+!ENTRY eu.kalafatic.tryst.core 1 0 2026-11-07 18:37:28.141
+!MESSAGE [RuntimeEndpointRegistry] Runtime endpoint updated: http://127.0.0.1:38080/tryst (external: http://127.0.0.1:38080/tryst)
+
+!ENTRY eu.kalafatic.tryst.core 1 0 2026-11-07 18:37:28.142
+!MESSAGE [PortRegistry] Runtime listener bound: service=http on port 38080
+
+!ENTRY eu.kalafatic.tryst.infrastructure 1 0 2026-11-07 18:37:28.143
+!MESSAGE [TrystHttpServer] HTTP Server started on http://127.0.0.1:38080/ (Canonical: http://localhost/tryst)
+
+!ENTRY eu.kalafatic.tryst.application 1 0 2026-11-07 18:37:28.150
+!MESSAGE [ApplicationLifecycleCoordinator] Core, Persistence, Security, Observability, AI, Orchestration, Review, and Communication OSGi services registered successfully.
+
+!ENTRY eu.kalafatic.tryst.application 1 0 2026-11-07 18:37:28.150
+!MESSAGE [ApplicationLifecycleCoordinator] Lifecycle transition: CORE_SERVICE_INITIALIZATION -> APPLICATION_READY
+
+!ENTRY eu.kalafatic.tryst.application 1 0 2026-11-07 18:37:28.150
+!MESSAGE [ApplicationLifecycleCoordinator] TRYST Application is ready.
+
+!ENTRY eu.kalafatic.tryst.infrastructure 1 0 2026-11-07 18:37:28.445
+!MESSAGE [TrystHttpServer] HTTP GET /api/status -> 200
