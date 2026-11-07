@@ -60,6 +60,58 @@ public class ServerMonitoringPage extends AbstractTrystEditorPage {
         createRow(serverGroup, "Canonical Application URL:");
         lblCanonicalUrl = createValueLabel(serverGroup, "http://localhost/tryst");
 
+        Composite serverBtnBar = new Composite(serverGroup, SWT.NONE);
+        serverBtnBar.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
+        serverBtnBar.setLayout(new GridLayout(4, false));
+
+        Button btnStartServer = new Button(serverBtnBar, SWT.PUSH);
+        btnStartServer.setText("▶ Start Server");
+        btnStartServer.addListener(SWT.Selection, e -> {
+            var http = TrystUiServices.getHttpService();
+            if (http != null && !http.isRunning()) {
+                try {
+                    http.start();
+                } catch (Exception ex) {
+                    org.eclipse.jface.dialogs.MessageDialog.openError(parent.getShell(), "Server Error", "Failed to start HTTP server: " + ex.getMessage());
+                }
+            }
+            refresh();
+        });
+
+        Button btnStopServer = new Button(serverBtnBar, SWT.PUSH);
+        btnStopServer.setText("⏹ Stop Server");
+        btnStopServer.addListener(SWT.Selection, e -> {
+            var http = TrystUiServices.getHttpService();
+            if (http != null && http.isRunning()) {
+                boolean confirm = org.eclipse.jface.dialogs.MessageDialog.openConfirm(parent.getShell(), "Stop Server", "Are you sure you want to stop the embedded HTTP server?");
+                if (confirm) {
+                    http.stop();
+                }
+            }
+            refresh();
+        });
+
+        Button btnRestartServer = new Button(serverBtnBar, SWT.PUSH);
+        btnRestartServer.setText("🔄 Restart Server");
+        btnRestartServer.addListener(SWT.Selection, e -> {
+            var http = TrystUiServices.getHttpService();
+            if (http != null) {
+                if (http.isRunning()) {
+                    http.stop();
+                }
+                try {
+                    http.start();
+                } catch (Exception ex) {
+                    org.eclipse.jface.dialogs.MessageDialog.openError(parent.getShell(), "Server Error", "Failed to restart HTTP server: " + ex.getMessage());
+                }
+            }
+            refresh();
+        });
+
+        Button btnRefreshServer = new Button(serverBtnBar, SWT.PUSH);
+        btnRefreshServer.setText("Refresh Status");
+        btnRefreshServer.addListener(SWT.Selection, e -> refresh());
+
         Group healthGroup = new Group(parent, SWT.NONE);
         healthGroup.setText("Platform Health & Resources");
         healthGroup.setLayout(new GridLayout(2, false));
@@ -148,7 +200,12 @@ public class ServerMonitoringPage extends AbstractTrystEditorPage {
 
         var cfgService = TrystUiServices.getConfigurationService();
         if (cfgService != null && cfgService.getConfiguration() != null) {
-            lblCanonicalUrl.setText(cfgService.getConfiguration().canonicalUrl());
+            var cfg = cfgService.getConfiguration();
+            if (httpService != null && httpService.isRunning()) {
+                lblCanonicalUrl.setText(cfg.resolveEffectiveExternalUrl(httpService.getPort()) + " (Canonical: " + cfg.canonicalUrl() + ")");
+            } else {
+                lblCanonicalUrl.setText(cfg.canonicalUrl());
+            }
         } else {
             lblCanonicalUrl.setText("http://localhost/tryst");
         }
