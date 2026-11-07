@@ -70,7 +70,7 @@ public class TrystWorkbenchPerspectiveTest {
         assertNotNull(empty.properties());
         assertTrue(empty.properties().isEmpty());
 
-        Project p = new Project("proj-1", "TestProject", Path.of("/tmp/test"));
+        Project p = new Project("proj-1", "default-user", "TestProject", Path.of("/tmp/test"), true);
         long seq = WorkbenchContextManager.getInstance().setContext(
                 empty.toBuilder().project(p).build()
         );
@@ -89,11 +89,11 @@ public class TrystWorkbenchPerspectiveTest {
         WorkbenchContextManager mgr = WorkbenchContextManager.getInstance();
 
         long token1 = mgr.getCurrentSequence();
-        Project p1 = new Project("p1", "Project 1", Path.of("/tmp/p1"));
+        Project p1 = new Project("p1", "default-user", "Project 1", Path.of("/tmp/p1"), true);
         WorkbenchContext ctx1 = WorkbenchContext.builder().project(p1).build();
 
         // User immediately switches to project 2
-        Project p2 = new Project("p2", "Project 2", Path.of("/tmp/p2"));
+        Project p2 = new Project("p2", "default-user", "Project 2", Path.of("/tmp/p2"), true);
         WorkbenchContext ctx2 = WorkbenchContext.builder().project(p2).build();
         long token2 = mgr.setContext(ctx2);
 
@@ -103,7 +103,7 @@ public class TrystWorkbenchPerspectiveTest {
         assertEquals("p2", mgr.getContext().projectId(), "Current context must remain Project 2");
 
         // Fresh update under token2 or newer succeeds
-        Project p3 = new Project("p3", "Project 3", Path.of("/tmp/p3"));
+        Project p3 = new Project("p3", "default-user", "Project 3", Path.of("/tmp/p3"), true);
         WorkbenchContext ctx3 = WorkbenchContext.builder().project(p3).build();
         boolean appliedFresh = mgr.updateContextIfFresh(token2, ctx3);
         assertTrue(appliedFresh, "Fresh update must be accepted");
@@ -118,7 +118,7 @@ public class TrystWorkbenchPerspectiveTest {
 
         mgr.addContextListener(listener);
 
-        Project p = new Project("proj-listener", "ListenerProject", Path.of("/tmp"));
+        Project p = new Project("proj-listener", "default-user", "ListenerProject", Path.of("/tmp"), true);
         mgr.setContext(WorkbenchContext.builder().project(p).build());
 
         assertEquals(1, received.size());
@@ -145,7 +145,7 @@ public class TrystWorkbenchPerspectiveTest {
             executor.submit(() -> {
                 try {
                     for (int j = 0; j < iterations; j++) {
-                        Project p = new Project("p-" + tId + "-" + j, "Proj" + j, Path.of("/tmp"));
+                        Project p = new Project("p-" + tId + "-" + j, "default-user", "Proj" + j, Path.of("/tmp"), true);
                         mgr.setContext(WorkbenchContext.builder().project(p).build());
                     }
                 } finally {
@@ -214,7 +214,7 @@ public class TrystWorkbenchPerspectiveTest {
                 NavigatorNode.NodeType.ROOT_CATEGORY, null, null);
         assertFalse(root.hasChildren());
 
-        Project p = new Project("p1", "Demo Project", Path.of("/tmp/demo"));
+        Project p = new Project("p1", "default-user", "Demo Project", Path.of("/tmp/demo"), true);
         NavigatorNode child = new NavigatorNode("child-1", "Demo Project",
                 NavigatorNode.NodeType.PROJECT, p, root);
 

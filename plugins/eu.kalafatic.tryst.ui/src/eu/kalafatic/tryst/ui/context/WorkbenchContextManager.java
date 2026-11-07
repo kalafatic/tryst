@@ -70,7 +70,7 @@ public class WorkbenchContextManager {
 
     public void reset() {
         currentContext.set(WorkbenchContext.EMPTY);
-        sequenceNumber.incrementAndGet();
+        sequenceNumber.set(0);
         listeners.clear();
     }
 

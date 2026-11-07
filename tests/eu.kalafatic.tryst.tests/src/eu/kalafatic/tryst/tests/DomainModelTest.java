@@ -55,6 +55,43 @@ class DomainModelTest {
     }
 
     @Test
+    void testProjectIdPreservationAndConstructorIdentitySemantics() {
+        Path loc = Path.of("/tmp/test-project");
+
+        // 1. Explicit ID constructor preserves explicit ID and owner
+        Project pExplicit = new Project("custom-id-123", "alice", "Alpha Project", loc, true);
+        assertEquals("custom-id-123", pExplicit.getId());
+        assertEquals("alice", pExplicit.getOwnerId());
+        assertEquals("Alpha Project", pExplicit.getName());
+        assertEquals("", pExplicit.getDescription());
+        assertTrue(pExplicit.isActive());
+
+        // 2. Explicit ID with default owner
+        Project pDefaultOwner = new Project("custom-id-456", "Beta Project", loc, false);
+        assertEquals("custom-id-456", pDefaultOwner.getId());
+        assertEquals(Project.DEFAULT_OWNER_ID, pDefaultOwner.getOwnerId());
+        assertEquals("Beta Project", pDefaultOwner.getName());
+        assertFalse(pDefaultOwner.isActive());
+
+        // 3. Name + Location generated ID constructor
+        Project pGenerated1 = new Project("Gamma Project", loc);
+        assertNotNull(pGenerated1.getId());
+        assertNotEquals("Gamma Project", pGenerated1.getId());
+        assertEquals("Gamma Project", pGenerated1.getName());
+        assertEquals("", pGenerated1.getDescription());
+        assertEquals(Project.DEFAULT_OWNER_ID, pGenerated1.getOwnerId());
+
+        // 4. Name + Description + Location generated ID constructor
+        Project pGenerated2 = new Project("Delta Project", "Detailed description", loc);
+        assertNotNull(pGenerated2.getId());
+        assertNotEquals("Delta Project", pGenerated2.getId());
+        assertNotEquals("Detailed description", pGenerated2.getId());
+        assertEquals("Delta Project", pGenerated2.getName());
+        assertEquals("Detailed description", pGenerated2.getDescription());
+        assertEquals(Project.DEFAULT_OWNER_ID, pGenerated2.getOwnerId());
+    }
+
+    @Test
     void testProjectLifecycleAndTransitions() {
         Project p = new Project("Tryst", Path.of("/tmp/p"));
         assertEquals(ProjectStatus.ACTIVE, p.getStatus());
