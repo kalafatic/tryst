@@ -43,6 +43,8 @@ public class TrystUiPlugin extends AbstractUIPlugin {
     private ServiceTracker<eu.kalafatic.tryst.infrastructure.persistence.SqliteDatabaseManager, eu.kalafatic.tryst.infrastructure.persistence.SqliteDatabaseManager> dbTracker;
 
     private WorkspaceService fallbackWorkspaceService;
+    private eu.kalafatic.tryst.ui.perspective.TrystPerspectiveLifecycleListener perspectiveListener;
+    private org.eclipse.ui.IWindowListener windowListener;
 
     @Override
     public void start(BundleContext context) throws Exception {
@@ -95,8 +97,71 @@ public class TrystUiPlugin extends AbstractUIPlugin {
         TrystLog.info(TrystUiPlugin.class, "TrystUiPlugin activated with OSGi ServiceTrackers.");
     }
 
+    public synchronized void registerPerspectiveLifecycleHook(org.eclipse.ui.IWorkbench wb) {
+        if (wb == null || windowListener != null) {
+            return;
+        }
+
+        this.perspectiveListener = new eu.kalafatic.tryst.ui.perspective.TrystPerspectiveLifecycleListener();
+        this.windowListener = new org.eclipse.ui.IWindowListener() {
+            @Override
+            public void windowOpened(org.eclipse.ui.IWorkbenchWindow window) {
+                if (window != null && perspectiveListener != null) {
+                    window.addPerspectiveListener(perspectiveListener);
+                }
+            }
+
+            @Override
+            public void windowClosed(org.eclipse.ui.IWorkbenchWindow window) {
+                if (window != null && perspectiveListener != null) {
+                    window.removePerspectiveListener(perspectiveListener);
+                }
+            }
+
+            @Override
+            public void windowActivated(org.eclipse.ui.IWorkbenchWindow window) {
+            }
+
+            @Override
+            public void windowDeactivated(org.eclipse.ui.IWorkbenchWindow window) {
+            }
+        };
+
+        wb.addWindowListener(windowListener);
+
+        for (org.eclipse.ui.IWorkbenchWindow window : wb.getWorkbenchWindows()) {
+            if (window != null) {
+                window.addPerspectiveListener(perspectiveListener);
+                org.eclipse.ui.IWorkbenchPage activePage = window.getActivePage();
+                if (activePage != null && activePage.getPerspective() != null
+                        && eu.kalafatic.tryst.ui.perspective.TrystMainPerspective.ID.equals(activePage.getPerspective().getId())) {
+                    eu.kalafatic.tryst.ui.editor.TrystEditorManager.ensureEditorOpen(activePage);
+                }
+            }
+        }
+        TrystLog.info(TrystUiPlugin.class, "TrystPerspectiveLifecycleListener registered on Workbench windows.");
+    }
+
     @Override
     public void stop(BundleContext context) throws Exception {
+        if (windowListener != null) {
+            try {
+                if (org.eclipse.ui.PlatformUI.isWorkbenchRunning()) {
+                    org.eclipse.ui.IWorkbench wb = org.eclipse.ui.PlatformUI.getWorkbench();
+                    wb.removeWindowListener(windowListener);
+                    if (perspectiveListener != null) {
+                        for (org.eclipse.ui.IWorkbenchWindow window : wb.getWorkbenchWindows()) {
+                            if (window != null) {
+                                window.removePerspectiveListener(perspectiveListener);
+                            }
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {
+            }
+            windowListener = null;
+            perspectiveListener = null;
+        }
         if (workspaceServiceTracker != null) { workspaceServiceTracker.close(); workspaceServiceTracker = null; }
         if (asyncServiceTracker != null) { asyncServiceTracker.close(); asyncServiceTracker = null; }
         if (orchestratorTracker != null) { orchestratorTracker.close(); orchestratorTracker = null; }

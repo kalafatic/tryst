@@ -32,23 +32,40 @@ public class ServerMonitoringPage extends AbstractTrystEditorPage {
     public static final String ID = "eu.kalafatic.tryst.ui.editor.page.serverMonitoring";
 
     private Label lblReadiness;
+    private Label lblHttpStatus;
+    private Label lblHttpPort;
+    private Label lblCanonicalUrl;
     private Label lblSystemCpu;
     private Label lblHeap;
     private Label lblThreads;
     private TableViewer processViewer;
 
     public ServerMonitoringPage(TrystWorkbenchEditor editor) {
-        super(ID, "Monitoring", editor);
+        super(ID, "Server Monitoring", editor);
     }
 
     @Override
     protected void createPageContent(Composite parent) {
+        Group serverGroup = new Group(parent, SWT.NONE);
+        serverGroup.setText("Embedded HTTP Server & Network");
+        serverGroup.setLayout(new GridLayout(2, false));
+        serverGroup.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
+
+        createRow(serverGroup, "HTTP Server Lifecycle:");
+        lblHttpStatus = createValueLabel(serverGroup, "STOPPED");
+
+        createRow(serverGroup, "Listening Address & Port:");
+        lblHttpPort = createValueLabel(serverGroup, "-");
+
+        createRow(serverGroup, "Canonical Application URL:");
+        lblCanonicalUrl = createValueLabel(serverGroup, "http://localhost/tryst");
+
         Group healthGroup = new Group(parent, SWT.NONE);
-        healthGroup.setText("Health & Resource Consumption");
+        healthGroup.setText("Platform Health & Resources");
         healthGroup.setLayout(new GridLayout(2, false));
         healthGroup.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
 
-        createRow(healthGroup, "Server Readiness:");
+        createRow(healthGroup, "Platform Readiness:");
         lblReadiness = createValueLabel(healthGroup, "Checking...");
 
         createRow(healthGroup, "System CPU Load:");
@@ -115,12 +132,33 @@ public class ServerMonitoringPage extends AbstractTrystEditorPage {
     public void refresh() {
         if (lblReadiness == null || lblReadiness.isDisposed()) return;
 
+        var httpService = TrystUiServices.getHttpService();
+        if (httpService != null) {
+            boolean running = httpService.isRunning();
+            lblHttpStatus.setText(running ? "RUNNING" : "STOPPED");
+            if (running) {
+                lblHttpPort.setText(httpService.getHost() + ":" + httpService.getPort());
+            } else {
+                lblHttpPort.setText("Not listening");
+            }
+        } else {
+            lblHttpStatus.setText("NOT_REGISTERED");
+            lblHttpPort.setText("-");
+        }
+
+        var cfgService = TrystUiServices.getConfigurationService();
+        if (cfgService != null && cfgService.getConfiguration() != null) {
+            lblCanonicalUrl.setText(cfgService.getConfiguration().canonicalUrl());
+        } else {
+            lblCanonicalUrl.setText("http://localhost/tryst");
+        }
+
         var readiness = TrystUiServices.getServerReadinessService();
         if (readiness != null) {
             ServerReadinessService.ReadinessReport rep = readiness.evaluateReadiness(eu.kalafatic.tryst.core.lifecycle.ApplicationLifecycleStage.WORKBENCH_RUNNING);
             lblReadiness.setText(rep.ready() ? "READY (Healthy)" : (rep.degraded() ? "DEGRADED" : "INITIALIZING"));
         } else {
-            lblReadiness.setText("OPERATIONAL");
+            lblReadiness.setText(httpService != null && httpService.isRunning() ? "READY (Healthy)" : "INITIALIZING");
         }
 
         ServerMonitoringService mon = TrystUiServices.getServerMonitoringService();

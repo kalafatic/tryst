@@ -430,16 +430,13 @@ public class ConsoleOutputView extends ViewPart {
     private void navigateToTask(String taskId) {
         try {
             org.eclipse.ui.IWorkbenchPage page = getSite().getPage();
-            org.eclipse.ui.IViewPart view = page.findView(MainWorkspaceView.ID);
-            if (view == null) {
-                view = page.showView(MainWorkspaceView.ID);
-            }
-            if (view != null) {
-                page.activate(view);
+            org.eclipse.ui.IEditorPart editorPart = eu.kalafatic.tryst.ui.editor.TrystEditorManager.ensureEditorOpen(page);
+            if (editorPart instanceof eu.kalafatic.tryst.ui.editor.TrystWorkbenchEditor editor) {
+                editor.selectPage(eu.kalafatic.tryst.ui.editor.page.TaskExecutionPage.ID);
             }
         } catch (Exception e) {
             MessageDialog.openError(getSite().getShell(), "Navigation Error",
-                    "Could not switch to task workspace: " + e.getMessage());
+                    "Could not switch to task workspace editor: " + e.getMessage());
         }
     }
 

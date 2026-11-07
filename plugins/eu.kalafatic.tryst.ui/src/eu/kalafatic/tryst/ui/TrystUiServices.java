@@ -287,4 +287,12 @@ public final class TrystUiServices {
     public static eu.kalafatic.tryst.domain.service.ManagedServiceController getManagedServiceController() {
         return getService(eu.kalafatic.tryst.domain.service.ManagedServiceController.class);
     }
+
+    public static eu.kalafatic.tryst.core.server.TrystHttpService getHttpService() {
+        return getService(eu.kalafatic.tryst.core.server.TrystHttpService.class);
+    }
+
+    public static eu.kalafatic.tryst.core.server.TrystTcpService getTcpService() {
+        return getService(eu.kalafatic.tryst.core.server.TrystTcpService.class);
+    }
 }

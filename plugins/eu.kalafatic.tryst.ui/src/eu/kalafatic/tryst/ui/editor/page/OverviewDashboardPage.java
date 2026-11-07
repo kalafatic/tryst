@@ -29,7 +29,7 @@ public class OverviewDashboardPage extends AbstractTrystEditorPage {
     private Label lblHeap;
 
     public OverviewDashboardPage(TrystWorkbenchEditor editor) {
-        super(ID, "Dashboard", editor);
+        super(ID, "Overview", editor);
     }
 
     @Override

@@ -194,6 +194,21 @@ public class TrystWorkbenchPerspectiveTest {
         assertTrue(ids.contains("eu.kalafatic.tryst.ui.editor.page.teip"));
         assertTrue(ids.contains("eu.kalafatic.tryst.ui.editor.page.serverMonitoring"));
         assertTrue(ids.contains("eu.kalafatic.tryst.ui.editor.page.configuration"));
+
+        // Verify page titles
+        assertEquals("Overview", descriptors.stream().filter(d -> d.id().equals("eu.kalafatic.tryst.ui.editor.page.dashboard")).findFirst().orElseThrow().title());
+        assertEquals("Project Explorer", descriptors.stream().filter(d -> d.id().equals("eu.kalafatic.tryst.ui.editor.page.projectExplorer")).findFirst().orElseThrow().title());
+        assertEquals("Task Management", descriptors.stream().filter(d -> d.id().equals("eu.kalafatic.tryst.ui.editor.page.taskManagement")).findFirst().orElseThrow().title());
+        assertEquals("Task Execution", descriptors.stream().filter(d -> d.id().equals("eu.kalafatic.tryst.ui.editor.page.taskExecution")).findFirst().orElseThrow().title());
+        assertEquals("Code Review", descriptors.stream().filter(d -> d.id().equals("eu.kalafatic.tryst.ui.editor.page.codeReview")).findFirst().orElseThrow().title());
+        assertEquals("Git", descriptors.stream().filter(d -> d.id().equals("eu.kalafatic.tryst.ui.editor.page.git")).findFirst().orElseThrow().title());
+        assertEquals("Build", descriptors.stream().filter(d -> d.id().equals("eu.kalafatic.tryst.ui.editor.page.build")).findFirst().orElseThrow().title());
+        assertEquals("Tests & Quality", descriptors.stream().filter(d -> d.id().equals("eu.kalafatic.tryst.ui.editor.page.testQuality")).findFirst().orElseThrow().title());
+        assertEquals("AI Integration", descriptors.stream().filter(d -> d.id().equals("eu.kalafatic.tryst.ui.editor.page.aiIntegration")).findFirst().orElseThrow().title());
+        assertEquals("MCP", descriptors.stream().filter(d -> d.id().equals("eu.kalafatic.tryst.ui.editor.page.mcp")).findFirst().orElseThrow().title());
+        assertEquals("TEIP Integration", descriptors.stream().filter(d -> d.id().equals("eu.kalafatic.tryst.ui.editor.page.teip")).findFirst().orElseThrow().title());
+        assertEquals("Server Monitoring", descriptors.stream().filter(d -> d.id().equals("eu.kalafatic.tryst.ui.editor.page.serverMonitoring")).findFirst().orElseThrow().title());
+        assertEquals("Configuration", descriptors.stream().filter(d -> d.id().equals("eu.kalafatic.tryst.ui.editor.page.configuration")).findFirst().orElseThrow().title());
     }
 
     @Test

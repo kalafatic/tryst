@@ -1,7 +1,7 @@
 package eu.kalafatic.tryst.tests;
 
 import eu.kalafatic.tryst.application.lifecycle.ApplicationLifecycleCoordinator;
-import eu.kalafatic.tryst.infrastructure.server.TrystHttpService;
+import eu.kalafatic.tryst.core.server.TrystHttpService;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;

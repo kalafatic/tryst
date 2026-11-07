@@ -1,8 +1,6 @@
 package eu.kalafatic.tryst.ui.perspective;
 
 import eu.kalafatic.tryst.ui.view.ConsoleOutputView;
-import eu.kalafatic.tryst.ui.view.MainWorkspaceView;
-import eu.kalafatic.tryst.ui.view.ProjectExplorerView;
 import org.eclipse.ui.IFolderLayout;
 import org.eclipse.ui.IPageLayout;
 import org.eclipse.ui.IPerspectiveFactory;
