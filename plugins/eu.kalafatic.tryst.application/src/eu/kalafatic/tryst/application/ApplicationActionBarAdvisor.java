@@ -24,6 +24,9 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
     private IWorkbenchAction exitAction;
     private IWorkbenchAction aboutAction;
     private IWorkbenchAction preferencesAction;
+    private IWorkbenchAction resetPerspectiveAction;
+    private IWorkbenchAction editActionSetAction;
+    private IWorkbenchAction showViewMenuAction;
 
     private Action openWebBrowserAction;
     private Action openMainPerspectiveAction;
@@ -46,6 +49,15 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
 
         preferencesAction = ActionFactory.PREFERENCES.create(window);
         register(preferencesAction);
+
+        resetPerspectiveAction = ActionFactory.RESET_PERSPECTIVE.create(window);
+        register(resetPerspectiveAction);
+
+        editActionSetAction = ActionFactory.EDIT_ACTION_SETS.create(window);
+        register(editActionSetAction);
+
+        showViewMenuAction = ActionFactory.SHOW_VIEW_MENU.create(window);
+        register(showViewMenuAction);
 
         openWebBrowserAction = new Action("Open TRYST Web Client (localhost/tryst)") {
             @Override
@@ -202,6 +214,27 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
         perspMenu.add(openMainPerspectiveAction);
         perspMenu.add(openAdminPerspectiveAction);
         windowMenu.add(perspMenu);
+        MenuManager showViewMenu = new MenuManager("Show &View", "showView");
+        showViewMenu.add(new Action("TRYST Navigator") {
+            @Override
+            public void run() {
+                try {
+                    getActionBarConfigurer().getWindowConfigurer().getWindow().getActivePage().showView("eu.kalafatic.tryst.ui.navigator.view");
+                } catch (Exception ignored) {}
+            }
+        });
+        showViewMenu.add(new Action("TRYST Console") {
+            @Override
+            public void run() {
+                try {
+                    getActionBarConfigurer().getWindowConfigurer().getWindow().getActivePage().showView("eu.kalafatic.tryst.ui.view.consoleOutput");
+                } catch (Exception ignored) {}
+            }
+        });
+        windowMenu.add(showViewMenu);
+        windowMenu.add(new Separator());
+        windowMenu.add(resetPerspectiveAction);
+        windowMenu.add(editActionSetAction);
         windowMenu.add(new Separator());
         windowMenu.add(preferencesAction);
         windowMenu.add(new GroupMarker(IWorkbenchActionConstants.MB_ADDITIONS));
