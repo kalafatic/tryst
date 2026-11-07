@@ -20,19 +20,24 @@ public class TrystMainPerspective implements IPerspectiveFactory {
     @Override
     public void createInitialLayout(IPageLayout layout) {
         String editorArea = layout.getEditorArea();
-        layout.setEditorAreaVisible(false);
+        layout.setEditorAreaVisible(true);
 
-        IFolderLayout leftFolder = layout.createFolder("leftFolder", IPageLayout.LEFT, 0.25f, editorArea);
-        leftFolder.addView(ProjectExplorerView.ID);
+        IFolderLayout leftTopFolder = layout.createFolder("navigatorFolder", IPageLayout.LEFT, 0.22f, editorArea);
+        leftTopFolder.addView(eu.kalafatic.tryst.ui.navigator.TrystNavigatorView.ID);
 
-        IFolderLayout bottomFolder = layout.createFolder("bottomFolder", IPageLayout.BOTTOM, 0.70f, editorArea);
-        bottomFolder.addView(ConsoleOutputView.ID);
+        IFolderLayout leftBottomFolder = layout.createFolder("consoleFolder", IPageLayout.BOTTOM, 0.50f, "navigatorFolder");
+        leftBottomFolder.addView(ConsoleOutputView.ID);
 
-        IFolderLayout centerFolder = layout.createFolder("centerFolder", IPageLayout.RIGHT, 0.75f, "leftFolder");
-        centerFolder.addView(MainWorkspaceView.ID);
+        if (layout.getViewLayout(eu.kalafatic.tryst.ui.navigator.TrystNavigatorView.ID) != null) {
+            layout.getViewLayout(eu.kalafatic.tryst.ui.navigator.TrystNavigatorView.ID).setCloseable(false);
+        }
+        if (layout.getViewLayout(ConsoleOutputView.ID) != null) {
+            layout.getViewLayout(ConsoleOutputView.ID).setCloseable(false);
+        }
 
-        layout.getViewLayout(ProjectExplorerView.ID).setCloseable(false);
-        layout.getViewLayout(MainWorkspaceView.ID).setCloseable(false);
-        layout.getViewLayout(ConsoleOutputView.ID).setCloseable(false);
+        layout.addShowViewShortcut(eu.kalafatic.tryst.ui.navigator.TrystNavigatorView.ID);
+        layout.addShowViewShortcut(ConsoleOutputView.ID);
+        layout.addPerspectiveShortcut(ID);
+        layout.addPerspectiveShortcut(TrystAdministrationPerspective.ID);
     }
 }

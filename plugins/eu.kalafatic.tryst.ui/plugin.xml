@@ -26,6 +26,13 @@
       </category>
       <view
             category="eu.kalafatic.tryst.ui.category"
+            class="eu.kalafatic.tryst.ui.navigator.TrystNavigatorView"
+            id="eu.kalafatic.tryst.ui.navigator.view"
+            name="TRYST Navigator"
+            restorable="true">
+      </view>
+      <view
+            category="eu.kalafatic.tryst.ui.category"
             class="eu.kalafatic.tryst.ui.view.ProjectExplorerView"
             id="eu.kalafatic.tryst.ui.view.projectExplorer"
             name="Project Explorer"
@@ -129,5 +136,14 @@
             name="Managed OS Processes"
             restorable="true">
       </view>
+   </extension>
+   <extension
+         point="org.eclipse.ui.editors">
+      <editor
+            class="eu.kalafatic.tryst.ui.editor.TrystWorkbenchEditor"
+            default="true"
+            id="eu.kalafatic.tryst.ui.editor.workbenchEditor"
+            name="TRYST Central Workspace">
+      </editor>
    </extension>
 </plugin>
