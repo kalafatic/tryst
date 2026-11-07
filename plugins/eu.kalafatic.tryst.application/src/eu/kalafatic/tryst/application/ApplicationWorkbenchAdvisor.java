@@ -44,8 +44,20 @@ public class ApplicationWorkbenchAdvisor extends WorkbenchAdvisor {
         super.initialize(configurer);
         configurer.setSaveAndRestore(true);
 
-        if (coordinator != null) {
-            coordinator.transitionTo(ApplicationLifecycleStage.CORE_SERVICE_INITIALIZATION);
+        // Core services and communication servers (HTTP, TCP) are initialized
+        // in TrystApplication prior to Display and Workbench creation.
+        // If running in a test or custom environment where coordinator is not yet ready,
+        // catch up to APPLICATION_READY.
+        if (coordinator != null && coordinator.getCurrentStage().ordinal() < ApplicationLifecycleStage.APPLICATION_READY.ordinal()) {
+            if (coordinator.getCurrentStage().ordinal() < ApplicationLifecycleStage.PLATFORM_INITIALIZATION.ordinal()) {
+                coordinator.transitionTo(ApplicationLifecycleStage.PLATFORM_INITIALIZATION);
+            }
+            if (coordinator.getCurrentStage().ordinal() < ApplicationLifecycleStage.CONFIGURATION_INITIALIZATION.ordinal()) {
+                coordinator.transitionTo(ApplicationLifecycleStage.CONFIGURATION_INITIALIZATION);
+            }
+            if (coordinator.getCurrentStage().ordinal() < ApplicationLifecycleStage.CORE_SERVICE_INITIALIZATION.ordinal()) {
+                coordinator.transitionTo(ApplicationLifecycleStage.CORE_SERVICE_INITIALIZATION);
+            }
             coordinator.transitionTo(ApplicationLifecycleStage.APPLICATION_READY);
         }
     }
