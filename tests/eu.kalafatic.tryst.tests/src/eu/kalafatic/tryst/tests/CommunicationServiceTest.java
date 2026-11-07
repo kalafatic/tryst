@@ -206,4 +206,72 @@ class CommunicationServiceTest {
         coordinator.transitionTo(ApplicationLifecycleStage.SERVICE_DISPOSAL);
         coordinator.transitionTo(ApplicationLifecycleStage.APPLICATION_TERMINATED);
     }
+
+    @Test
+    void testStartupFailureReportingWhenHttpPortOccupiedAndFallbackDisabled() throws Exception {
+        int occupiedPort = 39876;
+        java.net.ServerSocket ss = new java.net.ServerSocket(occupiedPort);
+        try {
+            eu.kalafatic.tryst.core.lifecycle.ServerReadinessService readiness = new eu.kalafatic.tryst.core.lifecycle.ServerReadinessService();
+            readiness.registerComponent("HttpServer", true);
+
+            TrystHttpServer server = new TrystHttpServer("127.0.0.1", occupiedPort, null);
+            server.setDynamicPortConfiguration(false, occupiedPort, occupiedPort);
+
+            assertThrows(Exception.class, server::start, "Server start must fail when port is bound and fallback is disabled");
+
+            readiness.markFailed("HttpServer", "Address already in use", java.util.Map.of("port", String.valueOf(occupiedPort)));
+
+            var report = readiness.evaluateReadiness(ApplicationLifecycleStage.APPLICATION_READY);
+            assertFalse(report.ready(), "Platform readiness must not report ready when mandatory HttpServer fails");
+            assertEquals(eu.kalafatic.tryst.core.lifecycle.ServerReadinessService.ComponentState.FAILED,
+                    report.components().get("HttpServer").state());
+            assertNotNull(report.components().get("HttpServer").lastError());
+        } finally {
+            ss.close();
+        }
+    }
+
+    @Test
+    void testCommunicationServicesLifecycleIdempotency() throws Exception {
+        TrystHttpServer http = new TrystHttpServer("127.0.0.1", 0, null);
+        TrystTcpServer tcp = new TrystTcpServer("127.0.0.1", 0, null);
+
+        // Repeated starts
+        http.start();
+        assertTrue(http.isRunning());
+        int httpPort = http.getPort();
+        http.start(); // idempotent second start
+        assertTrue(http.isRunning());
+        assertEquals(httpPort, http.getPort());
+
+        tcp.start();
+        assertTrue(tcp.isRunning());
+        int tcpPort = tcp.getPort();
+        tcp.start(); // idempotent second start
+        assertTrue(tcp.isRunning());
+        assertEquals(tcpPort, tcp.getPort());
+
+        // Repeated stops
+        http.stop();
+        assertFalse(http.isRunning());
+        http.stop(); // idempotent second stop
+        assertFalse(http.isRunning());
+
+        tcp.stop();
+        assertFalse(tcp.isRunning());
+        tcp.stop(); // idempotent second stop
+        assertFalse(tcp.isRunning());
+
+        // Restart after stop
+        http.start();
+        assertTrue(http.isRunning());
+        http.stop();
+        assertFalse(http.isRunning());
+
+        tcp.start();
+        assertTrue(tcp.isRunning());
+        tcp.stop();
+        assertFalse(tcp.isRunning());
+    }
 }
