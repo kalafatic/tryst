@@ -309,5 +309,10 @@ class CommunicationServiceTest {
         // Clean up
         coordinator.stopHttpService();
         assertFalse(http3.isRunning());
+        coordinator.transitionTo(ApplicationLifecycleStage.APPLICATION_READY);
+        coordinator.transitionTo(ApplicationLifecycleStage.WORKBENCH_RUNNING);
+        coordinator.transitionTo(ApplicationLifecycleStage.APPLICATION_SHUTDOWN);
+        coordinator.transitionTo(ApplicationLifecycleStage.SERVICE_DISPOSAL);
+        coordinator.transitionTo(ApplicationLifecycleStage.APPLICATION_TERMINATED);
     }
 }
