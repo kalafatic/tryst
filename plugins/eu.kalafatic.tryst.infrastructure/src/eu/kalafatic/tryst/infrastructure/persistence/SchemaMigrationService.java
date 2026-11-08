@@ -694,6 +694,76 @@ public class SchemaMigrationService {
         );
         migrations.add(new Migration(13, "TEIP 1.0 EVO integration configuration, executions and events", v13Statements));
 
+        // V14: Workflows, Advanced Scheduling, Execution Pool, and Repository Mirrors
+        List<String> v14Statements = List.of(
+                """
+                CREATE TABLE IF NOT EXISTS workflow_definitions (
+                    id TEXT PRIMARY KEY,
+                    owner_id TEXT NOT NULL,
+                    project_id TEXT,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    graph_json TEXT NOT NULL,
+                    is_template INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_workflow_defs_owner ON workflow_definitions(owner_id);",
+                "CREATE INDEX IF NOT EXISTS idx_workflow_defs_proj ON workflow_definitions(project_id);",
+                """
+                CREATE TABLE IF NOT EXISTS workflow_executions (
+                    id TEXT PRIMARY KEY,
+                    workflow_definition_id TEXT NOT NULL,
+                    project_id TEXT,
+                    status TEXT NOT NULL,
+                    current_node_id TEXT,
+                    execution_state_json TEXT NOT NULL,
+                    triggered_by TEXT,
+                    created_at TEXT NOT NULL,
+                    started_at TEXT,
+                    completed_at TEXT,
+                    FOREIGN KEY (workflow_definition_id) REFERENCES workflow_definitions(id) ON DELETE CASCADE
+                );
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_workflow_exec_wf ON workflow_executions(workflow_definition_id);",
+                "CREATE INDEX IF NOT EXISTS idx_workflow_exec_status ON workflow_executions(status);",
+                """
+                CREATE TABLE IF NOT EXISTS task_schedules (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    project_id TEXT,
+                    user_id TEXT,
+                    schedule_type TEXT NOT NULL,
+                    cron_expression TEXT,
+                    scheduled_time TEXT,
+                    task_payload_json TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    last_executed_at TEXT,
+                    next_execution_at TEXT,
+                    execution_count INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL
+                );
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_schedules_next_run ON task_schedules(next_execution_at);",
+                "CREATE INDEX IF NOT EXISTS idx_schedules_status ON task_schedules(status);",
+                """
+                CREATE TABLE IF NOT EXISTS repository_mirrors (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT,
+                    remote_url TEXT NOT NULL UNIQUE,
+                    mirror_path TEXT NOT NULL,
+                    default_branch TEXT NOT NULL DEFAULT 'main',
+                    last_synced_at TEXT NOT NULL,
+                    mirror_fingerprint TEXT NOT NULL
+                );
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_repo_mirrors_proj ON repository_mirrors(project_id);",
+                "CREATE INDEX IF NOT EXISTS idx_repo_mirrors_url ON repository_mirrors(remote_url);"
+        );
+        migrations.add(new Migration(14, "Workflows, advanced scheduling, execution pool and repository mirrors", v14Statements));
+
         return migrations;
     }
 }

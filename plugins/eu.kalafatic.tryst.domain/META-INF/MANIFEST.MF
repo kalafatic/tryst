@@ -12,7 +12,10 @@ Export-Package: eu.kalafatic.tryst.domain.ai,
  eu.kalafatic.tryst.domain.model,
  eu.kalafatic.tryst.domain.repository,
  eu.kalafatic.tryst.domain.review,
+ eu.kalafatic.tryst.domain.sandbox,
+ eu.kalafatic.tryst.domain.schedule,
  eu.kalafatic.tryst.domain.security,
  eu.kalafatic.tryst.domain.service,
- eu.kalafatic.tryst.domain.tool
+ eu.kalafatic.tryst.domain.tool,
+ eu.kalafatic.tryst.domain.workflow
 Automatic-Module-Name: eu.kalafatic.tryst.domain

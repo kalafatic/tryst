@@ -510,6 +510,17 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
             server.setTaskIntakeService(this.taskIntakeService);
             server.setPortRegistry(portRegistry);
 
+            // Wire workflow and scheduling services
+            if (this.databaseManager != null) {
+                var wfDefRepo = new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteWorkflowDefinitionRepository(this.databaseManager);
+                var wfExecRepo = new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteWorkflowExecutionRepository(this.databaseManager);
+                var wfEngine = new eu.kalafatic.tryst.domain.service.WorkflowEngine(wfDefRepo, wfExecRepo, this.taskOrchestrator);
+                var schedRepo = new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteTaskScheduleRepository(this.databaseManager);
+                var schedService = new eu.kalafatic.tryst.domain.service.TaskSchedulerService(schedRepo, this.taskOrchestrator);
+                schedService.start();
+                server.setWorkflowDependencies(wfDefRepo, wfExecRepo, wfEngine, schedRepo, schedService);
+            }
+
             // Register TEIP EVO Integration and MCP routes
             server.registerHandler("/api/integration/evo", new eu.kalafatic.tryst.evo.integration.service.EvoHttpHandlers.EvoIntegrationHandler(evoService, this.permissionManager));
             server.registerHandler("/api/mcp", new eu.kalafatic.tryst.evo.integration.service.EvoHttpHandlers.McpHttpHandler(mcpServer));
@@ -1104,6 +1115,15 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
         server.setGitCommitRepository(this.gitCommitRepository);
         server.setTaskIntakeService(this.taskIntakeService);
         server.setPortRegistry(configurationService.getPortRegistry());
+
+        if (this.databaseManager != null) {
+            var wfDefRepo = new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteWorkflowDefinitionRepository(this.databaseManager);
+            var wfExecRepo = new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteWorkflowExecutionRepository(this.databaseManager);
+            var wfEngine = new eu.kalafatic.tryst.domain.service.WorkflowEngine(wfDefRepo, wfExecRepo, this.taskOrchestrator);
+            var schedRepo = new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteTaskScheduleRepository(this.databaseManager);
+            var schedService = new eu.kalafatic.tryst.domain.service.TaskSchedulerService(schedRepo, this.taskOrchestrator);
+            server.setWorkflowDependencies(wfDefRepo, wfExecRepo, wfEngine, schedRepo, schedService);
+        }
 
         this.httpService = server;
     }
