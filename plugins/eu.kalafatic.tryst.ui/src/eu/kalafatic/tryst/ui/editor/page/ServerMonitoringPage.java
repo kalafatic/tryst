@@ -57,8 +57,8 @@ public class ServerMonitoringPage extends AbstractTrystEditorPage {
         createRow(serverGroup, "Listening Address & Port:");
         lblHttpPort = createValueLabel(serverGroup, "-");
 
-        createRow(serverGroup, "Canonical Application URL:");
-        lblCanonicalUrl = createValueLabel(serverGroup, "http://localhost/tryst");
+        createRow(serverGroup, "Application URL:");
+        lblCanonicalUrl = createValueLabel(serverGroup, "-");
 
         Composite serverBtnBar = new Composite(serverGroup, SWT.NONE);
         serverBtnBar.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false, 2, 1));
@@ -243,7 +243,7 @@ public class ServerMonitoringPage extends AbstractTrystEditorPage {
                 lblCanonicalUrl.setText(cfg.canonicalUrl());
             }
         } else {
-            lblCanonicalUrl.setText("http://localhost/tryst");
+            lblCanonicalUrl.setText("-");
         }
 
         var readiness = TrystUiServices.getServerReadinessService();

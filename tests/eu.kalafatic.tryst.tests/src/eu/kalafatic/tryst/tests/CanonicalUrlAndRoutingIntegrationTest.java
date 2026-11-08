@@ -201,4 +201,152 @@ public class CanonicalUrlAndRoutingIntegrationTest {
         String effectiveUrl = cfg.resolveEffectiveExternalUrl(8123);
         assertEquals("https://developer.kalafatic.eu/tryst", effectiveUrl, "Reverse proxy URL must override internal host:port");
     }
+
+    @Test
+    void testDirectAccessModeEffectiveUrlResolution() {
+        httpServer = new TrystHttpServer("127.0.0.1", 0, null);
+        httpServer.setPhase4Dependencies(
+                authenticationService, userRepository, sessionRepository,
+                null, null, null, null, null, null, null, null, null,
+                configurationService, databaseManager, null, null
+        );
+        httpServer.start();
+
+        int boundPort = httpServer.getPort();
+        ApplicationConfiguration cfg = configurationService.getConfiguration();
+        assertFalse(cfg.reverseProxyEnabled(), "Direct access mode must have reverseProxyEnabled = false");
+
+        String effectiveUrl = cfg.resolveEffectiveExternalUrl(boundPort);
+        assertEquals("http://127.0.0.1:" + boundPort + "/tryst", effectiveUrl,
+                "In direct access mode, effective external URL must resolve to direct host and port");
+
+        RuntimeEndpoint ep = configurationService.getEndpointRegistry().getCurrentEndpoint();
+        assertNotNull(ep);
+        assertEquals("http://127.0.0.1:" + boundPort + "/tryst", ep.externalUrl(),
+                "Runtime endpoint externalUrl must point to direct listener in direct mode");
+    }
+
+    @Test
+    void testReverseProxyFallbackToCanonicalUrl() {
+        // Reverse proxy enabled, but publicServerUrl left empty -> should fall back to canonicalUrl
+        ApplicationConfiguration cfg = configurationService.getConfiguration()
+                .withDynamicNetworking(true, 38080, 38180, "", true);
+        configurationService.updateConfiguration(cfg);
+
+        String effectiveUrl = cfg.resolveEffectiveExternalUrl(38080);
+        assertEquals("http://localhost/tryst", effectiveUrl,
+                "When reverseProxyEnabled is true and publicServerUrl is blank, effective URL must fall back to canonicalUrl");
+    }
+
+    @Test
+    void testStaticAssetHandlerReturnsJson404ForUnhandledApiEndpoints() throws Exception {
+        httpServer = new TrystHttpServer("127.0.0.1", 0, null);
+        httpServer.setPhase4Dependencies(
+                authenticationService, userRepository, sessionRepository,
+                null, null, null, null, null, null, null, null, null,
+                configurationService, databaseManager, null, null
+        );
+        httpServer.start();
+
+        int port = httpServer.getPort();
+
+        // 1. Unhandled route under /tryst/api/...
+        HttpRequest req1 = HttpRequest.newBuilder()
+                .uri(URI.create("http://127.0.0.1:" + port + "/tryst/api/nonexistent-route"))
+                .GET().build();
+        HttpResponse<String> res1 = httpClient.send(req1, HttpResponse.BodyHandlers.ofString());
+        assertEquals(404, res1.statusCode(), "Unhandled /tryst/api endpoint must return HTTP 404");
+        assertTrue(res1.headers().firstValue("Content-Type").orElse("").contains("application/json"),
+                "Unhandled API route must return JSON, not HTML");
+        assertTrue(res1.body().contains("\"error\": \"Not Found\""));
+
+        // 2. Unhandled route under /api/...
+        HttpRequest req2 = HttpRequest.newBuilder()
+                .uri(URI.create("http://127.0.0.1:" + port + "/api/nonexistent-route"))
+                .GET().build();
+        HttpResponse<String> res2 = httpClient.send(req2, HttpResponse.BodyHandlers.ofString());
+        assertEquals(404, res2.statusCode(), "Unhandled /api endpoint must return HTTP 404");
+        assertTrue(res2.headers().firstValue("Content-Type").orElse("").contains("application/json"));
+    }
+
+    @Test
+    void testClientIpResolutionWithXForwardedFor() throws Exception {
+        httpServer = new TrystHttpServer("127.0.0.1", 0, null);
+        httpServer.setPhase4Dependencies(
+                authenticationService, userRepository, sessionRepository,
+                null, null, null, null, null, null, null, null, null,
+                configurationService, databaseManager, null, null
+        );
+        httpServer.start();
+
+        int port = httpServer.getPort();
+
+        HttpRequest req = HttpRequest.newBuilder()
+                .uri(URI.create("http://127.0.0.1:" + port + "/tryst/api/status"))
+                .header("X-Forwarded-For", "203.0.113.195, 10.0.0.1")
+                .GET().build();
+        HttpResponse<String> res = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, res.statusCode());
+        assertTrue(res.body().contains("\"status\": \"UP\""));
+    }
+
+    @Test
+    void testAppHtmlContextBaseAndApiUrlGuards() throws Exception {
+        httpServer = new TrystHttpServer("127.0.0.1", 0, null);
+        httpServer.setPhase4Dependencies(
+                authenticationService, userRepository, sessionRepository,
+                null, null, null, null, null, null, null, null, null,
+                configurationService, databaseManager, null, null
+        );
+        httpServer.start();
+
+        int port = httpServer.getPort();
+
+        HttpRequest appReq = HttpRequest.newBuilder()
+                .uri(URI.create("http://127.0.0.1:" + port + "/tryst"))
+                .GET().build();
+        HttpResponse<String> appRes = httpClient.send(appReq, HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, appRes.statusCode());
+        String body = appRes.body();
+
+        // Verify duplicate context path guard exists in getContextBase and apiUrl
+        assertTrue(body.contains("clean.startsWith(base + '/')"), "apiUrl must contain guard preventing duplicate /tryst/tryst prefix");
+        assertTrue(body.contains("apiUrl('/api/integration/evo/config')"), "EVO config fetch must use apiUrl");
+        assertTrue(body.contains("apiUrl('/favicon.ico')"), "Notification icon must use apiUrl");
+    }
+
+    @Test
+    void testTaskCreationAndListingUnderContextPath() throws Exception {
+        eu.kalafatic.tryst.domain.service.WorkspaceService wsService =
+                new eu.kalafatic.tryst.domain.service.WorkspaceService(tempDir.resolve("task_ws"));
+        httpServer = new TrystHttpServer("127.0.0.1", 0, wsService);
+        httpServer.setPhase4Dependencies(
+                authenticationService, userRepository, sessionRepository,
+                null, null, null, null, null, null, null, null, null,
+                configurationService, databaseManager, null, null
+        );
+        httpServer.start();
+
+        int port = httpServer.getPort();
+
+        // Create task via POST /tryst/api/tasks
+        String taskPayload = "{\"title\": \"Context Path Validation Task\", \"description\": \"Verify routing under /tryst\"}";
+        HttpRequest postTaskReq = HttpRequest.newBuilder()
+                .uri(URI.create("http://127.0.0.1:" + port + "/tryst/api/tasks"))
+                .header("Content-Type", "application/json")
+                .header("X-User-Id", "admin")
+                .POST(HttpRequest.BodyPublishers.ofString(taskPayload))
+                .build();
+        HttpResponse<String> postRes = httpClient.send(postTaskReq, HttpResponse.BodyHandlers.ofString());
+        assertEquals(201, postRes.statusCode(), "Task creation under /tryst/api/tasks must return 201 Created");
+        assertTrue(postRes.body().contains("Context Path Validation Task"));
+
+        // List tasks via GET /tryst/api/tasks
+        HttpRequest getTasksReq = HttpRequest.newBuilder()
+                .uri(URI.create("http://127.0.0.1:" + port + "/tryst/api/tasks"))
+                .GET().build();
+        HttpResponse<String> getRes = httpClient.send(getTasksReq, HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, getRes.statusCode(), "Listing tasks under /tryst/api/tasks must return 200 OK");
+        assertTrue(getRes.body().contains("Context Path Validation Task"));
+    }
 }

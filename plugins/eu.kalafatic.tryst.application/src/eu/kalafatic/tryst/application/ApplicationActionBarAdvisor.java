@@ -59,7 +59,7 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
         showViewMenuAction = ActionFactory.SHOW_VIEW_MENU.create(window);
         register(showViewMenuAction);
 
-        openWebBrowserAction = new Action("Open TRYST Web Client (localhost/tryst)") {
+        openWebBrowserAction = new Action("Open TRYST Web Client") {
             @Override
             public void run() {
                 String url = resolveWebUrl();
@@ -166,14 +166,21 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
             var reg = coord.getConfigurationService().getEndpointRegistry();
             if (reg != null && reg.getCurrentEndpoint() != null) {
                 var ep = reg.getCurrentEndpoint();
-                if (ep.canonicalUrl() != null && !ep.canonicalUrl().isBlank()) return ep.canonicalUrl();
                 if (ep.externalUrl() != null && !ep.externalUrl().isBlank()) return ep.externalUrl();
+                if (ep.internalUrl() != null && !ep.internalUrl().isBlank()) return ep.internalUrl();
+                if (ep.canonicalUrl() != null && !ep.canonicalUrl().isBlank()) return ep.canonicalUrl();
             }
-            if (coord.getConfiguration() != null && coord.getConfiguration().canonicalUrl() != null) {
-                return coord.getConfiguration().canonicalUrl();
+            if (coord.getConfiguration() != null) {
+                var cfg = coord.getConfiguration();
+                if (coord.getHttpService() != null && coord.getHttpService().isRunning()) {
+                    return cfg.resolveEffectiveExternalUrl(coord.getHttpService().getPort());
+                }
+                if (cfg.canonicalUrl() != null) {
+                    return cfg.canonicalUrl();
+                }
             }
         }
-        return "http://localhost/tryst";
+        return "http://127.0.0.1:38080/tryst";
     }
 
     @Override

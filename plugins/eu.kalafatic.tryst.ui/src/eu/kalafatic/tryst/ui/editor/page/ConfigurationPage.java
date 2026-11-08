@@ -39,8 +39,8 @@ public class ConfigurationPage extends AbstractTrystEditorPage {
         portGroup.setLayout(new GridLayout(2, false));
         portGroup.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
 
-        createRow(portGroup, "HTTP Port (Preferred 38080):");
-        lblHttpPort = createValueLabel(portGroup, "38080 (Decoupled from 80/tryst)");
+        createRow(portGroup, "HTTP Listener Port:");
+        lblHttpPort = createValueLabel(portGroup, "38080");
 
         createRow(portGroup, "API Listener Port:");
         lblApiPort = createValueLabel(portGroup, "38180");
@@ -90,7 +90,9 @@ public class ConfigurationPage extends AbstractTrystEditorPage {
 
         ApplicationConfiguration config = TrystUiServices.getConfiguration();
         if (config != null) {
-            lblHttpPort.setText(String.valueOf(config.httpPort()));
+            var http = TrystUiServices.getHttpService();
+            int port = (http != null && http.isRunning()) ? http.getPort() : config.httpPort();
+            lblHttpPort.setText(String.valueOf(port));
             lblApiPort.setText(String.valueOf(config.tcpPort()));
         }
 
