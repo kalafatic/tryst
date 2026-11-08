@@ -84,6 +84,12 @@ public class PortPersistence {
                         } else if (ServicePortIdentifier.WEBSOCKET_SERVICE.equals(serviceId)) {
                             assignedPort = PortAllocationGroup.DEFAULT_TRYST_WS_PORT + offset;
                             defaultPort = PortAllocationGroup.DEFAULT_TRYST_WS_PORT;
+                        } else if (ServicePortIdentifier.AUXILIARY_SERVICE.equals(serviceId)) {
+                            assignedPort = PortAllocationGroup.DEFAULT_TRYST_AUX_PORT + offset;
+                            defaultPort = PortAllocationGroup.DEFAULT_TRYST_AUX_PORT;
+                        } else if (ServicePortIdentifier.DEBUG_SERVICE.equals(serviceId)) {
+                            assignedPort = PortAllocationGroup.DEFAULT_TRYST_DEBUG_PORT + offset;
+                            defaultPort = PortAllocationGroup.DEFAULT_TRYST_DEBUG_PORT;
                         } else {
                             assignedPort = PortAllocationGroup.TRYST_BASE_OFFSET + assignedPort;
                             defaultPort = PortAllocationGroup.TRYST_BASE_OFFSET + defaultPort;

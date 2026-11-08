@@ -8,5 +8,7 @@ public enum PortProtocol {
     API,
     TCP,
     MANAGEMENT,
-    WEBSOCKET
+    WEBSOCKET,
+    AUXILIARY,
+    DEBUG
 }

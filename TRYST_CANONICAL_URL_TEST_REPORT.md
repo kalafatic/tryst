@@ -14,7 +14,7 @@ Verification of canonical URL `/tryst` routing, dynamic port fallback, reverse p
 | **Cookie Session Login** | `POST http://127.0.0.1:<port>/tryst/api/auth/login` | **PASSED** | Returns 200 OK and `Set-Cookie: tryst_session=...; Path=/tryst; HttpOnly` |
 | **Cookie Session Request** | `GET http://127.0.0.1:<port>/tryst/api/auth/me` with cookie | **PASSED** | Authenticates without Authorization Bearer header |
 | **Cookie Session Logout** | `POST http://127.0.0.1:<port>/tryst/api/auth/logout` | **PASSED** | Clears session cookie (`Max-Age=0`) and revokes session |
-| **Port 80 Fallback Handling** | Bind preferred port 80 as non-root | **PASSED** | Logs diagnostic warning and dynamically binds 8080-8180 while publishing `canonicalUrl = http://localhost/tryst` |
+| **Port 80 Fallback Handling** | Bind preferred port 80 as non-root | **PASSED** | Logs diagnostic warning and dynamically binds 38080-38580 (migrated from legacy 8080) while publishing `canonicalUrl = http://localhost/tryst` |
 | **Reverse Proxy Resolution** | `withDynamicNetworking(..., "https://dev.kalafatic.eu/tryst", true)` | **PASSED** | `resolveEffectiveExternalUrl()` returns configured public URL |
 | **RCP Embedded Browser** | `EmbeddedBrowserView.resolveBestUrl()` | **PASSED** | Navigates directly to canonical or effective external URL |
 
