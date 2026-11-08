@@ -72,8 +72,8 @@ Authoritative locations:
 - `maxRetryAttempts`: `3`
 - `secureSandboxEnabled`: `true`
 - `serverHost`: `"127.0.0.1"`
-- `httpPort`: `8080`
-- `tcpPort`: `9090`
+- `httpPort`: `38080` (authoritative default, migrated from legacy 8080)
+- `tcpPort`: `38280` (authoritative default, migrated from legacy 9090/8280)
 
 ### 3.3 Dynamic Changes & Listeners
 `ConfigurationService` provides `updateConfiguration(ApplicationConfiguration)` which saves changes back to `tryst.properties` and notifies registered `Consumer<ApplicationConfiguration>` listeners via copy-on-write callbacks.

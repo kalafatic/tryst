@@ -31,25 +31,30 @@ public record PortAllocationGroup(
         Instant allocationTimestamp,
         Map<String, PortConfiguration> configurations
 ) {
-    public static final int TRYST_BASE_OFFSET = 30000;
-    public static final int SERVICE_PORT_SPACING = 100;
+    public static final int TRYST_BASE_OFFSET = ServicePortIdentifier.BASE_OFFSET;
+    public static final int SERVICE_PORT_SPACING = ServicePortIdentifier.SERVICE_PORT_SPACING;
 
-    public static final int DEFAULT_BASE_HTTP_PORT = 8080;
-    public static final int DEFAULT_BASE_API_PORT = 8180;
-    public static final int DEFAULT_BASE_TCP_PORT = 8280;
-    public static final int DEFAULT_BASE_MANAGEMENT_PORT = 8380;
-    public static final int DEFAULT_BASE_WEBSOCKET_PORT = 8480;
+    public static final int DEFAULT_BASE_HTTP_PORT = ServicePortIdentifier.DEFAULT_BASE_HTTP_PORT;
+    public static final int DEFAULT_BASE_API_PORT = ServicePortIdentifier.DEFAULT_BASE_API_PORT;
+    public static final int DEFAULT_BASE_TCP_PORT = ServicePortIdentifier.DEFAULT_BASE_TCP_PORT;
+    public static final int DEFAULT_BASE_MANAGEMENT_PORT = ServicePortIdentifier.DEFAULT_BASE_MANAGEMENT_PORT;
+    public static final int DEFAULT_BASE_WEBSOCKET_PORT = ServicePortIdentifier.DEFAULT_BASE_WEBSOCKET_PORT;
+    public static final int DEFAULT_BASE_AUXILIARY_PORT = ServicePortIdentifier.DEFAULT_BASE_AUXILIARY_PORT;
+    public static final int DEFAULT_BASE_DEBUG_PORT = ServicePortIdentifier.DEFAULT_BASE_DEBUG_PORT;
 
-    public static final int DEFAULT_TRYST_HTTP_PORT = TRYST_BASE_OFFSET + DEFAULT_BASE_HTTP_PORT; // 38080
-    public static final int DEFAULT_TRYST_API_PORT = TRYST_BASE_OFFSET + DEFAULT_BASE_API_PORT;   // 38180
-    public static final int DEFAULT_TRYST_TCP_PORT = TRYST_BASE_OFFSET + DEFAULT_BASE_TCP_PORT;   // 38280
-    public static final int DEFAULT_TRYST_MGMT_PORT = TRYST_BASE_OFFSET + DEFAULT_BASE_MANAGEMENT_PORT; // 38380
-    public static final int DEFAULT_TRYST_WS_PORT = TRYST_BASE_OFFSET + DEFAULT_BASE_WEBSOCKET_PORT;   // 38480
+    public static final int DEFAULT_TRYST_HTTP_PORT = ServicePortIdentifier.DEFAULT_HTTP_PORT; // 38080
+    public static final int DEFAULT_TRYST_API_PORT = ServicePortIdentifier.DEFAULT_API_PORT;   // 38180
+    public static final int DEFAULT_TRYST_TCP_PORT = ServicePortIdentifier.DEFAULT_TCP_PORT;   // 38280
+    public static final int DEFAULT_TRYST_MGMT_PORT = ServicePortIdentifier.DEFAULT_MANAGEMENT_PORT; // 38380
+    public static final int DEFAULT_TRYST_WS_PORT = ServicePortIdentifier.DEFAULT_WEBSOCKET_PORT;   // 38480
+    public static final int DEFAULT_TRYST_AUX_PORT = ServicePortIdentifier.DEFAULT_AUXILIARY_PORT; // 38580
+    public static final int DEFAULT_TRYST_DEBUG_PORT = ServicePortIdentifier.DEFAULT_DEBUG_PORT;   // 38680
 
     public PortAllocationGroup {
         Objects.requireNonNull(bindingAddress, "bindingAddress must not be null");
         Objects.requireNonNull(allocationTimestamp, "allocationTimestamp must not be null");
         if (configurations != null) {
+            java.util.HashSet<Integer> seenPorts = new java.util.HashSet<>();
             for (Map.Entry<String, PortConfiguration> entry : configurations.entrySet()) {
                 int assignedPort = entry.getValue().assignedPort();
                 if (assignedPort == 8080) {
@@ -57,6 +62,9 @@ public record PortAllocationGroup(
                 }
                 if (assignedPort >= 8080 && assignedPort <= 8500) {
                     throw new IllegalArgumentException("Ports in EVO range (8080-8500) are forbidden for TRYST service: " + entry.getKey() + " (port: " + assignedPort + ")");
+                }
+                if (!seenPorts.add(assignedPort)) {
+                    throw new IllegalArgumentException("Duplicate port allocation detected in PortAllocationGroup: port " + assignedPort + " is assigned to multiple services.");
                 }
             }
         }
@@ -126,6 +134,28 @@ public record PortAllocationGroup(
                 1,
                 now
         ));
+        map.put(ServicePortIdentifier.AUXILIARY_SERVICE, new PortConfiguration(
+                ServicePortIdentifier.AUXILIARY_SERVICE,
+                DEFAULT_TRYST_AUX_PORT,
+                DEFAULT_TRYST_AUX_PORT,
+                0,
+                PortProtocol.AUXILIARY,
+                host,
+                true,
+                1,
+                now
+        ));
+        map.put(ServicePortIdentifier.DEBUG_SERVICE, new PortConfiguration(
+                ServicePortIdentifier.DEBUG_SERVICE,
+                DEFAULT_TRYST_DEBUG_PORT,
+                DEFAULT_TRYST_DEBUG_PORT,
+                0,
+                PortProtocol.DEBUG,
+                host,
+                true,
+                1,
+                now
+        ));
 
         return new PortAllocationGroup(TRYST_BASE_OFFSET, 0, host, 1, now, map);
     }
@@ -143,6 +173,8 @@ public record PortAllocationGroup(
         int tcpAssigned = DEFAULT_TRYST_TCP_PORT + newGroupOffset;
         int mgmtAssigned = DEFAULT_TRYST_MGMT_PORT + newGroupOffset;
         int wsAssigned = DEFAULT_TRYST_WS_PORT + newGroupOffset;
+        int auxAssigned = DEFAULT_TRYST_AUX_PORT + newGroupOffset;
+        int debugAssigned = DEFAULT_TRYST_DEBUG_PORT + newGroupOffset;
 
         shifted.put(ServicePortIdentifier.HTTP_SERVICE, new PortConfiguration(
                 ServicePortIdentifier.HTTP_SERVICE, DEFAULT_TRYST_HTTP_PORT, httpAssigned, newGroupOffset, PortProtocol.HTTP, bindingAddress, true, configurationVersion + 1, now
@@ -158,6 +190,12 @@ public record PortAllocationGroup(
         ));
         shifted.put(ServicePortIdentifier.WEBSOCKET_SERVICE, new PortConfiguration(
                 ServicePortIdentifier.WEBSOCKET_SERVICE, DEFAULT_TRYST_WS_PORT, wsAssigned, newGroupOffset, PortProtocol.WEBSOCKET, bindingAddress, true, configurationVersion + 1, now
+        ));
+        shifted.put(ServicePortIdentifier.AUXILIARY_SERVICE, new PortConfiguration(
+                ServicePortIdentifier.AUXILIARY_SERVICE, DEFAULT_TRYST_AUX_PORT, auxAssigned, newGroupOffset, PortProtocol.AUXILIARY, bindingAddress, true, configurationVersion + 1, now
+        ));
+        shifted.put(ServicePortIdentifier.DEBUG_SERVICE, new PortConfiguration(
+                ServicePortIdentifier.DEBUG_SERVICE, DEFAULT_TRYST_DEBUG_PORT, debugAssigned, newGroupOffset, PortProtocol.DEBUG, bindingAddress, true, configurationVersion + 1, now
         ));
 
         return new PortAllocationGroup(baseOffset, newGroupOffset, bindingAddress, configurationVersion + 1, now, shifted);

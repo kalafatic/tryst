@@ -38,17 +38,24 @@ public class PortManagementSubsystemTest {
         int mgmt = group.getPort(ServicePortIdentifier.MANAGEMENT_SERVICE);
         int ws = group.getPort(ServicePortIdentifier.WEBSOCKET_SERVICE);
 
+        int aux = group.getPort(ServicePortIdentifier.AUXILIARY_SERVICE);
+        int debug = group.getPort(ServicePortIdentifier.DEBUG_SERVICE);
+
         assertEquals(38080, http, "HTTP default port must be 38080");
         assertEquals(38180, api, "API default port must be 38180");
         assertEquals(38280, tcp, "TCP default port must be 38280");
         assertEquals(38380, mgmt, "Management default port must be 38380");
         assertEquals(38480, ws, "WebSocket default port must be 38480");
+        assertEquals(38580, aux, "Auxiliary default port must be 38580");
+        assertEquals(38680, debug, "Debug default port must be 38680");
 
         // Verify 100-port spacing between services
         assertEquals(100, api - http);
         assertEquals(100, tcp - api);
         assertEquals(100, mgmt - tcp);
         assertEquals(100, ws - mgmt);
+        assertEquals(100, aux - ws);
+        assertEquals(100, debug - aux);
     }
 
     @Test
@@ -62,6 +69,8 @@ public class PortManagementSubsystemTest {
         assertEquals(38380, shifted.getPort(ServicePortIdentifier.TCP_SERVICE));
         assertEquals(38480, shifted.getPort(ServicePortIdentifier.MANAGEMENT_SERVICE));
         assertEquals(38580, shifted.getPort(ServicePortIdentifier.WEBSOCKET_SERVICE));
+        assertEquals(38680, shifted.getPort(ServicePortIdentifier.AUXILIARY_SERVICE));
+        assertEquals(38780, shifted.getPort(ServicePortIdentifier.DEBUG_SERVICE));
 
         // Spacing preserved
         int http = shifted.getPort(ServicePortIdentifier.HTTP_SERVICE);
@@ -69,11 +78,15 @@ public class PortManagementSubsystemTest {
         int tcp = shifted.getPort(ServicePortIdentifier.TCP_SERVICE);
         int mgmt = shifted.getPort(ServicePortIdentifier.MANAGEMENT_SERVICE);
         int ws = shifted.getPort(ServicePortIdentifier.WEBSOCKET_SERVICE);
+        int aux = shifted.getPort(ServicePortIdentifier.AUXILIARY_SERVICE);
+        int debug = shifted.getPort(ServicePortIdentifier.DEBUG_SERVICE);
 
         assertEquals(100, api - http);
         assertEquals(100, tcp - api);
         assertEquals(100, mgmt - tcp);
         assertEquals(100, ws - mgmt);
+        assertEquals(100, aux - ws);
+        assertEquals(100, debug - aux);
     }
 
     @Test
@@ -185,6 +198,53 @@ public class PortManagementSubsystemTest {
         assertNotNull(group);
         assertEquals(38080, group.getPort(ServicePortIdentifier.HTTP_SERVICE));
         assertEquals(38280, group.getPort(ServicePortIdentifier.TCP_SERVICE));
+    }
+
+    @Test
+    void testDuplicatePortAssignmentRejection() {
+        assertThrows(IllegalArgumentException.class, () -> {
+            new PortAllocationGroup(
+                    30000, 0, "127.0.0.1", 1, java.time.Instant.now(),
+                    java.util.Map.of(
+                            ServicePortIdentifier.HTTP_SERVICE, new PortConfiguration(
+                                    ServicePortIdentifier.HTTP_SERVICE, 38080, 38080, 0, PortProtocol.HTTP, "127.0.0.1", true, 1, java.time.Instant.now()
+                            ),
+                            ServicePortIdentifier.API_SERVICE, new PortConfiguration(
+                                    ServicePortIdentifier.API_SERVICE, 38180, 38080, 0, PortProtocol.API, "127.0.0.1", true, 1, java.time.Instant.now()
+                            )
+                    )
+            );
+        });
+    }
+
+    @Test
+    void testConcurrentPortAllocationThreadSafety() throws InterruptedException {
+        PortPersistence persistence = new PortPersistence(tempDir.resolve("concurrent-alloc"));
+        PortConflictResolver resolver = new PortConflictResolver();
+        PortAvailabilityChecker checker = new PortAvailabilityChecker();
+        PortAllocationManager manager = new PortAllocationManager(persistence, resolver, checker);
+
+        int threadCount = 8;
+        java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newFixedThreadPool(threadCount);
+        java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(threadCount);
+        java.util.concurrent.atomic.AtomicInteger successCount = new java.util.concurrent.atomic.AtomicInteger(0);
+
+        for (int i = 0; i < threadCount; i++) {
+            executor.submit(() -> {
+                try {
+                    PortAllocationGroup group = manager.resolveAllocations("127.0.0.1", null);
+                    if (group != null && group.getPort(ServicePortIdentifier.HTTP_SERVICE) >= 30000) {
+                        successCount.incrementAndGet();
+                    }
+                } finally {
+                    latch.countDown();
+                }
+            });
+        }
+
+        assertTrue(latch.await(5, java.util.concurrent.TimeUnit.SECONDS));
+        executor.shutdown();
+        assertEquals(threadCount, successCount.get());
     }
 
     @Test
