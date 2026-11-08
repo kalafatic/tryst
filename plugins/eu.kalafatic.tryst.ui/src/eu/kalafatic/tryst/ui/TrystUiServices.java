@@ -294,10 +294,21 @@ public final class TrystUiServices {
     }
 
     public static eu.kalafatic.tryst.core.server.TrystServerLifecycleService getServerLifecycleService() {
+        var appCoord = eu.kalafatic.tryst.application.TrystApplication.getCoordinator();
+        if (appCoord != null) {
+            return appCoord;
+        }
         return getService(eu.kalafatic.tryst.core.server.TrystServerLifecycleService.class);
     }
 
     public static eu.kalafatic.tryst.core.server.TrystHttpService getHttpService() {
+        var appCoord = eu.kalafatic.tryst.application.TrystApplication.getCoordinator();
+        if (appCoord != null) {
+            var s = appCoord.getHttpService();
+            if (s != null && s.isRunning()) {
+                return s;
+            }
+        }
         var lifecycle = getServerLifecycleService();
         if (lifecycle != null) {
             var s = lifecycle.getHttpService();
@@ -313,6 +324,10 @@ public final class TrystUiServices {
     }
 
     public static eu.kalafatic.tryst.core.server.TrystTcpService getTcpService() {
+        var appCoord = eu.kalafatic.tryst.application.TrystApplication.getCoordinator();
+        if (appCoord != null && appCoord.getTcpService() != null) {
+            return appCoord.getTcpService();
+        }
         return getService(eu.kalafatic.tryst.core.server.TrystTcpService.class);
     }
 
@@ -320,6 +335,11 @@ public final class TrystUiServices {
      * Triggers real HTTP server startup through the authoritative server lifecycle service.
      */
     public static synchronized eu.kalafatic.tryst.core.server.TrystHttpService startHttpServer() throws Exception {
+        var appCoord = eu.kalafatic.tryst.application.TrystApplication.getCoordinator();
+        if (appCoord != null) {
+            return appCoord.startHttpServer();
+        }
+
         var lifecycle = getServerLifecycleService();
         if (lifecycle != null) {
             return lifecycle.startHttpServer();
@@ -333,13 +353,19 @@ public final class TrystUiServices {
             return current;
         }
 
-        throw new IllegalStateException("Server lifecycle service is not available in the OSGi runtime. Cannot start HTTP server.");
+        throw new IllegalStateException("Server lifecycle service is not available. Cannot start HTTP server.");
     }
 
     /**
      * Triggers real HTTP server shutdown through the authoritative server lifecycle service.
      */
     public static synchronized void stopHttpServer() throws Exception {
+        var appCoord = eu.kalafatic.tryst.application.TrystApplication.getCoordinator();
+        if (appCoord != null) {
+            appCoord.stopHttpServer();
+            return;
+        }
+
         var lifecycle = getServerLifecycleService();
         if (lifecycle != null) {
             lifecycle.stopHttpServer();
@@ -355,6 +381,11 @@ public final class TrystUiServices {
      * Triggers real HTTP server restart through the authoritative server lifecycle service.
      */
     public static synchronized eu.kalafatic.tryst.core.server.TrystHttpService restartHttpServer() throws Exception {
+        var appCoord = eu.kalafatic.tryst.application.TrystApplication.getCoordinator();
+        if (appCoord != null) {
+            return appCoord.restartHttpServer();
+        }
+
         var lifecycle = getServerLifecycleService();
         if (lifecycle != null) {
             return lifecycle.restartHttpServer();

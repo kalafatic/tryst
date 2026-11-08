@@ -27,6 +27,10 @@ public class ApplicationWorkbenchAdvisor extends WorkbenchAdvisor {
     }
 
     private static ApplicationLifecycleCoordinator resolveCoordinator() {
+        ApplicationLifecycleCoordinator coord = TrystApplication.getCoordinator();
+        if (coord != null) {
+            return coord;
+        }
         TrystApplicationPlugin plugin = TrystApplicationPlugin.getDefault();
         if (plugin != null) {
             return plugin.getLifecycleCoordinator();
@@ -67,6 +71,13 @@ public class ApplicationWorkbenchAdvisor extends WorkbenchAdvisor {
                 coordinator.transitionTo(ApplicationLifecycleStage.CORE_SERVICE_INITIALIZATION);
             }
             coordinator.transitionTo(ApplicationLifecycleStage.APPLICATION_READY);
+            if (!coordinator.isHttpServerRunning()) {
+                try {
+                    coordinator.startHttpServer();
+                } catch (Exception e) {
+                    TrystLog.error(ApplicationWorkbenchAdvisor.class, "Failed to start HTTP server during fallback initialization: " + e.getMessage(), e);
+                }
+            }
             TrystLog.info(ApplicationWorkbenchAdvisor.class, "Fallback Core service initialization complete. Application is READY.");
         }
     }

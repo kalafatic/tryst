@@ -15,8 +15,34 @@ import org.eclipse.ui.PlatformUI;
  */
 public class TrystApplication implements IApplication {
 
+    private static volatile TrystApplication instance;
+    private static volatile ApplicationLifecycleCoordinator coordinator;
+
     private final TrystServerApplication headlessDelegate = new TrystServerApplication();
     private volatile boolean isHeadlessMode = false;
+
+    public static TrystApplication getInstance() {
+        return instance;
+    }
+
+    public static ApplicationLifecycleCoordinator getCoordinator() {
+        if (coordinator == null) {
+            TrystApplicationPlugin plugin = TrystApplicationPlugin.getDefault();
+            if (plugin != null) {
+                coordinator = plugin.getLifecycleCoordinator();
+            }
+        }
+        return coordinator;
+    }
+
+    public static eu.kalafatic.tryst.core.server.TrystHttpService getHttpService() {
+        ApplicationLifecycleCoordinator coord = getCoordinator();
+        return coord != null ? coord.getHttpService() : null;
+    }
+
+    public static void setCoordinator(ApplicationLifecycleCoordinator coord) {
+        coordinator = coord;
+    }
 
     public static boolean isHeadlessRequested(IApplicationContext context) {
         // 1. Check system properties
@@ -41,10 +67,15 @@ public class TrystApplication implements IApplication {
 
     @Override
     public Object start(IApplicationContext context) throws Exception {
+        instance = this;
         this.isHeadlessMode = isHeadlessRequested(context);
 
         TrystApplicationPlugin plugin = TrystApplicationPlugin.getDefault();
-        ApplicationLifecycleCoordinator coordinator = (plugin != null) ? plugin.getLifecycleCoordinator() : null;
+        ApplicationLifecycleCoordinator coord = (plugin != null) ? plugin.getLifecycleCoordinator() : null;
+        if (coord == null) {
+            coord = new ApplicationLifecycleCoordinator();
+        }
+        coordinator = coord;
 
         if (isHeadlessMode) {
             TrystLog.info(TrystApplication.class, "Startup Mode: HEADLESS (bypassing SWT Display and Workbench)");
@@ -59,13 +90,25 @@ public class TrystApplication implements IApplication {
         TrystLog.info(TrystApplication.class, "=======================================================");
 
         try {
-            if (coordinator != null) {
+            if (coordinator.getCurrentStage().ordinal() < ApplicationLifecycleStage.PLATFORM_INITIALIZATION.ordinal()) {
                 coordinator.transitionTo(ApplicationLifecycleStage.PLATFORM_INITIALIZATION);
-                coordinator.transitionTo(ApplicationLifecycleStage.CONFIGURATION_INITIALIZATION);
-                coordinator.transitionTo(ApplicationLifecycleStage.CORE_SERVICE_INITIALIZATION);
-                coordinator.transitionTo(ApplicationLifecycleStage.APPLICATION_READY);
-                TrystLog.info(TrystApplication.class, "TRYST Core Initialization complete. Ready for SWT Display creation.");
             }
+            if (coordinator.getCurrentStage().ordinal() < ApplicationLifecycleStage.CONFIGURATION_INITIALIZATION.ordinal()) {
+                coordinator.transitionTo(ApplicationLifecycleStage.CONFIGURATION_INITIALIZATION);
+            }
+            if (coordinator.getCurrentStage().ordinal() < ApplicationLifecycleStage.CORE_SERVICE_INITIALIZATION.ordinal()) {
+                coordinator.transitionTo(ApplicationLifecycleStage.CORE_SERVICE_INITIALIZATION);
+            }
+            if (coordinator.getCurrentStage().ordinal() < ApplicationLifecycleStage.APPLICATION_READY.ordinal()) {
+                coordinator.transitionTo(ApplicationLifecycleStage.APPLICATION_READY);
+            }
+
+            // Ensure embedded HTTP server is started directly on the configured host & port
+            if (!coordinator.isHttpServerRunning()) {
+                coordinator.startHttpServer();
+            }
+
+            TrystLog.info(TrystApplication.class, "TRYST Core Initialization complete. Ready for SWT Display creation.");
 
             Display display = PlatformUI.createDisplay();
             try {
@@ -80,6 +123,13 @@ public class TrystApplication implements IApplication {
         } catch (Throwable t) {
             TrystLog.error(TrystApplication.class, "Fatal error during TRYST startup: " + t.getMessage(), t);
             throw t;
+        } finally {
+            if (coordinator != null && coordinator.isHttpServerRunning()) {
+                try {
+                    coordinator.stopHttpServer();
+                } catch (Throwable ignored) {
+                }
+            }
         }
     }
 
@@ -88,6 +138,12 @@ public class TrystApplication implements IApplication {
         if (isHeadlessMode) {
             headlessDelegate.stop();
             return;
+        }
+        if (coordinator != null && coordinator.isHttpServerRunning()) {
+            try {
+                coordinator.stopHttpServer();
+            } catch (Throwable ignored) {
+            }
         }
         if (!PlatformUI.isWorkbenchRunning()) {
             return;
