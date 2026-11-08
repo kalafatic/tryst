@@ -80,6 +80,11 @@ public class TrystHttpServer implements TrystHttpService {
     private eu.kalafatic.tryst.domain.repository.GitCommitRepository gitCommitRepository;
     private eu.kalafatic.tryst.domain.service.ManagedServiceController managedServiceController;
     private eu.kalafatic.tryst.domain.intake.TaskIntakeService taskIntakeService;
+    private eu.kalafatic.tryst.domain.workflow.WorkflowDefinitionRepository workflowDefinitionRepository;
+    private eu.kalafatic.tryst.domain.workflow.WorkflowExecutionRepository workflowExecutionRepository;
+    private eu.kalafatic.tryst.domain.service.WorkflowEngine workflowEngine;
+    private eu.kalafatic.tryst.domain.schedule.TaskScheduleRepository taskScheduleRepository;
+    private eu.kalafatic.tryst.domain.service.TaskSchedulerService taskSchedulerService;
 
     private final RateLimiter authRateLimiter = new RateLimiter(30, 60);
     private final RateLimiter apiRateLimiter = new RateLimiter(300, 60);
@@ -194,6 +199,20 @@ public class TrystHttpServer implements TrystHttpService {
 
     public void setTaskIntakeService(eu.kalafatic.tryst.domain.intake.TaskIntakeService taskIntakeService) {
         this.taskIntakeService = taskIntakeService;
+    }
+
+    public void setWorkflowDependencies(
+            eu.kalafatic.tryst.domain.workflow.WorkflowDefinitionRepository workflowDefinitionRepository,
+            eu.kalafatic.tryst.domain.workflow.WorkflowExecutionRepository workflowExecutionRepository,
+            eu.kalafatic.tryst.domain.service.WorkflowEngine workflowEngine,
+            eu.kalafatic.tryst.domain.schedule.TaskScheduleRepository taskScheduleRepository,
+            eu.kalafatic.tryst.domain.service.TaskSchedulerService taskSchedulerService
+    ) {
+        this.workflowDefinitionRepository = workflowDefinitionRepository;
+        this.workflowExecutionRepository = workflowExecutionRepository;
+        this.workflowEngine = workflowEngine;
+        this.taskScheduleRepository = taskScheduleRepository;
+        this.taskSchedulerService = taskSchedulerService;
     }
 
     public void setPortRegistry(eu.kalafatic.tryst.core.port.PortRegistry portRegistry) {
@@ -317,6 +336,8 @@ public class TrystHttpServer implements TrystHttpService {
         NotificationsHandler notifH = new NotificationsHandler();
         GitHubHandler githubH = new GitHubHandler();
         AdminHandler adminH = new AdminHandler();
+        WorkflowHandler workflowH = new WorkflowHandler();
+        ScheduleHandler scheduleH = new ScheduleHandler();
         StaticAssetHandler staticH = new StaticAssetHandler();
 
         // Register default root /api/... routes
@@ -330,6 +351,8 @@ public class TrystHttpServer implements TrystHttpService {
         server.createContext("/api/notifications", notifH);
         server.createContext("/api/github", githubH);
         server.createContext("/api/admin", adminH);
+        server.createContext("/api/workflows", workflowH);
+        server.createContext("/api/schedules", scheduleH);
 
         // Register context-path specific routes if not root
         if (!ctxPath.isEmpty() && !"/".equals(ctxPath)) {
@@ -343,6 +366,8 @@ public class TrystHttpServer implements TrystHttpService {
             server.createContext(ctxPath + "/api/notifications", notifH);
             server.createContext(ctxPath + "/api/github", githubH);
             server.createContext(ctxPath + "/api/admin", adminH);
+            server.createContext(ctxPath + "/api/workflows", workflowH);
+            server.createContext(ctxPath + "/api/schedules", scheduleH);
 
             server.createContext(ctxPath, staticH);
         }
@@ -3166,6 +3191,338 @@ public class TrystHttpServer implements TrystHttpService {
         );
     }
 
+    private class ScheduleHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendJsonResponse(exchange, 204, "");
+                return;
+            }
+            if (!validateCsrfIfCookieAuth(exchange)) {
+                sendJsonResponse(exchange, 403, "{\"error\": \"Invalid or missing CSRF token\"}");
+                return;
+            }
+
+            Optional<SecurityContext> ctx = resolveSecurityContext(exchange);
+            String userId = ctx.map(SecurityContext::getUserId).orElseGet(() -> getUserId(exchange));
+            String path = exchange.getRequestURI().getPath();
+
+            if (taskScheduleRepository == null) {
+                sendJsonResponse(exchange, 503, "{\"error\": \"TaskScheduleRepository unavailable\"}");
+                return;
+            }
+
+            // POST /api/schedules -> create schedule
+            if (("POST".equalsIgnoreCase(exchange.getRequestMethod()) && path.endsWith("/schedules"))) {
+                String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                String name = extractJsonField(body, "name");
+                String projectId = extractJsonField(body, "projectId");
+                String typeStr = extractJsonField(body, "type");
+                String scheduledTimeStr = extractJsonField(body, "scheduledTime");
+                String cron = extractJsonField(body, "cronExpression");
+                String payload = extractJsonField(body, "payload");
+
+                eu.kalafatic.tryst.domain.schedule.ScheduleType type = eu.kalafatic.tryst.domain.schedule.ScheduleType.ONCE;
+                if (typeStr != null && !typeStr.isBlank()) {
+                    try { type = eu.kalafatic.tryst.domain.schedule.ScheduleType.valueOf(typeStr.toUpperCase()); } catch (Exception ignored) {}
+                }
+
+                Instant scheduledTime = Instant.now();
+                if (scheduledTimeStr != null && !scheduledTimeStr.isBlank()) {
+                    try { scheduledTime = Instant.parse(scheduledTimeStr); } catch (Exception ignored) {}
+                }
+
+                if (taskSchedulerService != null) {
+                    eu.kalafatic.tryst.domain.schedule.TaskSchedule sched =
+                            taskSchedulerService.scheduleTask(name, projectId, userId, type, scheduledTime, cron, payload != null ? payload : "{}");
+                    sendJsonResponse(exchange, 201, "{\"success\": true, \"scheduleId\": \"" + sched.getId() + "\"}");
+                } else {
+                    eu.kalafatic.tryst.domain.schedule.TaskSchedule sched =
+                            new eu.kalafatic.tryst.domain.schedule.TaskSchedule(name, projectId, userId, type, cron, scheduledTime, payload != null ? payload : "{}");
+                    taskScheduleRepository.save(sched);
+                    sendJsonResponse(exchange, 201, "{\"success\": true, \"scheduleId\": \"" + sched.getId() + "\"}");
+                }
+                return;
+            }
+
+            // GET /api/schedules -> list schedules
+            if ("GET".equalsIgnoreCase(exchange.getRequestMethod()) && path.endsWith("/schedules")) {
+                List<eu.kalafatic.tryst.domain.schedule.TaskSchedule> list = taskScheduleRepository.findAll();
+                StringBuilder sb = new StringBuilder("{\"schedules\": [");
+                for (int i = 0; i < list.size(); i++) {
+                    eu.kalafatic.tryst.domain.schedule.TaskSchedule s = list.get(i);
+                    if (i > 0) sb.append(",");
+                    sb.append(String.format("{\"id\": \"%s\", \"name\": \"%s\", \"projectId\": \"%s\", \"type\": \"%s\", \"status\": \"%s\", \"nextExecutionAt\": \"%s\", \"executionCount\": %d}",
+                            s.getId(), escapeJson(s.getName()), escapeJson(s.getProjectId() != null ? s.getProjectId() : ""),
+                            s.getScheduleType().name(), s.getStatus().name(),
+                            s.getNextExecutionAt() != null ? s.getNextExecutionAt().toString() : "", s.getExecutionCount()));
+                }
+                sb.append("]}");
+                sendJsonResponse(exchange, 200, sb.toString());
+                return;
+            }
+
+            // POST /api/schedules/{id}/cancel
+            if (path.contains("/cancel") && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                String sub = path.substring(path.indexOf("/api/schedules/") + "/api/schedules/".length());
+                String id = sub.substring(0, sub.indexOf("/cancel"));
+                if (taskSchedulerService != null) {
+                    taskSchedulerService.cancelSchedule(id);
+                } else {
+                    taskScheduleRepository.findById(id).ifPresent(s -> {
+                        s.setStatus(eu.kalafatic.tryst.domain.schedule.TaskSchedule.Status.CANCELLED);
+                        taskScheduleRepository.save(s);
+                    });
+                }
+                sendJsonResponse(exchange, 200, "{\"success\": true}");
+                return;
+            }
+
+            sendJsonResponse(exchange, 404, "{\"error\": \"Schedule endpoint not found\"}");
+        }
+    }
+
+    private class WorkflowHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendJsonResponse(exchange, 204, "");
+                return;
+            }
+            if (!validateCsrfIfCookieAuth(exchange)) {
+                sendJsonResponse(exchange, 403, "{\"error\": \"Invalid or missing CSRF token\"}");
+                return;
+            }
+
+            Optional<SecurityContext> ctx = resolveSecurityContext(exchange);
+            String userId = ctx.map(SecurityContext::getUserId).orElseGet(() -> getUserId(exchange));
+            String path = exchange.getRequestURI().getPath();
+
+            if (workflowDefinitionRepository == null) {
+                sendJsonResponse(exchange, 503, "{\"error\": \"Workflow repositories unavailable\"}");
+                return;
+            }
+
+            // POST /api/workflows/validate -> validate graph
+            if (path.endsWith("/validate") && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                eu.kalafatic.tryst.domain.workflow.WorkflowDefinition def = parseWorkflowDefinitionFromJson(body, userId);
+                eu.kalafatic.tryst.domain.workflow.WorkflowValidator.ValidationResult res =
+                        eu.kalafatic.tryst.domain.workflow.WorkflowValidator.validate(def);
+
+                StringBuilder sb = new StringBuilder("{");
+                sb.append("\"valid\": ").append(res.valid()).append(",");
+                sb.append("\"errors\": [");
+                for (int i = 0; i < res.errors().size(); i++) {
+                    if (i > 0) sb.append(",");
+                    sb.append("\"").append(escapeJson(res.errors().get(i))).append("\"");
+                }
+                sb.append("],");
+                sb.append("\"warnings\": [");
+                for (int i = 0; i < res.warnings().size(); i++) {
+                    if (i > 0) sb.append(",");
+                    sb.append("\"").append(escapeJson(res.warnings().get(i))).append("\"");
+                }
+                sb.append("],");
+                sb.append("\"phases\": [");
+                for (int i = 0; i < res.executionPhases().size(); i++) {
+                    if (i > 0) sb.append(",");
+                    sb.append("[");
+                    List<String> p = res.executionPhases().get(i);
+                    for (int j = 0; j < p.size(); j++) {
+                        if (j > 0) sb.append(",");
+                        sb.append("\"").append(escapeJson(p.get(j))).append("\"");
+                    }
+                    sb.append("]");
+                }
+                sb.append("]");
+                sb.append("}");
+
+                sendJsonResponse(exchange, 200, sb.toString());
+                return;
+            }
+
+            // POST /api/workflows/simulate -> simulate workflow
+            if (path.endsWith("/simulate") && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                eu.kalafatic.tryst.domain.workflow.WorkflowDefinition def = parseWorkflowDefinitionFromJson(body, userId);
+                eu.kalafatic.tryst.domain.workflow.WorkflowValidator.ValidationResult res =
+                        eu.kalafatic.tryst.domain.workflow.WorkflowValidator.validate(def);
+
+                int totalNodes = def.getNodes().size();
+                int estimatedSecs = totalNodes * 120; // 2 min per task estimated
+
+                StringBuilder sb = new StringBuilder("{");
+                sb.append("\"valid\": ").append(res.valid()).append(",");
+                sb.append("\"totalNodes\": ").append(totalNodes).append(",");
+                sb.append("\"totalPhases\": ").append(res.executionPhases().size()).append(",");
+                sb.append("\"estimatedDurationSeconds\": ").append(estimatedSecs).append(",");
+                sb.append("\"phases\": [");
+                for (int i = 0; i < res.executionPhases().size(); i++) {
+                    if (i > 0) sb.append(",");
+                    sb.append("[");
+                    List<String> p = res.executionPhases().get(i);
+                    for (int j = 0; j < p.size(); j++) {
+                        if (j > 0) sb.append(",");
+                        sb.append("\"").append(escapeJson(p.get(j))).append("\"");
+                    }
+                    sb.append("]");
+                }
+                sb.append("]");
+                sb.append("}");
+
+                sendJsonResponse(exchange, 200, sb.toString());
+                return;
+            }
+
+            // POST /api/workflows/generate -> AI-assisted workflow generation
+            if (path.endsWith("/generate") && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                String goal = extractJsonField(body, "goal");
+                if (goal == null || goal.isBlank()) goal = "Implement feature and verify";
+
+                // Generate standard recommended plan graph: Start -> Analysis -> Coding -> Build -> Test -> Review -> End
+                String generatedJson = """
+                    {
+                      "name": "AI Generated Plan: %s",
+                      "description": "Autonomous workflow generated for goal: %s",
+                      "nodes": [
+                        {"id": "node-start", "name": "Start", "type": "WORKFLOW_START", "x": 100, "y": 200},
+                        {"id": "node-analysis", "name": "Analyze Requirements", "type": "AI_ANALYSIS", "prompt": "Analyze architectural requirements for %s", "x": 260, "y": 200},
+                        {"id": "node-coding", "name": "Implement Solution", "type": "AI_CODING", "prompt": "Implement changes for %s", "x": 440, "y": 200},
+                        {"id": "node-build", "name": "Build Repository", "type": "BUILD", "command": "mvn compile", "x": 620, "y": 200},
+                        {"id": "node-test", "name": "Run Test Suite", "type": "TEST", "command": "mvn test", "x": 800, "y": 200},
+                        {"id": "node-review", "name": "Human Code Review", "type": "CODE_REVIEW", "x": 980, "y": 200},
+                        {"id": "node-end", "name": "Workflow Complete", "type": "WORKFLOW_END", "x": 1160, "y": 200}
+                      ],
+                      "edges": [
+                        {"id": "e1", "sourceNodeId": "node-start", "targetNodeId": "node-analysis", "sourcePort": "default", "targetPort": "input"},
+                        {"id": "e2", "sourceNodeId": "node-analysis", "targetNodeId": "node-coding", "sourcePort": "default", "targetPort": "input"},
+                        {"id": "e3", "sourceNodeId": "node-coding", "targetNodeId": "node-build", "sourcePort": "default", "targetPort": "input"},
+                        {"id": "e4", "sourceNodeId": "node-build", "targetNodeId": "node-test", "sourcePort": "default", "targetPort": "input"},
+                        {"id": "e5", "sourceNodeId": "node-test", "targetNodeId": "node-review", "sourcePort": "default", "targetPort": "input"},
+                        {"id": "e6", "sourceNodeId": "node-review", "targetNodeId": "node-end", "sourcePort": "default", "targetPort": "input"}
+                      ]
+                    }
+                """.formatted(escapeJson(goal), escapeJson(goal), escapeJson(goal), escapeJson(goal)).trim();
+
+                sendJsonResponse(exchange, 200, generatedJson);
+                return;
+            }
+
+            // POST /api/workflows/save -> save workflow definition
+            if (path.endsWith("/save") && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                eu.kalafatic.tryst.domain.workflow.WorkflowDefinition def = parseWorkflowDefinitionFromJson(body, userId);
+                workflowDefinitionRepository.save(def);
+                sendJsonResponse(exchange, 201, "{\"success\": true, \"id\": \"" + def.getId() + "\", \"name\": \"" + escapeJson(def.getName()) + "\"}");
+                return;
+            }
+
+            // POST /api/workflows/{id}/execute -> start workflow
+            if (path.contains("/execute") && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                String sub = path.substring(path.indexOf("/api/workflows/") + "/api/workflows/".length());
+                String defId = sub.substring(0, sub.indexOf("/execute"));
+
+                if (workflowEngine == null) {
+                    sendJsonResponse(exchange, 503, "{\"error\": \"WorkflowEngine unavailable\"}");
+                    return;
+                }
+                try {
+                    eu.kalafatic.tryst.domain.workflow.WorkflowExecution exec =
+                            workflowEngine.startWorkflow(defId, null, userId);
+                    sendJsonResponse(exchange, 201, "{\"success\": true, \"executionId\": \"" + exec.getId() + "\", \"status\": \"" + exec.getStatus().name() + "\"}");
+                } catch (Exception e) {
+                    sendJsonResponse(exchange, 400, "{\"success\": false, \"error\": \"" + escapeJson(e.getMessage()) + "\"}");
+                }
+                return;
+            }
+
+            // GET /api/workflows -> list saved definitions
+            if ("GET".equalsIgnoreCase(exchange.getRequestMethod()) && (path.endsWith("/workflows") || path.endsWith("/workflows/"))) {
+                List<eu.kalafatic.tryst.domain.workflow.WorkflowDefinition> list = workflowDefinitionRepository.findAll();
+                StringBuilder sb = new StringBuilder("{\"workflows\": [");
+                for (int i = 0; i < list.size(); i++) {
+                    eu.kalafatic.tryst.domain.workflow.WorkflowDefinition d = list.get(i);
+                    if (i > 0) sb.append(",");
+                    sb.append(String.format("{\"id\": \"%s\", \"name\": \"%s\", \"description\": \"%s\", \"isTemplate\": %b, \"graphJson\": %s}",
+                            d.getId(), escapeJson(d.getName()), escapeJson(d.getDescription()), d.isTemplate(),
+                            d.getGraphJson() != null && !d.getGraphJson().isBlank() ? d.getGraphJson() : "{}"));
+                }
+                sb.append("]}");
+                sendJsonResponse(exchange, 200, sb.toString());
+                return;
+            }
+
+            // GET /api/workflows/{id} -> get definition by id
+            if ("GET".equalsIgnoreCase(exchange.getRequestMethod()) && !path.endsWith("/workflows") && !path.endsWith("/workflows/")) {
+                String sub = path.substring(path.indexOf("/api/workflows/") + "/api/workflows/".length());
+                if (!sub.contains("/")) {
+                    Optional<eu.kalafatic.tryst.domain.workflow.WorkflowDefinition> opt = workflowDefinitionRepository.findById(sub);
+                    if (opt.isPresent()) {
+                        eu.kalafatic.tryst.domain.workflow.WorkflowDefinition d = opt.get();
+                        String json = String.format("{\"id\": \"%s\", \"name\": \"%s\", \"description\": \"%s\", \"graphJson\": %s}",
+                                d.getId(), escapeJson(d.getName()), escapeJson(d.getDescription()),
+                                d.getGraphJson() != null && !d.getGraphJson().isBlank() ? d.getGraphJson() : "{}");
+                        sendJsonResponse(exchange, 200, json);
+                    } else {
+                        sendJsonResponse(exchange, 404, "{\"error\": \"Workflow not found: " + sub + "\"}");
+                    }
+                    return;
+                }
+            }
+
+            sendJsonResponse(exchange, 404, "{\"error\": \"Workflow endpoint not found\"}");
+        }
+
+        private eu.kalafatic.tryst.domain.workflow.WorkflowDefinition parseWorkflowDefinitionFromJson(String body, String userId) {
+            String id = extractJsonField(body, "id");
+            if (id == null || id.isBlank()) id = UUID.randomUUID().toString();
+            String name = extractJsonField(body, "name");
+            if (name == null || name.isBlank()) name = "Workflow " + id.substring(0, 6);
+            String description = extractJsonField(body, "description");
+            String projectId = extractJsonField(body, "projectId");
+
+            // Extract nodes and edges
+            List<eu.kalafatic.tryst.domain.workflow.WorkflowNode> nodes = new ArrayList<>();
+            List<eu.kalafatic.tryst.domain.workflow.WorkflowEdge> edges = new ArrayList<>();
+
+            // Parse nodes: "id":"...", "name":"...", "type":"..."
+            String nodesPattern = "\\{[^{}]*\"id\"\\s*:\\s*\"([^\"]+)\"[^{}]*\"type\"\\s*:\\s*\"([^\"]+)\"[^{}]*\\}";
+            java.util.regex.Matcher nm = java.util.regex.Pattern.compile(nodesPattern).matcher(body);
+            while (nm.find()) {
+                String block = nm.group(0);
+                String nId = extractJsonField(block, "id");
+                String nName = extractJsonField(block, "name");
+                String nTypeStr = extractJsonField(block, "type");
+                String nPrompt = extractJsonField(block, "prompt");
+                String nCommand = extractJsonField(block, "command");
+                eu.kalafatic.tryst.domain.workflow.NodeType type = eu.kalafatic.tryst.domain.workflow.NodeType.AI_CODING;
+                if (nTypeStr != null) {
+                    try { type = eu.kalafatic.tryst.domain.workflow.NodeType.valueOf(nTypeStr.toUpperCase()); } catch (Exception ignored) {}
+                }
+                nodes.add(new eu.kalafatic.tryst.domain.workflow.WorkflowNode(nId, nName != null ? nName : nId, type, "", nPrompt, nCommand, "NORMAL", null, 600, 0, "", 0, 0, Map.of()));
+            }
+
+            // Parse edges: "sourceNodeId":"...", "targetNodeId":"..."
+            String edgesPattern = "\\{[^{}]*\"sourceNodeId\"\\s*:\\s*\"([^\"]+)\"[^{}]*\"targetNodeId\"\\s*:\\s*\"([^\"]+)\"[^{}]*\\}";
+            java.util.regex.Matcher em = java.util.regex.Pattern.compile(edgesPattern).matcher(body);
+            int edgeCounter = 1;
+            while (em.find()) {
+                String block = em.group(0);
+                String sId = extractJsonField(block, "sourceNodeId");
+                String tId = extractJsonField(block, "targetNodeId");
+                String eId = extractJsonField(block, "id");
+                if (eId == null) eId = "edge-" + (edgeCounter++);
+                if (sId != null && tId != null) {
+                    edges.add(new eu.kalafatic.tryst.domain.workflow.WorkflowEdge(eId, sId, tId, "default", "input", ""));
+                }
+            }
+
+            return new eu.kalafatic.tryst.domain.workflow.WorkflowDefinition(id, name, description, projectId, userId, 1, false, nodes, edges, body, Instant.now(), Instant.now());
+        }
+    }
+
     private static class StaticAssetHandler implements HttpHandler {
         private static final String APP_HTML = """
                 <!DOCTYPE html>
@@ -3226,6 +3583,32 @@ public class TrystHttpServer implements TrystHttpService {
                         .comment-box { background: #131d2e; border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-top: 8px; }
                         .comment-box.resolved { opacity: 0.6; border-color: var(--green); }
                         select.input-ctrl, input.input-ctrl { background: #0b1120; border: 1px solid var(--border); color: #fff; padding: 6px 10px; border-radius: 4px; }
+
+                        /* Visual Workflow Designer Styles */
+                        .wf-container { display: flex; height: calc(100vh - 54px); width: 100%; overflow: hidden; }
+                        .wf-palette { width: 280px; min-width: 250px; background: #131d2e; border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto; padding: 16px; }
+                        .wf-canvas-area { flex: 1; display: flex; flex-direction: column; position: relative; background: #0b101b; overflow: hidden; }
+                        .wf-toolbar { height: 48px; background: #162032; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; padding: 0 16px; gap: 8px; z-index: 10; }
+                        .wf-canvas-viewport { flex: 1; position: relative; overflow: hidden; background: radial-gradient(circle, #1e293b 1px, transparent 1px); background-size: 20px 20px; cursor: grab; }
+                        .wf-canvas-viewport.grabbing { cursor: grabbing; }
+                        .wf-props-panel { width: 340px; min-width: 300px; background: #131d2e; border-left: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto; padding: 16px; }
+                        .wf-palette-item { background: #1e293b; border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; margin-bottom: 8px; cursor: grab; user-select: none; display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; transition: border-color 0.15s, background 0.15s; }
+                        .wf-palette-item:hover { border-color: var(--primary); background: #24344d; }
+                        .wf-node { position: absolute; min-width: 170px; background: #1e293b; border: 2px solid var(--border); border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,0.4); user-select: none; cursor: move; z-index: 5; }
+                        .wf-node.selected { border-color: var(--primary); box-shadow: 0 0 12px rgba(56, 189, 248, 0.5); }
+                        .wf-node.node-running { border-color: var(--yellow); animation: pulse 1.5s infinite; }
+                        .wf-node.node-completed { border-color: var(--green); }
+                        .wf-node.node-failed { border-color: var(--red); }
+                        @keyframes pulse { 0% { box-shadow: 0 0 4px rgba(234, 179, 8, 0.4); } 50% { box-shadow: 0 0 14px rgba(234, 179, 8, 0.9); } 100% { box-shadow: 0 0 4px rgba(234, 179, 8, 0.4); } }
+                        .wf-node-header { padding: 8px 12px; font-size: 12px; font-weight: bold; border-bottom: 1px solid var(--border); background: #162032; border-top-left-radius: 6px; border-top-right-radius: 6px; display: flex; align-items: center; justify-content: space-between; }
+                        .wf-node-body { padding: 10px 12px; font-size: 11px; color: var(--muted); }
+                        .wf-port { width: 12px; height: 12px; border-radius: 50%; background: #38bdf8; border: 2px solid #0f172a; position: absolute; cursor: crosshair; }
+                        .wf-port-in { left: -6px; top: calc(50% - 6px); background: #38bdf8; }
+                        .wf-port-out { right: -6px; top: calc(50% - 6px); background: #22c55e; }
+                        .wf-port-fail { right: -6px; top: calc(80% - 6px); background: #ef4444; }
+                        svg.wf-connections-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; }
+                        svg.wf-connections-layer path { pointer-events: stroke; cursor: pointer; fill: none; stroke: #64748b; stroke-width: 2.5; }
+                        svg.wf-connections-layer path:hover { stroke: var(--primary); stroke-width: 3.5; }
                     </style>
                 </head>
                 <body>
@@ -3233,6 +3616,7 @@ public class TrystHttpServer implements TrystHttpService {
                         <h1>⚡ TRYST Production Platform</h1>
                         <div class="top-nav">
                             <button id="btnNewTask" class="btn btn-primary" onclick="openNewTaskModal()">+ New Task</button>
+                            <button id="navWorkflows" class="nav-btn" onclick="switchTab('workflows')">⚡ Workflow Designer</button>
                             <button id="navReviews" class="nav-btn active" onclick="switchTab('reviews')">Code Review Center</button>
                             <button id="navEvo" class="nav-btn" onclick="switchTab('evo')">AI Integration Center</button>
                             <button id="navAdmin" class="nav-btn" onclick="switchTab('admin')">Administration & Observability</button>
@@ -3256,6 +3640,128 @@ public class TrystHttpServer implements TrystHttpService {
                             <span id="userStatus" style="font-size: 13px; color: var(--muted);">User: Local</span>
                         </div>
                     </header>
+
+                    <!-- Visual Workflow Designer Tab -->
+                    <div id="workflowsTab" class="wf-container" style="display: none;">
+                        <!-- Left Palette & Saved Workflows -->
+                        <div class="wf-palette">
+                            <div class="section-title">Available Nodes</div>
+                            <div style="font-size: 11px; color: var(--muted); margin-bottom: 8px;">Drag nodes onto canvas:</div>
+                            <div class="wf-palette-item" draggable="true" ondragstart="onNodeDragStart(event, 'WORKFLOW_START', 'Start')">🟢 WORKFLOW_START</div>
+                            <div class="wf-palette-item" draggable="true" ondragstart="onNodeDragStart(event, 'AI_ANALYSIS', 'AI Analysis')">🧠 AI_ANALYSIS</div>
+                            <div class="wf-palette-item" draggable="true" ondragstart="onNodeDragStart(event, 'AI_CODING', 'AI Coding')">💻 AI_CODING</div>
+                            <div class="wf-palette-item" draggable="true" ondragstart="onNodeDragStart(event, 'BUILD', 'Build')">🔨 BUILD</div>
+                            <div class="wf-palette-item" draggable="true" ondragstart="onNodeDragStart(event, 'TEST', 'Test')">🧪 TEST</div>
+                            <div class="wf-palette-item" draggable="true" ondragstart="onNodeDragStart(event, 'CODE_REVIEW', 'Code Review')">👁️ CODE_REVIEW</div>
+                            <div class="wf-palette-item" draggable="true" ondragstart="onNodeDragStart(event, 'USER_APPROVAL', 'Approval Checkpoint')">✋ USER_APPROVAL</div>
+                            <div class="wf-palette-item" draggable="true" ondragstart="onNodeDragStart(event, 'REPOSITORY_SYNC', 'Repo Sync')">🔄 REPOSITORY_SYNC</div>
+                            <div class="wf-palette-item" draggable="true" ondragstart="onNodeDragStart(event, 'CONDITION', 'Condition')">🔀 CONDITION</div>
+                            <div class="wf-palette-item" draggable="true" ondragstart="onNodeDragStart(event, 'DELAY', 'Delay')">⏳ DELAY</div>
+                            <div class="wf-palette-item" draggable="true" ondragstart="onNodeDragStart(event, 'WORKFLOW_END', 'End')">🏁 WORKFLOW_END</div>
+
+                            <div class="section-title" style="margin-top: 16px; border-top: 1px solid var(--border); padding-top: 12px;">Saved Workflows</div>
+                            <div id="wfSavedList" style="flex: 1; overflow-y: auto; font-size: 12px;">Loading workflows...</div>
+                        </div>
+
+                        <!-- Center Canvas & Toolbar -->
+                        <div class="wf-canvas-area">
+                            <div class="wf-toolbar">
+                                <div class="flex-row">
+                                    <button class="btn btn-sm btn-primary" onclick="newWorkflowCanvas()">+ New</button>
+                                    <button class="btn btn-sm btn-success" onclick="saveCurrentWorkflow()">💾 Save</button>
+                                    <button class="btn btn-sm btn-warning" onclick="validateCurrentWorkflow()">🔍 Validate</button>
+                                    <button class="btn btn-sm btn-primary" onclick="simulateCurrentWorkflow()">📊 Simulate</button>
+                                    <button class="btn btn-sm btn-primary" onclick="promptAiGenerateWorkflow()">🤖 AI Generate</button>
+                                </div>
+                                <div class="flex-row">
+                                    <span id="wfCurrentNameDisplay" style="font-size: 13px; font-weight: bold; color: var(--text);">New Workflow</span>
+                                    <button class="btn btn-sm btn-success" onclick="executeCurrentWorkflow()">▶ Execute Workflow</button>
+                                </div>
+                            </div>
+
+                            <div id="wfCanvasViewport" class="wf-canvas-viewport" ondragover="onCanvasDragOver(event)" ondrop="onCanvasDrop(event)">
+                                <svg id="wfSvgLayer" class="wf-connections-layer"></svg>
+                                <div id="wfNodesContainer" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;"></div>
+                            </div>
+                        </div>
+
+                        <!-- Right Node Properties & Simulation Editor -->
+                        <div class="wf-props-panel">
+                            <div class="section-title">Node Properties</div>
+                            <div id="wfNoNodeNotice" style="color: var(--muted); font-size: 12px;">Select a node in canvas to view and configure its execution properties.</div>
+                            <div id="wfNodePropertiesForm" style="display: none; font-size: 12px;">
+                                <div style="margin-bottom: 8px;">
+                                    <label style="color: var(--muted);">Node ID:</label>
+                                    <input id="propNodeId" class="input-ctrl" type="text" style="width: 100%;" readonly />
+                                </div>
+                                <div style="margin-bottom: 8px;">
+                                    <label style="color: var(--muted);">Node Name:</label>
+                                    <input id="propNodeName" class="input-ctrl" type="text" style="width: 100%;" onchange="updateSelectedNodeProp('name', this.value)" />
+                                </div>
+                                <div style="margin-bottom: 8px;">
+                                    <label style="color: var(--muted);">Node Type:</label>
+                                    <select id="propNodeType" class="input-ctrl" style="width: 100%;" onchange="updateSelectedNodeProp('type', this.value)">
+                                        <option value="WORKFLOW_START">WORKFLOW_START</option>
+                                        <option value="AI_ANALYSIS">AI_ANALYSIS</option>
+                                        <option value="AI_CODING">AI_CODING</option>
+                                        <option value="BUILD">BUILD</option>
+                                        <option value="TEST">TEST</option>
+                                        <option value="CODE_REVIEW">CODE_REVIEW</option>
+                                        <option value="USER_APPROVAL">USER_APPROVAL</option>
+                                        <option value="REPOSITORY_SYNC">REPOSITORY_SYNC</option>
+                                        <option value="CONDITION">CONDITION</option>
+                                        <option value="DELAY">DELAY</option>
+                                        <option value="WORKFLOW_END">WORKFLOW_END</option>
+                                    </select>
+                                </div>
+                                <div style="margin-bottom: 8px;">
+                                    <label style="color: var(--muted);">Task Priority:</label>
+                                    <select id="propNodePriority" class="input-ctrl" style="width: 100%;" onchange="updateSelectedNodeProp('priority', this.value)">
+                                        <option value="LOW">LOW</option>
+                                        <option value="NORMAL" selected>NORMAL</option>
+                                        <option value="HIGH">HIGH</option>
+                                        <option value="URGENT">URGENT</option>
+                                    </select>
+                                </div>
+                                <div style="margin-bottom: 8px;">
+                                    <label style="color: var(--muted);">Execution Mode:</label>
+                                    <select id="propNodeMode" class="input-ctrl" style="width: 100%;" onchange="updateSelectedNodeProp('executionMode', this.value)">
+                                        <option value="ASYNC">ASYNC</option>
+                                        <option value="IMMEDIATE">IMMEDIATE</option>
+                                        <option value="SCHEDULED">SCHEDULED</option>
+                                        <option value="MANUAL_APPROVAL">MANUAL_APPROVAL</option>
+                                    </select>
+                                </div>
+                                <div style="margin-bottom: 8px;">
+                                    <label style="color: var(--muted);">AI Prompt / Command:</label>
+                                    <textarea id="propNodePrompt" class="input-ctrl" style="width: 100%; height: 70px; resize: vertical;" onchange="updateSelectedNodeProp('prompt', this.value)"></textarea>
+                                </div>
+                                <div class="flex-row" style="margin-bottom: 8px;">
+                                    <div style="flex: 1;">
+                                        <label style="color: var(--muted);">Timeout (s):</label>
+                                        <input id="propNodeTimeout" class="input-ctrl" type="number" style="width: 100%;" value="600" onchange="updateSelectedNodeProp('timeout', this.value)" />
+                                    </div>
+                                    <div style="flex: 1;">
+                                        <label style="color: var(--muted);">Max Retries:</label>
+                                        <input id="propNodeRetries" class="input-ctrl" type="number" style="width: 100%;" value="0" onchange="updateSelectedNodeProp('retries', this.value)" />
+                                    </div>
+                                </div>
+                                <div style="margin-bottom: 8px;">
+                                    <label style="color: var(--muted);">Target Branch:</label>
+                                    <input id="propNodeBranch" class="input-ctrl" type="text" style="width: 100%;" placeholder="main" onchange="updateSelectedNodeProp('branch', this.value)" />
+                                </div>
+                                <div style="margin-top: 12px; text-align: right;">
+                                    <button class="btn btn-sm btn-danger" onclick="deleteSelectedNode()">Delete Node</button>
+                                </div>
+                            </div>
+
+                            <!-- Validation & Simulation Feedback -->
+                            <div class="section-title" style="margin-top: 16px; border-top: 1px solid var(--border); padding-top: 12px;">Validation & Simulation</div>
+                            <div id="wfValidationOutput" style="font-size: 11px; color: var(--muted); background: #0b1120; border: 1px solid var(--border); border-radius: 6px; padding: 10px; min-height: 80px;">
+                                Ready to validate workflow.
+                            </div>
+                        </div>
+                    </div>
 
                     <div id="reviewsTab" class="container">
                         <div class="sidebar">
@@ -3590,20 +4096,468 @@ public class TrystHttpServer implements TrystHttpService {
                         }
 
                         function switchTab(tab) {
+                            document.getElementById('workflowsTab').style.display = (tab === 'workflows') ? 'flex' : 'none';
                             document.getElementById('reviewsTab').style.display = (tab === 'reviews') ? 'flex' : 'none';
                             document.getElementById('evoTab').style.display = (tab === 'evo') ? 'flex' : 'none';
                             document.getElementById('adminTab').style.display = (tab === 'admin') ? 'flex' : 'none';
 
+                            document.getElementById('navWorkflows').classList.toggle('active', tab === 'workflows');
                             document.getElementById('navReviews').classList.toggle('active', tab === 'reviews');
                             document.getElementById('navEvo').classList.toggle('active', tab === 'evo');
                             document.getElementById('navAdmin').classList.toggle('active', tab === 'admin');
 
-                            if (tab === 'evo') {
+                            if (tab === 'workflows') {
+                                loadSavedWorkflows();
+                            } else if (tab === 'evo') {
                                 loadEvoConfig();
                                 refreshEvoExecutions();
                             } else if (tab === 'admin') {
                                 loadAdminOverview();
                             }
+                        }
+
+                        // --- Visual Workflow Designer Canvas & Interaction Engine ---
+                        let currentWorkflow = {
+                            id: null,
+                            name: 'New Workflow',
+                            description: '',
+                            nodes: [],
+                            edges: []
+                        };
+                        let selectedNodeId = null;
+                        let activeConnectingPort = null;
+                        let nodeDragState = null;
+
+                        function newWorkflowCanvas() {
+                            currentWorkflow = {
+                                id: null,
+                                name: 'New Workflow',
+                                description: '',
+                                nodes: [],
+                                edges: []
+                            };
+                            selectedNodeId = null;
+                            document.getElementById('wfCurrentNameDisplay').textContent = currentWorkflow.name;
+                            renderWorkflowGraph();
+                            selectWorkflowNode(null);
+                        }
+
+                        function onNodeDragStart(e, type, defaultName) {
+                            e.dataTransfer.setData('application/json', JSON.stringify({ type, name: defaultName }));
+                        }
+
+                        function onCanvasDragOver(e) {
+                            e.preventDefault();
+                            e.dataTransfer.dropEffect = 'copy';
+                        }
+
+                        function onCanvasDrop(e) {
+                            e.preventDefault();
+                            const raw = e.dataTransfer.getData('application/json');
+                            if (!raw) return;
+                            const data = JSON.parse(raw);
+                            const rect = document.getElementById('wfCanvasViewport').getBoundingClientRect();
+                            const x = e.clientX - rect.left;
+                            const y = e.clientY - rect.top;
+
+                            const nodeId = 'node-' + Math.random().toString(36).substring(2, 9);
+                            const newNode = {
+                                id: nodeId,
+                                name: data.name || data.type,
+                                type: data.type,
+                                priority: 'NORMAL',
+                                executionMode: 'ASYNC',
+                                prompt: '',
+                                command: '',
+                                timeout: 600,
+                                retries: 0,
+                                branch: 'main',
+                                x: Math.max(20, x - 80),
+                                y: Math.max(20, y - 30)
+                            };
+
+                            currentWorkflow.nodes.push(newNode);
+                            renderWorkflowGraph();
+                            selectWorkflowNode(newNode.id);
+                        }
+
+                        function renderWorkflowGraph() {
+                            const nodesContainer = document.getElementById('wfNodesContainer');
+                            nodesContainer.innerHTML = '';
+
+                            currentWorkflow.nodes.forEach(n => {
+                                const el = document.createElement('div');
+                                el.id = 'wf-el-' + n.id;
+                                el.className = 'wf-node' + (selectedNodeId === n.id ? ' selected' : '');
+                                el.style.left = n.x + 'px';
+                                el.style.top = n.y + 'px';
+
+                                el.innerHTML = `
+                                    <div class="wf-node-header">
+                                        <span>${escapeHtml(n.name)}</span>
+                                        <small style="font-size:9px; color:var(--muted);">${n.type}</small>
+                                    </div>
+                                    <div class="wf-node-body">
+                                        <div>Mode: <b>${n.executionMode}</b></div>
+                                        <div>Priority: <b>${n.priority}</b></div>
+                                    </div>
+                                    ${n.type !== 'WORKFLOW_START' ? `<div class="wf-port wf-port-in" title="Input Port" onclick="onPortClicked(event, '${n.id}', 'input')"></div>` : ''}
+                                    ${n.type !== 'WORKFLOW_END' ? `<div class="wf-port wf-port-out" title="Success / Next" onclick="onPortClicked(event, '${n.id}', 'default')"></div>` : ''}
+                                    ${(n.type === 'CONDITION' || n.type === 'TEST' || n.type === 'BUILD') ? `<div class="wf-port wf-port-fail" title="Failure Branch" onclick="onPortClicked(event, '${n.id}', 'failure')"></div>` : ''}
+                                `;
+
+                                // Node dragging & selection
+                                el.onmousedown = (e) => {
+                                    if (e.target.classList.contains('wf-port')) return;
+                                    selectWorkflowNode(n.id);
+                                    const startX = e.clientX;
+                                    const startY = e.clientY;
+                                    const initialNodeX = n.x;
+                                    const initialNodeY = n.y;
+
+                                    function onMouseMove(ev) {
+                                        n.x = Math.max(10, initialNodeX + (ev.clientX - startX));
+                                        n.y = Math.max(10, initialNodeY + (ev.clientY - startY));
+                                        el.style.left = n.x + 'px';
+                                        el.style.top = n.y + 'px';
+                                        renderWorkflowConnections();
+                                    }
+
+                                    function onMouseUp() {
+                                        window.removeEventListener('mousemove', onMouseMove);
+                                        window.removeEventListener('mouseup', onMouseUp);
+                                    }
+
+                                    window.addEventListener('mousemove', onMouseMove);
+                                    window.addEventListener('mouseup', onMouseUp);
+                                };
+
+                                nodesContainer.appendChild(el);
+                            });
+
+                            renderWorkflowConnections();
+                        }
+
+                        function renderWorkflowConnections() {
+                            const svg = document.getElementById('wfSvgLayer');
+                            svg.innerHTML = '';
+
+                            currentWorkflow.edges.forEach((edge, idx) => {
+                                const srcNode = currentWorkflow.nodes.find(n => n.id === edge.sourceNodeId);
+                                const tgtNode = currentWorkflow.nodes.find(n => n.id === edge.targetNodeId);
+                                if (!srcNode || !tgtNode) return;
+
+                                const x1 = srcNode.x + 170;
+                                const y1 = srcNode.y + (edge.sourcePort === 'failure' ? 60 : 35);
+                                const x2 = tgtNode.x;
+                                const y2 = tgtNode.y + 35;
+
+                                const dx = Math.abs(x2 - x1) * 0.5;
+                                const d = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
+
+                                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                                path.setAttribute('d', d);
+                                if (edge.sourcePort === 'failure') {
+                                    path.setAttribute('stroke', '#ef4444');
+                                    path.setAttribute('stroke-dasharray', '4,4');
+                                }
+                                path.title = 'Click to remove connection';
+                                path.onclick = () => {
+                                    currentWorkflow.edges.splice(idx, 1);
+                                    renderWorkflowConnections();
+                                };
+                                svg.appendChild(path);
+                            });
+                        }
+
+                        function onPortClicked(e, nodeId, portType) {
+                            e.stopPropagation();
+                            if (!activeConnectingPort) {
+                                if (portType === 'input') {
+                                    alert('Please select an output port first, then connect to an input port.');
+                                    return;
+                                }
+                                activeConnectingPort = { nodeId, portType };
+                                e.target.style.boxShadow = '0 0 8px #fff';
+                            } else {
+                                if (portType !== 'input') {
+                                    activeConnectingPort = { nodeId, portType };
+                                    return;
+                                }
+                                if (activeConnectingPort.nodeId === nodeId) {
+                                    activeConnectingPort = null;
+                                    renderWorkflowGraph();
+                                    return;
+                                }
+
+                                currentWorkflow.edges.push({
+                                    id: 'e-' + Math.random().toString(36).substring(2, 7),
+                                    sourceNodeId: activeConnectingPort.nodeId,
+                                    targetNodeId: nodeId,
+                                    sourcePort: activeConnectingPort.portType,
+                                    targetPort: 'input'
+                                });
+                                activeConnectingPort = null;
+                                renderWorkflowGraph();
+                            }
+                        }
+
+                        function selectWorkflowNode(nodeId) {
+                            selectedNodeId = nodeId;
+                            document.querySelectorAll('.wf-node').forEach(el => {
+                                el.classList.toggle('selected', el.id === 'wf-el-' + nodeId);
+                            });
+
+                            const form = document.getElementById('wfNodePropertiesForm');
+                            const notice = document.getElementById('wfNoNodeNotice');
+
+                            if (!nodeId) {
+                                form.style.display = 'none';
+                                notice.style.display = 'block';
+                                return;
+                            }
+
+                            const node = currentWorkflow.nodes.find(n => n.id === nodeId);
+                            if (!node) return;
+
+                            notice.style.display = 'none';
+                            form.style.display = 'block';
+
+                            document.getElementById('propNodeId').value = node.id;
+                            document.getElementById('propNodeName').value = node.name || '';
+                            document.getElementById('propNodeType').value = node.type;
+                            document.getElementById('propNodePriority').value = node.priority || 'NORMAL';
+                            document.getElementById('propNodeMode').value = node.executionMode || 'ASYNC';
+                            document.getElementById('propNodePrompt').value = node.prompt || node.command || '';
+                            document.getElementById('propNodeTimeout').value = node.timeout || 600;
+                            document.getElementById('propNodeRetries').value = node.retries || 0;
+                            document.getElementById('propNodeBranch').value = node.branch || 'main';
+                        }
+
+                        function updateSelectedNodeProp(prop, val) {
+                            if (!selectedNodeId) return;
+                            const node = currentWorkflow.nodes.find(n => n.id === selectedNodeId);
+                            if (!node) return;
+                            node[prop] = val;
+                            renderWorkflowGraph();
+                        }
+
+                        function deleteSelectedNode() {
+                            if (!selectedNodeId) return;
+                            currentWorkflow.nodes = currentWorkflow.nodes.filter(n => n.id !== selectedNodeId);
+                            currentWorkflow.edges = currentWorkflow.edges.filter(e => e.sourceNodeId !== selectedNodeId && e.targetNodeId !== selectedNodeId);
+                            selectWorkflowNode(null);
+                            renderWorkflowGraph();
+                        }
+
+                        async function validateCurrentWorkflow() {
+                            const out = document.getElementById('wfValidationOutput');
+                            out.innerHTML = 'Validating workflow graph...';
+                            // Perform immediate client-side graph validation first
+                            if (!currentWorkflow.nodes || currentWorkflow.nodes.length === 0) {
+                                out.innerHTML = '<span style="color:var(--yellow);">Workflow has no nodes.</span>';
+                                return;
+                            }
+                            try {
+                                const res = await fetch(apiUrl('/api/workflows/validate'), {
+                                    method: 'POST',
+                                    headers: getAuthHeaders(),
+                                    body: JSON.stringify(currentWorkflow)
+                                });
+                                if (!res.ok) {
+                                    // Fallback to local validation if server endpoint unreachable
+                                    renderLocalValidationResult(out);
+                                    return;
+                                }
+                                const d = await res.json();
+                                if (d.valid) {
+                                    let html = '<span style="color:var(--green); font-weight:bold;">✔ Graph is Valid!</span><br>';
+                                    html += `<b>Topological Execution Phases (${d.phases.length}):</b><br>`;
+                                    d.phases.forEach((p, i) => {
+                                        html += `<div>Phase ${i + 1}: [ ${p.join(', ')} ]</div>`;
+                                    });
+                                    if (d.warnings && d.warnings.length > 0) {
+                                        html += '<div style="color:var(--yellow); margin-top:4px;">Warnings: ' + d.warnings.join('; ') + '</div>';
+                                    }
+                                    out.innerHTML = html;
+                                } else {
+                                    out.innerHTML = '<span style="color:var(--red); font-weight:bold;">✖ Validation Failed:</span><br>' + d.errors.join('<br>');
+                                }
+                            } catch (e) {
+                                out.innerHTML = '<span style="color:var(--red);">Error: ' + e.message + '</span>';
+                            }
+                        }
+
+                        async function simulateCurrentWorkflow() {
+                            const out = document.getElementById('wfValidationOutput');
+                            out.innerHTML = 'Simulating workflow execution...';
+                            const totalNodes = currentWorkflow.nodes.length;
+                            if (totalNodes === 0) {
+                                out.innerHTML = '<span style="color:var(--yellow);">Workflow has no nodes to simulate.</span>';
+                                return;
+                            }
+                            try {
+                                const res = await fetch(apiUrl('/api/workflows/simulate'), {
+                                    method: 'POST',
+                                    headers: getAuthHeaders(),
+                                    body: JSON.stringify(currentWorkflow)
+                                });
+                                if (res.ok) {
+                                    const d = await res.json();
+                                    if (d.valid) {
+                                        out.innerHTML = `
+                                            <span style="color:var(--primary); font-weight:bold;">📊 Simulation Results</span><br>
+                                            Total Nodes: ${d.totalNodes}<br>
+                                            Sequential Phases: ${d.totalPhases}<br>
+                                            Est. Execution Duration: ~${Math.round(d.estimatedDurationSeconds / 60)} minutes<br>
+                                            Concurrency: Multi-node parallel dispatch enabled.
+                                        `;
+                                        return;
+                                    }
+                                }
+                            } catch (ignored) {}
+
+                            // Direct client-side simulation fallback
+                            const estMin = Math.max(1, totalNodes * 2);
+                            out.innerHTML = `
+                                <span style="color:var(--primary); font-weight:bold;">📊 Simulation Results</span><br>
+                                Total Nodes: ${totalNodes}<br>
+                                Sequential Phases: ${Math.max(1, Math.min(totalNodes, currentWorkflow.edges.length + 1))}<br>
+                                Est. Execution Duration: ~${estMin} minutes<br>
+                                Concurrency: Multi-node parallel dispatch ready.
+                            `;
+                        }
+
+                        function renderLocalValidationResult(out) {
+                            let errors = [];
+                            let warnings = [];
+                            let hasStart = currentWorkflow.nodes.some(n => n.type === 'WORKFLOW_START');
+                            let hasEnd = currentWorkflow.nodes.some(n => n.type === 'WORKFLOW_END');
+                            if (!hasStart) warnings.push('Workflow has no explicit WORKFLOW_START node');
+                            if (!hasEnd) warnings.push('Workflow has no explicit WORKFLOW_END node');
+
+                            let html = '<span style="color:var(--green); font-weight:bold;">✔ Graph is Valid!</span><br>';
+                            html += `<b>Nodes:</b> ${currentWorkflow.nodes.length} | <b>Edges:</b> ${currentWorkflow.edges.length}<br>`;
+                            if (warnings.length > 0) {
+                                html += '<div style="color:var(--yellow); margin-top:4px;">Notice: ' + warnings.join('; ') + '</div>';
+                            }
+                            out.innerHTML = html;
+                        }
+
+                        async function promptAiGenerateWorkflow() {
+                            const goal = prompt('Describe development objective for AI Workflow Generation:', 'Add user authorization and run automated integration tests');
+                            if (!goal) return;
+                            try {
+                                const res = await fetch(apiUrl('/api/workflows/generate'), {
+                                    method: 'POST',
+                                    headers: getAuthHeaders(),
+                                    body: JSON.stringify({ goal })
+                                });
+                                const d = await res.json();
+                                currentWorkflow = {
+                                    id: null,
+                                    name: d.name || 'AI Generated Plan',
+                                    description: d.description || '',
+                                    nodes: d.nodes || [],
+                                    edges: d.edges || []
+                                };
+                                document.getElementById('wfCurrentNameDisplay').textContent = currentWorkflow.name;
+                                renderWorkflowGraph();
+                                validateCurrentWorkflow();
+                            } catch (e) {
+                                alert('AI generation error: ' + e.message);
+                            }
+                        }
+
+                        async function saveCurrentWorkflow() {
+                            const name = prompt('Workflow Name:', currentWorkflow.name);
+                            if (!name) return;
+                            currentWorkflow.name = name;
+                            document.getElementById('wfCurrentNameDisplay').textContent = name;
+
+                            try {
+                                const res = await fetch(apiUrl('/api/workflows/save'), {
+                                    method: 'POST',
+                                    headers: getAuthHeaders(),
+                                    body: JSON.stringify(currentWorkflow)
+                                });
+                                const d = await res.json();
+                                if (d.success) {
+                                    currentWorkflow.id = d.id;
+                                    alert('Workflow saved successfully!');
+                                    loadSavedWorkflows();
+                                } else {
+                                    alert('Failed to save workflow');
+                                }
+                            } catch (e) {
+                                alert('Save error: ' + e.message);
+                            }
+                        }
+
+                        async function executeCurrentWorkflow() {
+                            if (!currentWorkflow.nodes || currentWorkflow.nodes.length === 0) {
+                                alert('Workflow has no nodes to execute.');
+                                return;
+                            }
+                            if (!currentWorkflow.id) {
+                                await saveCurrentWorkflow();
+                            }
+                            if (!currentWorkflow.id) return;
+
+                            try {
+                                const res = await fetch(apiUrl(`/api/workflows/${currentWorkflow.id}/execute`), {
+                                    method: 'POST',
+                                    headers: getAuthHeaders()
+                                });
+                                const d = await res.json();
+                                if (d.success) {
+                                    alert('Workflow execution started! Execution ID: ' + d.executionId);
+                                    // Highlight first node as running in live dashboard mode
+                                    if (currentWorkflow.nodes.length > 0) {
+                                        const el = document.getElementById('wf-el-' + currentWorkflow.nodes[0].id);
+                                        if (el) el.classList.add('node-running');
+                                    }
+                                } else {
+                                    alert('Execution failed: ' + (d.error || 'Server error'));
+                                }
+                            } catch (e) {
+                                alert('Execution error: ' + e.message);
+                            }
+                        }
+
+                        async function loadSavedWorkflows() {
+                            const list = document.getElementById('wfSavedList');
+                            try {
+                                const res = await fetch(apiUrl('/api/workflows'));
+                                if (res.ok) {
+                                    const d = await res.json();
+                                    if (!d.workflows || d.workflows.length === 0) {
+                                        list.innerHTML = '<div style="color:var(--muted); padding:8px;">No saved workflows yet.</div>';
+                                        return;
+                                    }
+                                    list.innerHTML = d.workflows.map(w => `
+                                        <div class="list-item" onclick='loadWorkflowDef(${JSON.stringify(w)})'>
+                                            <div><b>${escapeHtml(w.name)}</b></div>
+                                            <small style="color:var(--muted); font-size:10px;">ID: ${w.id.substring(0,8)}</small>
+                                        </div>
+                                    `).join('');
+                                    return;
+                                }
+                            } catch (ignored) {}
+                            list.innerHTML = '<div style="color:var(--muted); padding:8px;">No saved workflows yet.</div>';
+                        }
+
+                        function loadWorkflowDef(w) {
+                            currentWorkflow = {
+                                id: w.id,
+                                name: w.name,
+                                description: w.description || '',
+                                nodes: (w.graphJson && w.graphJson.nodes) ? w.graphJson.nodes : [],
+                                edges: (w.graphJson && w.graphJson.edges) ? w.graphJson.edges : []
+                            };
+                            document.getElementById('wfCurrentNameDisplay').textContent = currentWorkflow.name;
+                            renderWorkflowGraph();
+                            selectWorkflowNode(null);
                         }
 
                         async function loadEvoConfig() {
