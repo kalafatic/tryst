@@ -46,6 +46,7 @@ import eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteTaskReposi
 import eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteWorkspaceRepository;
 import eu.kalafatic.tryst.infrastructure.server.TrystHttpServer;
 import eu.kalafatic.tryst.core.server.TrystHttpService;
+import eu.kalafatic.tryst.core.server.TrystServerLifecycleService;
 import eu.kalafatic.tryst.infrastructure.server.TrystTcpServer;
 import eu.kalafatic.tryst.core.server.TrystTcpService;
 import eu.kalafatic.tryst.infrastructure.vcs.GitService;
@@ -64,7 +65,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * Deterministic lifecycle coordinator driving startup, configuration,
  * persistence, core/domain/AI services, OSGi registration, reconciliation, and clean shutdown.
  */
-public class ApplicationLifecycleCoordinator {
+public class ApplicationLifecycleCoordinator implements TrystServerLifecycleService {
 
     private final BundleContext bundleContext;
     private final List<ApplicationLifecycleListener> listeners = new CopyOnWriteArrayList<>();
@@ -596,11 +597,13 @@ public class ApplicationLifecycleCoordinator {
             registerService(eu.kalafatic.tryst.domain.service.LogDiagnosticService.class, this.logDiagnosticService);
             registerService(eu.kalafatic.tryst.domain.service.ManagedServiceController.class, serviceController);
 
+            registerService(TrystServerLifecycleService.class, this);
+
             if (tcpService != null) {
                 registerService(TrystTcpService.class, this.tcpService);
             }
-            if (httpService != null) {
-                registerService(TrystHttpService.class, this.httpService);
+            if (httpService != null && httpService.isRunning()) {
+                ensureHttpServiceRegistered();
             }
 
             TrystLog.info(ApplicationLifecycleCoordinator.class,
@@ -671,6 +674,14 @@ public class ApplicationLifecycleCoordinator {
                 TrystLog.error(ApplicationLifecycleCoordinator.class, "Error stopping HTTP service", e);
             }
             httpService = null;
+        }
+        if (httpServiceRegistration != null) {
+            try {
+                httpServiceRegistration.unregister();
+            } catch (Exception ignored) {
+            }
+            serviceRegistrations.remove(httpServiceRegistration);
+            httpServiceRegistration = null;
         }
 
         // 2.5 Stop TaskOrchestrator cleanly
@@ -948,6 +959,26 @@ public class ApplicationLifecycleCoordinator {
 
     private ServiceRegistration<TrystHttpService> httpServiceRegistration;
 
+    @Override
+    public synchronized boolean isHttpServerRunning() {
+        return this.httpService != null && this.httpService.isRunning();
+    }
+
+    @Override
+    public synchronized TrystHttpService startHttpServer() throws Exception {
+        return startHttpService();
+    }
+
+    @Override
+    public synchronized void stopHttpServer() throws Exception {
+        stopHttpService();
+    }
+
+    @Override
+    public synchronized TrystHttpService restartHttpServer() throws Exception {
+        return restartHttpService();
+    }
+
     /**
      * Starts or ensures running state of the embedded HTTP server.
      * Idempotent, thread-safe, and independent of UI lifecycle.
@@ -998,7 +1029,7 @@ public class ApplicationLifecycleCoordinator {
      * Stops the embedded HTTP server safely.
      */
     public synchronized void stopHttpService() {
-        if (this.httpService != null && this.httpService.isRunning()) {
+        if (this.httpService != null) {
             try {
                 this.httpService.stop();
                 if (serverReadinessService != null) {
@@ -1010,6 +1041,15 @@ public class ApplicationLifecycleCoordinator {
             } catch (Exception e) {
                 TrystLog.error(ApplicationLifecycleCoordinator.class, "Error stopping HTTP service: " + e.getMessage(), e);
             }
+            this.httpService = null;
+        }
+        if (httpServiceRegistration != null) {
+            try {
+                httpServiceRegistration.unregister();
+            } catch (Exception ignored) {
+            }
+            serviceRegistrations.remove(httpServiceRegistration);
+            httpServiceRegistration = null;
         }
     }
 
@@ -1022,19 +1062,12 @@ public class ApplicationLifecycleCoordinator {
     }
 
     private void ensureHttpServiceRegistered() {
-        if (bundleContext != null && this.httpService != null) {
-            boolean alreadyReg = serviceRegistrations.stream()
-                    .anyMatch(r -> {
-                        try {
-                            Object s = bundleContext.getService(r.getReference());
-                            return s == this.httpService;
-                        } catch (Exception ex) {
-                            return false;
-                        }
-                    });
-            if (!alreadyReg && httpServiceRegistration == null) {
+        if (bundleContext != null && this.httpService != null && httpServiceRegistration == null) {
+            try {
                 httpServiceRegistration = bundleContext.registerService(TrystHttpService.class, this.httpService, null);
                 serviceRegistrations.add(httpServiceRegistration);
+            } catch (Exception e) {
+                TrystLog.error(ApplicationLifecycleCoordinator.class, "Failed to register TrystHttpService in OSGi: " + e.getMessage(), e);
             }
         }
     }

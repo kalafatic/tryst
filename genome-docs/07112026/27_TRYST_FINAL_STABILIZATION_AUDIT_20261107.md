@@ -21,7 +21,8 @@ This forensic audit and stabilization effort evaluated the TRYST platform agains
 6. **SQLite Migrations V1–V13 Integrity**: Validated sequential schema execution from blank database and incremental upgrades through V13. Confirmed foreign key cascades, unique constraints, and indexes.
 7. **HTTP/TCP Server Lifecycle & Port Reservation**: Confirmed dynamic port binding conforming to the +30000 offset and 100-port spacing convention, strict prohibition of port 8080 (reserved for JBoss EAP), bind conflict handling, and leak-free server shutdown.
 8. **Human Approval Gating & Git Delivery Safety**: Verified cryptographic diff SHA-256 fingerprint verification (including untracked files via `git add -N .`), strict prohibition of AI agent approvals, blocking comments gating, and clean working tree enforcement prior to commit.
-9. **Full Build & Test Pass**: Achieved 100% test pass rate across the Tycho test suite (`247 tests run, 0 failures, 0 errors, 0 skipped`).
+10. **Decoupled Server Lifecycle Contract & OSGi UI Integration**: Introduced `TrystServerLifecycleService` in `eu.kalafatic.tryst.core.server` to eliminate reflection and classloader isolation failures across OSGi bundles (`eu.kalafatic.tryst.ui` -> `eu.kalafatic.tryst.application`). `ApplicationLifecycleCoordinator` acts as the single authoritative server lifecycle coordinator, registering itself in the OSGi registry, serializing concurrent start requests, and safely unregistering/releasing sockets upon shutdown. Added end-to-end integration suite `ServerLifecycleAndUiAccessTest`.
+11. **Full Build & Test Pass**: Achieved 100% test pass rate across the Tycho test suite (`252 tests run, 0 failures, 0 errors, 0 skipped`).
 
 ---
 
@@ -37,6 +38,7 @@ This forensic audit and stabilization effort evaluated the TRYST platform agains
 | F-06 | Queue Claiming | Verification of atomic queue claiming under concurrency | Verified Correct: Evaluated SQLite transactions in `SqliteTaskRepository` and `TaskQueue`. `TaskQueueConcurrencyTest` and `ConcurrencyTest` pass with 0 duplicate claims. | VERIFIED CORRECT |
 | F-07 | Database Migrations | Migration order, foreign keys, and V1–V13 integrity | Verified Correct: `SchemaMigrationService` sequentially executes migrations V1–V13 in transactional batches. Foreign keys and indexes verified in `SchemaMigrationTest`. | VERIFIED CORRECT |
 | F-08 | Server Lifecycle | Server startup, dynamic ports, and port 8080 exclusion | Verified Correct: `Port8080EliminationRegressionTest` and `ServerBootstrapAndNetworkingTest` prove port 8080 is rejected and coherent port reallocation operates cleanly. | VERIFIED CORRECT |
+| F-10 | Server Lifecycle / UI | UI Start Server failed with `ApplicationLifecycleCoordinator is not available` / `NOT_REGISTERED` due to OSGi bundle isolation | Resolved: Defined `TrystServerLifecycleService` in `eu.kalafatic.tryst.core.server`. `ApplicationLifecycleCoordinator` implements and registers the service in OSGi. `TrystUiServices` consumes it dynamically via OSGi Service Registry without reflection, dynamic imports, or duplicate server instances. Verified in `ServerLifecycleAndUiAccessTest`. | RESOLVED AND TESTED |
 | F-09 | Human Approval | Pre-approval commit gating and working tree tampering | Verified Correct: `CodeReviewAndCommitAuthorizationTest` and `GitDeliveryAndApprovalWorkflowTest` confirm tampered working trees and unapproved reviews are rejected. | VERIFIED CORRECT |
 
 ---
@@ -44,7 +46,7 @@ This forensic audit and stabilization effort evaluated the TRYST platform agains
 ## 3. Component and Dependency Architecture
 
 TRYST is organized as an OSGi modular application managed by Maven Tycho 4.0.8:
-- **`eu.kalafatic.tryst.core`**: Core contracts, logging (`TrystLog`), asynchronous execution (`AsyncExecutionService`), application configuration, and port management (`PortRegistry`).
+- **`eu.kalafatic.tryst.core`**: Core contracts, server lifecycle contracts (`TrystServerLifecycleService`, `TrystHttpService`, `TrystTcpService`), logging (`TrystLog`), asynchronous execution (`AsyncExecutionService`), application configuration, and port management (`PortRegistry`).
 - **`eu.kalafatic.tryst.domain`**: Authoritative domain entities (`Project`, `Workspace`, `Task`, `AgentTask`, `Session`, `CodeReview`, `User`), repository interfaces, and domain validators (`TaskStateTransitionValidator`, `TaskRecoveryService`).
 - **`eu.kalafatic.tryst.infrastructure`**: SQLite persistence (`SqliteDatabaseManager`, `SchemaMigrationService`, concrete repositories), HTTP server (`TrystHttpServer` on NanoHTTPD), TCP server (`TrystTcpServer`), VCS services (`GitService`), and Build execution (`BuildAndTestService`).
 - **`eu.kalafatic.tryst.evo.integration`**: Optional TEIP 1.0 (TRYST-Evolution Integration Protocol) client and MCP JSON-RPC server (`/api/mcp`).
