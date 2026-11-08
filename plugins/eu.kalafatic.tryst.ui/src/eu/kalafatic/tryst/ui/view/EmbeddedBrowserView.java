@@ -81,14 +81,14 @@ public class EmbeddedBrowserView extends ViewPart {
 
     private String resolveBestUrl(RuntimeEndpoint ep) {
         if (ep == null) return "http://127.0.0.1:38080/tryst";
-        // Prefer canonical or external URL when available, otherwise internal URL
-        if (ep.canonicalUrl() != null && !ep.canonicalUrl().isBlank()) {
-            return ep.canonicalUrl();
-        }
+        // Prefer externalUrl (which accounts for reverse proxy configuration and bound ports)
         if (ep.externalUrl() != null && !ep.externalUrl().isBlank()) {
             return ep.externalUrl();
         }
-        return ep.internalUrl();
+        if (ep.internalUrl() != null && !ep.internalUrl().isBlank()) {
+            return ep.internalUrl();
+        }
+        return ep.canonicalUrl();
     }
 
     private void navigateToUrl(String url) {

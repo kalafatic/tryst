@@ -42,7 +42,7 @@ public class McpPage extends AbstractTrystEditorPage {
         lbl.setText("MCP Endpoint:");
 
         lblEndpoint = new Label(topBar, SWT.BORDER);
-        lblEndpoint.setText("http://localhost/tryst/api/mcp (JSON-RPC 2.0)");
+        lblEndpoint.setText(resolveMcpEndpoint());
         lblEndpoint.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
         Label listLbl = new Label(parent, SWT.NONE);
@@ -79,8 +79,20 @@ public class McpPage extends AbstractTrystEditorPage {
         refresh();
     }
 
+    private String resolveMcpEndpoint() {
+        var config = eu.kalafatic.tryst.ui.TrystUiServices.getConfiguration();
+        var http = eu.kalafatic.tryst.ui.TrystUiServices.getHttpService();
+        if (config != null && http != null && http.isRunning()) {
+            return config.resolveEffectiveExternalUrl(http.getPort()) + "/api/mcp (JSON-RPC 2.0)";
+        }
+        return "http://127.0.0.1:38080/tryst/api/mcp (JSON-RPC 2.0)";
+    }
+
     @Override
     public void refresh() {
+        if (lblEndpoint != null && !lblEndpoint.isDisposed()) {
+            lblEndpoint.setText(resolveMcpEndpoint());
+        }
         if (toolViewer == null || toolViewer.getControl().isDisposed()) return;
         List<McpToolEntry> defaultTools = List.of(
                 new McpToolEntry("get_project_metadata", "Retrieves root project and git metadata", "READ_ONLY"),

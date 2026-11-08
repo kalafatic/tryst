@@ -330,8 +330,13 @@ public record ApplicationConfiguration(
     }
 
     public String resolveEffectiveExternalUrl(int actualPort) {
-        if (reverseProxyEnabled && publicServerUrl != null && !publicServerUrl.isBlank()) {
-            return publicServerUrl.endsWith("/") ? publicServerUrl.substring(0, publicServerUrl.length() - 1) : publicServerUrl;
+        if (reverseProxyEnabled) {
+            if (publicServerUrl != null && !publicServerUrl.isBlank()) {
+                return publicServerUrl.endsWith("/") ? publicServerUrl.substring(0, publicServerUrl.length() - 1) : publicServerUrl;
+            }
+            if (canonicalUrl != null && !canonicalUrl.isBlank()) {
+                return canonicalUrl.endsWith("/") ? canonicalUrl.substring(0, canonicalUrl.length() - 1) : canonicalUrl;
+            }
         }
         String cleanContext = contextPath.startsWith("/") ? contextPath : "/" + contextPath;
         if (cleanContext.endsWith("/")) {

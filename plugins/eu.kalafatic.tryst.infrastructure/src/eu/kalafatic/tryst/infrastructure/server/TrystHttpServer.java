@@ -338,7 +338,7 @@ public class TrystHttpServer implements TrystHttpService {
         AdminHandler adminH = new AdminHandler();
         WorkflowHandler workflowH = new WorkflowHandler();
         ScheduleHandler scheduleH = new ScheduleHandler();
-        StaticAssetHandler staticH = new StaticAssetHandler();
+        StaticAssetHandler staticH = new StaticAssetHandler(ctxPath);
 
         // Register default root /api/... routes
         server.createContext("/api/status", statusH);
@@ -560,6 +560,10 @@ public class TrystHttpServer implements TrystHttpService {
     }
 
     private String getClientIp(HttpExchange exchange) {
+        String xff = exchange.getRequestHeaders().getFirst("X-Forwarded-For");
+        if (xff != null && !xff.isBlank()) {
+            return xff.split(",")[0].trim();
+        }
         if (exchange.getRemoteAddress() != null && exchange.getRemoteAddress().getAddress() != null) {
             return exchange.getRemoteAddress().getAddress().getHostAddress();
         }
@@ -3524,6 +3528,16 @@ public class TrystHttpServer implements TrystHttpService {
     }
 
     private static class StaticAssetHandler implements HttpHandler {
+        private final String contextPath;
+
+        public StaticAssetHandler() {
+            this("/tryst");
+        }
+
+        public StaticAssetHandler(String contextPath) {
+            this.contextPath = (contextPath != null && !contextPath.isBlank()) ? contextPath : "/tryst";
+        }
+
         private static final String APP_HTML = """
                 <!DOCTYPE html>
                 <html lang="en">
@@ -4057,14 +4071,19 @@ public class TrystHttpServer implements TrystHttpService {
                         // Determine the base context path dynamically from window.location.pathname
                         function getContextBase() {
                             const p = window.location.pathname;
-                            if (p.startsWith('/tryst')) {
+                            if (p.startsWith('/tryst/') || p === '/tryst') {
                                 return '/tryst';
                             }
                             return '';
                         }
                         function apiUrl(endpoint) {
-                            const clean = endpoint.startsWith('/') ? endpoint : '/' + endpoint;
-                            return getContextBase() + clean;
+                            if (!endpoint) return getContextBase();
+                            const base = getContextBase();
+                            let clean = endpoint.startsWith('/') ? endpoint : '/' + endpoint;
+                            if (base && (clean === base || clean.startsWith(base + '/'))) {
+                                return clean;
+                            }
+                            return base + clean;
                         }
 
                         function getAuthHeaders() {
@@ -4562,7 +4581,7 @@ public class TrystHttpServer implements TrystHttpService {
 
                         async function loadEvoConfig() {
                             try {
-                                const res = await fetch(`${getContextBase()}/api/integration/evo/config`, { credentials: 'omit' });
+                                const res = await fetch(apiUrl('/api/integration/evo/config'), { credentials: 'omit' });
                                 if (res.ok) {
                                     const d = await res.json();
                                     document.getElementById('evoEndpointInput').value = d.endpoint || '';
@@ -4578,7 +4597,7 @@ public class TrystHttpServer implements TrystHttpService {
                             const authToken = document.getElementById('evoAuthTokenInput').value;
                             const enabled = document.getElementById('evoEnabledInput').checked;
                             try {
-                                const res = await fetch(`${getContextBase()}/api/integration/evo/config`, {
+                                const res = await fetch(apiUrl('/api/integration/evo/config'), {
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify({ endpoint, authToken, enabled, timeoutSeconds: 60, maxRetries: 3 })
@@ -4597,7 +4616,7 @@ public class TrystHttpServer implements TrystHttpService {
                             const b = document.getElementById('evoHealthBadge');
                             b.innerHTML = 'Testing connection...';
                             try {
-                                const res = await fetch(`${getContextBase()}/api/integration/evo/health`);
+                                const res = await fetch(apiUrl('/api/integration/evo/health'));
                                 const d = await res.json();
                                 if (d.connected) {
                                     b.innerHTML = `<span class="badge badge-success">ONLINE</span> Node: ${d.nodeId || 'unknown'} (TEIP ${d.version || '1.0'})`;
@@ -4613,7 +4632,7 @@ public class TrystHttpServer implements TrystHttpService {
                             const c = document.getElementById('evoCapabilitiesList');
                             c.innerHTML = 'Querying capabilities...';
                             try {
-                                const res = await fetch(`${getContextBase()}/api/integration/evo/capabilities`);
+                                const res = await fetch(apiUrl('/api/integration/evo/capabilities'));
                                 if (!res.ok) {
                                     c.innerHTML = '<span style="color:var(--red);">Capabilities unavailable.</span>';
                                     return;
@@ -4638,7 +4657,7 @@ public class TrystHttpServer implements TrystHttpService {
                             const container = document.getElementById('evoExecutionsList');
                             container.innerHTML = 'Loading executions...';
                             try {
-                                const res = await fetch(`${getContextBase()}/api/integration/evo/executions`);
+                                const res = await fetch(apiUrl('/api/integration/evo/executions'));
                                 if (!res.ok) {
                                     container.innerHTML = 'Failed to load executions.';
                                     return;
@@ -4677,7 +4696,7 @@ public class TrystHttpServer implements TrystHttpService {
                         async function cancelEvoExecution(id) {
                             if (!confirm('Cancel this active EVO execution?')) return;
                             try {
-                                const res = await fetch(`${getContextBase()}/api/integration/evo/executions/${id}/cancel`, { method: 'POST' });
+                                const res = await fetch(apiUrl(`/api/integration/evo/executions/${id}/cancel`), { method: 'POST' });
                                 if (res.ok) {
                                     refreshEvoExecutions();
                                 } else {
@@ -5301,7 +5320,7 @@ public class TrystHttpServer implements TrystHttpService {
                                 try {
                                     new Notification(title, {
                                         body: message,
-                                        icon: '/favicon.ico'
+                                        icon: apiUrl('/favicon.ico')
                                     });
                                 } catch (e) {
                                     console.warn('Browser notification error', e);
@@ -5686,12 +5705,25 @@ public class TrystHttpServer implements TrystHttpService {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
             String path = exchange.getRequestURI().getPath();
-            if (path.startsWith("/api/")) {
+            if (path == null) path = "/";
+            if (path.startsWith("/api/") || path.contains("/api/")) {
                 sendJsonResponse(exchange, 404, "{\"error\": \"Not Found\"}");
                 return;
             }
 
-            InputStream in = getClass().getResourceAsStream("/web" + (path.equals("/") ? "/index.html" : path));
+            String ctxPath = this.contextPath;
+            String resourcePath = path;
+            if (ctxPath != null && !ctxPath.isEmpty() && !"/".equals(ctxPath) && resourcePath.startsWith(ctxPath)) {
+                resourcePath = resourcePath.substring(ctxPath.length());
+            }
+            if (resourcePath.isEmpty() || resourcePath.equals("/")) {
+                resourcePath = "/index.html";
+            }
+            if (!resourcePath.startsWith("/")) {
+                resourcePath = "/" + resourcePath;
+            }
+
+            InputStream in = getClass().getResourceAsStream("/web" + resourcePath);
             byte[] content;
             String contentType = "text/html; charset=UTF-8";
 
@@ -5699,9 +5731,12 @@ public class TrystHttpServer implements TrystHttpService {
                 try (in) {
                     content = in.readAllBytes();
                 }
-                if (path.endsWith(".css")) contentType = "text/css; charset=UTF-8";
-                else if (path.endsWith(".js")) contentType = "application/javascript; charset=UTF-8";
-                else if (path.endsWith(".json")) contentType = "application/json; charset=UTF-8";
+                if (resourcePath.endsWith(".css")) contentType = "text/css; charset=UTF-8";
+                else if (resourcePath.endsWith(".js")) contentType = "application/javascript; charset=UTF-8";
+                else if (resourcePath.endsWith(".json")) contentType = "application/json; charset=UTF-8";
+                else if (resourcePath.endsWith(".svg")) contentType = "image/svg+xml";
+                else if (resourcePath.endsWith(".ico")) contentType = "image/x-icon";
+                else if (resourcePath.endsWith(".png")) contentType = "image/png";
             } else {
                 content = APP_HTML.getBytes(StandardCharsets.UTF_8);
             }
