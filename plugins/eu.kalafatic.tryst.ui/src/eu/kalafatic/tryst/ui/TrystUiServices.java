@@ -288,17 +288,21 @@ public final class TrystUiServices {
         return getService(eu.kalafatic.tryst.domain.service.ManagedServiceController.class);
     }
 
+    public static eu.kalafatic.tryst.core.server.TrystServerLifecycleService getServerLifecycleService() {
+        return getService(eu.kalafatic.tryst.core.server.TrystServerLifecycleService.class);
+    }
+
     public static eu.kalafatic.tryst.core.server.TrystHttpService getHttpService() {
+        var lifecycle = getServerLifecycleService();
+        if (lifecycle != null) {
+            var s = lifecycle.getHttpService();
+            if (s != null && s.isRunning()) {
+                return s;
+            }
+        }
         var s = getService(eu.kalafatic.tryst.core.server.TrystHttpService.class);
         if (s != null) {
             return s;
-        }
-        Object coord = getLifecycleCoordinator();
-        if (coord != null) {
-            try {
-                return (eu.kalafatic.tryst.core.server.TrystHttpService) coord.getClass().getMethod("getHttpService").invoke(coord);
-            } catch (Throwable ignored) {
-            }
         }
         return null;
     }
@@ -308,28 +312,14 @@ public final class TrystUiServices {
     }
 
     /**
-     * Resolves the application lifecycle coordinator instance via reflection to prevent compile-time cycles.
+     * Triggers real HTTP server startup through the authoritative server lifecycle service.
      */
-    public static Object getLifecycleCoordinator() {
-        try {
-            Class<?> pluginClass = Class.forName("eu.kalafatic.tryst.application.TrystApplicationPlugin");
-            Object pluginInstance = pluginClass.getMethod("getDefault").invoke(null);
-            if (pluginInstance != null) {
-                return pluginClass.getMethod("getLifecycleCoordinator").invoke(pluginInstance);
-            }
-        } catch (Throwable ignored) {
+    public static synchronized eu.kalafatic.tryst.core.server.TrystHttpService startHttpServer() throws Exception {
+        var lifecycle = getServerLifecycleService();
+        if (lifecycle != null) {
+            return lifecycle.startHttpServer();
         }
-        return null;
-    }
 
-    /**
-     * Triggers real HTTP server startup through the ApplicationLifecycleCoordinator.
-     */
-    public static eu.kalafatic.tryst.core.server.TrystHttpService startHttpServer() throws Exception {
-        Object coord = getLifecycleCoordinator();
-        if (coord != null) {
-            return (eu.kalafatic.tryst.core.server.TrystHttpService) coord.getClass().getMethod("startHttpService").invoke(coord);
-        }
         var current = getHttpService();
         if (current != null) {
             if (!current.isRunning()) {
@@ -337,16 +327,17 @@ public final class TrystUiServices {
             }
             return current;
         }
-        throw new IllegalStateException("ApplicationLifecycleCoordinator is not available to start HTTP server.");
+
+        throw new IllegalStateException("Server lifecycle service is not available in the OSGi runtime. Cannot start HTTP server.");
     }
 
     /**
-     * Triggers real HTTP server shutdown through the ApplicationLifecycleCoordinator.
+     * Triggers real HTTP server shutdown through the authoritative server lifecycle service.
      */
-    public static void stopHttpServer() throws Exception {
-        Object coord = getLifecycleCoordinator();
-        if (coord != null) {
-            coord.getClass().getMethod("stopHttpService").invoke(coord);
+    public static synchronized void stopHttpServer() throws Exception {
+        var lifecycle = getServerLifecycleService();
+        if (lifecycle != null) {
+            lifecycle.stopHttpServer();
             return;
         }
         var current = getHttpService();
@@ -356,12 +347,12 @@ public final class TrystUiServices {
     }
 
     /**
-     * Triggers real HTTP server restart through the ApplicationLifecycleCoordinator.
+     * Triggers real HTTP server restart through the authoritative server lifecycle service.
      */
-    public static eu.kalafatic.tryst.core.server.TrystHttpService restartHttpServer() throws Exception {
-        Object coord = getLifecycleCoordinator();
-        if (coord != null) {
-            return (eu.kalafatic.tryst.core.server.TrystHttpService) coord.getClass().getMethod("restartHttpService").invoke(coord);
+    public static synchronized eu.kalafatic.tryst.core.server.TrystHttpService restartHttpServer() throws Exception {
+        var lifecycle = getServerLifecycleService();
+        if (lifecycle != null) {
+            return lifecycle.restartHttpServer();
         }
         stopHttpServer();
         return startHttpServer();

@@ -67,7 +67,9 @@ public class ServerMonitoringPage extends AbstractTrystEditorPage {
         Button btnStartServer = new Button(serverBtnBar, SWT.PUSH);
         btnStartServer.setText("▶ Start Server");
         btnStartServer.addListener(SWT.Selection, e -> {
+            btnStartServer.setEnabled(false);
             try {
+                lblHttpStatus.setText("STARTING...");
                 var s = TrystUiServices.startHttpServer();
                 org.eclipse.jface.dialogs.MessageDialog.openInformation(
                         parent.getShell(),
@@ -82,6 +84,8 @@ public class ServerMonitoringPage extends AbstractTrystEditorPage {
                         "Server Startup Failure",
                         "Failed to start embedded HTTP server:\n\n" + cause.getMessage()
                 );
+            } finally {
+                btnStartServer.setEnabled(true);
             }
             refresh();
         });
@@ -202,17 +206,31 @@ public class ServerMonitoringPage extends AbstractTrystEditorPage {
     public void refresh() {
         if (lblReadiness == null || lblReadiness.isDisposed()) return;
 
+        var lifecycleService = TrystUiServices.getServerLifecycleService();
         var httpService = TrystUiServices.getHttpService();
+
         if (httpService != null) {
             boolean running = httpService.isRunning();
             lblHttpStatus.setText(running ? "RUNNING" : "STOPPED");
             if (running) {
                 lblHttpPort.setText(httpService.getHost() + ":" + httpService.getPort());
             } else {
-                lblHttpPort.setText("Not listening");
+                lblHttpPort.setText("Not listening (" + httpService.getHost() + ":" + httpService.getPort() + ")");
             }
+        } else if (lifecycleService != null) {
+            boolean running = lifecycleService.isHttpServerRunning();
+            lblHttpStatus.setText(running ? "RUNNING" : "STOPPED");
+            lblHttpPort.setText(running ? "Active" : "Not listening");
         } else {
-            lblHttpStatus.setText("NOT_REGISTERED");
+            var readiness = TrystUiServices.getServerReadinessService();
+            var httpComp = (readiness != null) ? readiness.getComponent("HttpServer") : null;
+            if (httpComp != null && httpComp.state() == ServerReadinessService.ComponentState.FAILED) {
+                lblHttpStatus.setText("FAILED (" + (httpComp.lastError() != null ? httpComp.lastError() : "Startup error") + ")");
+            } else if (readiness != null) {
+                lblHttpStatus.setText("STOPPED (Ready to start)");
+            } else {
+                lblHttpStatus.setText("SERVICE_UNAVAILABLE");
+            }
             lblHttpPort.setText("-");
         }
 
