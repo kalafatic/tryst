@@ -73,6 +73,11 @@ public final class TrystUiServices {
         if (plugin != null && plugin.getBundle() != null && plugin.getBundle().getBundleContext() != null) {
             return Optional.of(plugin.getBundle().getBundleContext());
         }
+        // Fallback check: if FrameworkUtil on plugin class yields context
+        Bundle pluginBundle = FrameworkUtil.getBundle(TrystUiPlugin.class);
+        if (pluginBundle != null && pluginBundle.getBundleContext() != null) {
+            return Optional.of(pluginBundle.getBundleContext());
+        }
         return Optional.empty();
     }
 

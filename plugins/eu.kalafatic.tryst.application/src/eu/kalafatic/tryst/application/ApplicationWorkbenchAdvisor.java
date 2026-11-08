@@ -16,7 +16,7 @@ public class ApplicationWorkbenchAdvisor extends WorkbenchAdvisor {
 
     public static final String PERSPECTIVE_ID = "eu.kalafatic.tryst.ui.perspective.main";
 
-    private final ApplicationLifecycleCoordinator coordinator;
+    private ApplicationLifecycleCoordinator coordinator;
 
     public ApplicationWorkbenchAdvisor() {
         this(resolveCoordinator());
@@ -47,6 +47,13 @@ public class ApplicationWorkbenchAdvisor extends WorkbenchAdvisor {
         // In the standard TRYST product, TrystApplication initializes Core services & servers before Display creation.
         // If launched via a generic Eclipse Workbench runner or IDE test where TrystApplication did not run,
         // safely complete platform and core initialization now so services are NEVER left unregistered!
+        if (coordinator == null) {
+            ApplicationLifecycleCoordinator resolved = resolveCoordinator();
+            if (resolved != null) {
+                this.coordinator = resolved;
+            }
+        }
+
         if (coordinator != null && coordinator.getCurrentStage().ordinal() < ApplicationLifecycleStage.APPLICATION_READY.ordinal()) {
             TrystLog.warn(ApplicationWorkbenchAdvisor.class,
                     "Detected generic Eclipse Workbench launch without prior TrystApplication execution. Running fallback Core service initialization...");
@@ -61,17 +68,6 @@ public class ApplicationWorkbenchAdvisor extends WorkbenchAdvisor {
             }
             coordinator.transitionTo(ApplicationLifecycleStage.APPLICATION_READY);
             TrystLog.info(ApplicationWorkbenchAdvisor.class, "Fallback Core service initialization complete. Application is READY.");
-        } else if (coordinator == null) {
-            // Coordinator reference was null (e.g. bundle activator not run); attempt dynamic resolution from plugin
-            ApplicationLifecycleCoordinator resolved = resolveCoordinator();
-            if (resolved != null && resolved.getCurrentStage().ordinal() < ApplicationLifecycleStage.APPLICATION_READY.ordinal()) {
-                TrystLog.warn(ApplicationWorkbenchAdvisor.class,
-                        "Resolving lifecycle coordinator from TrystApplicationPlugin and driving fallback Core initialization...");
-                resolved.transitionTo(ApplicationLifecycleStage.PLATFORM_INITIALIZATION);
-                resolved.transitionTo(ApplicationLifecycleStage.CONFIGURATION_INITIALIZATION);
-                resolved.transitionTo(ApplicationLifecycleStage.CORE_SERVICE_INITIALIZATION);
-                resolved.transitionTo(ApplicationLifecycleStage.APPLICATION_READY);
-            }
         }
     }
 
