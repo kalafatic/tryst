@@ -28,7 +28,7 @@ class SchemaMigrationTest {
             assertEquals(0, migrationService.getCurrentVersion());
 
             migrationService.migrate();
-            assertEquals(13, migrationService.getCurrentVersion());
+            assertEquals(14, migrationService.getCurrentVersion());
 
             // Verify all expected tables exist
             Connection conn = dbManager.getConnection();
@@ -65,6 +65,10 @@ class SchemaMigrationTest {
             assertTrue(tables.contains("evo_configurations"));
             assertTrue(tables.contains("evo_executions"));
             assertTrue(tables.contains("evo_execution_events"));
+            assertTrue(tables.contains("workflow_definitions"));
+            assertTrue(tables.contains("workflow_executions"));
+            assertTrue(tables.contains("task_schedules"));
+            assertTrue(tables.contains("repository_mirrors"));
         }
     }
 }

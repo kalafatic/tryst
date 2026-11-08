@@ -77,6 +77,8 @@ public class ServerBootstrapAndNetworkingTest {
         assertTrue(httpServer.isRunning(), "HttpServer should be running");
 
         socket.close();
+        httpServer.stop();
+        httpServer = null;
     }
 
     @Test
@@ -90,7 +92,7 @@ public class ServerBootstrapAndNetworkingTest {
         SchemaMigrationService migrationService = new SchemaMigrationService(databaseManager);
         migrationService.migrate();
 
-        assertEquals(13, migrationService.getCurrentVersion(), "Database should be migrated to V13");
+        assertEquals(14, migrationService.getCurrentVersion(), "Database should be migrated to V14");
     }
 
     @Test

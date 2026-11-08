@@ -188,19 +188,28 @@ class CentralizedLoggingTest {
         CountDownLatch latch = new CountDownLatch(threads);
         AtomicInteger count = new AtomicInteger(0);
 
-        TrystLog.addListener(entry -> count.incrementAndGet());
+        eu.kalafatic.tryst.core.log.LogListener listener = entry -> {
+            if (entry.message() != null && entry.message().startsWith("Thread ")) {
+                count.incrementAndGet();
+            }
+        };
+        TrystLog.addListener(listener);
 
-        for (int t = 0; t < threads; t++) {
-            final int threadId = t;
-            new Thread(() -> {
-                for (int i = 0; i < logsPerThread; i++) {
-                    TrystLog.info(CentralizedLoggingTest.class, "Thread " + threadId + " log " + i);
-                }
-                latch.countDown();
-            }).start();
+        try {
+            for (int t = 0; t < threads; t++) {
+                final int threadId = t;
+                new Thread(() -> {
+                    for (int i = 0; i < logsPerThread; i++) {
+                        TrystLog.info(CentralizedLoggingTest.class, "Thread " + threadId + " log " + i);
+                    }
+                    latch.countDown();
+                }).start();
+            }
+
+            assertTrue(latch.await(5, TimeUnit.SECONDS));
+            assertEquals(threads * logsPerThread, count.get());
+        } finally {
+            TrystLog.removeListener(listener);
         }
-
-        assertTrue(latch.await(5, TimeUnit.SECONDS));
-        assertEquals(threads * logsPerThread, count.get());
     }
 }

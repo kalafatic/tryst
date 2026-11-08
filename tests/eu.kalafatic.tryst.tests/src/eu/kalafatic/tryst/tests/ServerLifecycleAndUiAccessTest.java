@@ -70,21 +70,9 @@ class ServerLifecycleAndUiAccessTest {
         if (coordinator != null) {
             try {
                 coordinator.stopHttpServer();
-                ApplicationLifecycleStage stage = coordinator.getCurrentStage();
-                if (stage == ApplicationLifecycleStage.APPLICATION_READY) {
-                    coordinator.transitionTo(ApplicationLifecycleStage.WORKBENCH_RUNNING);
-                    stage = ApplicationLifecycleStage.WORKBENCH_RUNNING;
-                }
-                if (stage == ApplicationLifecycleStage.WORKBENCH_RUNNING) {
-                    coordinator.transitionTo(ApplicationLifecycleStage.APPLICATION_SHUTDOWN);
-                    stage = ApplicationLifecycleStage.APPLICATION_SHUTDOWN;
-                }
-                if (stage == ApplicationLifecycleStage.APPLICATION_SHUTDOWN) {
-                    coordinator.transitionTo(ApplicationLifecycleStage.SERVICE_DISPOSAL);
-                    stage = ApplicationLifecycleStage.SERVICE_DISPOSAL;
-                }
-                if (stage == ApplicationLifecycleStage.SERVICE_DISPOSAL) {
-                    coordinator.transitionTo(ApplicationLifecycleStage.APPLICATION_TERMINATED);
+                while (coordinator.getCurrentStage().ordinal() < ApplicationLifecycleStage.APPLICATION_TERMINATED.ordinal()) {
+                    ApplicationLifecycleStage next = ApplicationLifecycleStage.values()[coordinator.getCurrentStage().ordinal() + 1];
+                    coordinator.transitionTo(next);
                 }
             } catch (Exception ignored) {
             }

@@ -114,7 +114,11 @@ class ConsoleControllerTest {
         CountDownLatch latch = new CountDownLatch(threads);
         AtomicInteger receivedCount = new AtomicInteger(0);
 
-        controller.setLogEntryCallback(e -> receivedCount.incrementAndGet());
+        controller.setLogEntryCallback(e -> {
+            if (e.message() != null && e.message().startsWith("High volume log ")) {
+                receivedCount.incrementAndGet();
+            }
+        });
 
         for (int t = 0; t < threads; t++) {
             new Thread(() -> {

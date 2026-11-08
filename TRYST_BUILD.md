@@ -41,7 +41,38 @@ xvfb-run -a ./product/eu.kalafatic.tryst.product/target/products/eu.kalafatic.tr
 
 ## Troubleshooting & Common Build Issues
 
-### 1. `Missing requirement: eu.kalafatic.tryst.application requires 'osgi.bundle; eu.kalafatic.tryst.core 0.1.0' but it could not be found`
+### 1. `Could not resolve target platform specification artifact eu.kalafatic.tryst:eu.kalafatic.tryst.target:target:0.1.0-SNAPSHOT`
+
+#### Root Cause
+Tycho resolves the target platform specification artifact (`eu.kalafatic.tryst:eu.kalafatic.tryst.target`) dynamically via `TargetPlatformArtifactResolver`. In Tycho multi-module architectures, this target artifact is resolved from:
+1. The active in-memory Maven reactor projects list (`session.getProjects()`) when building from the repository root, OR
+2. The local Maven repository (`~/.m2/repository`) if previously installed.
+
+If an isolated submodule build is invoked directly (such as `mvn compile -pl plugins/eu.kalafatic.tryst.application` or `cd plugins/eu.kalafatic.tryst.core && mvn compile`) without `targetplatform/eu.kalafatic.tryst.target` in the active reactor and without the target artifact pre-installed in the local repository, Tycho cannot resolve the target platform definition and fails before compilation.
+
+Furthermore, an unhandled build abort during target resolution can cause a secondary `Equinox Shutdown Hook NoClassDefFoundError: org/eclipse/osgi/container/ModuleDatabase$Persistence` on JVM exit when the Plexus class realm closes prematurely.
+
+#### Authoritative Build Procedure
+Always invoke Maven builds from the repository root as a full reactor:
+```bash
+# Full clean build and test verification:
+mvn clean verify
+
+# Fast compilation of all reactor modules:
+mvn clean test-compile
+```
+
+If building a specific submodule with `-pl`, include the target platform module in the reactor or pre-install it:
+```bash
+# With target platform module in reactor:
+mvn compile -pl targetplatform/eu.kalafatic.tryst.target,plugins/eu.kalafatic.tryst.application
+
+# Or after installing to local repository:
+mvn clean install -DskipTests -pl targetplatform/eu.kalafatic.tryst.target
+mvn compile -pl plugins/eu.kalafatic.tryst.application
+```
+
+### 2. `Missing requirement: eu.kalafatic.tryst.application requires 'osgi.bundle; eu.kalafatic.tryst.core 0.1.0' but it could not be found`
 
 #### Root Cause
 Tycho resolves OSGi bundle dependencies using Eclipse p2 target platform resolution. Internal module dependencies within the multi-module project (e.g., `eu.kalafatic.tryst.core`, `eu.kalafatic.tryst.domain`, `eu.kalafatic.tryst.infrastructure`) are **not** standard Maven JAR artifacts; they are resolved either:
@@ -60,13 +91,7 @@ mvn clean verify
 mvn clean install -DskipTests
 ```
 
-If you need to build or test a specific submodule, always execute from the root directory using the reactor project list flag (`-pl`):
-```bash
-mvn compile -pl plugins/eu.kalafatic.tryst.application
-```
-(Ensure `mvn clean install -DskipTests` has been run from root at least once beforehand if not including upstream project dependencies in the reactor).
-
-### 2. JDK Version Warnings (`Using JavaSE-25 to fulfill requested profile of JavaSE-21`)
+### 3. JDK Version Warnings (`Using JavaSE-25 to fulfill requested profile of JavaSE-21`)
 
 #### Root Cause
 TRYST targets **JavaSE-21**. Running Maven with an incompatible or newer major JDK version (such as JDK 25) can trigger Tycho compilation warnings, bytecode incompatibility, or JVM warning messages (`sun.misc.Unsafe`, native access warnings).
