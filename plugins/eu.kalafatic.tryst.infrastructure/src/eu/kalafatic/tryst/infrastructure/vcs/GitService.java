@@ -117,6 +117,14 @@ public class GitService {
 
                 GitCommandResult cloneRes = runGit(parent, cloneArgs);
                 if (!cloneRes.isSuccess()) {
+                    // If cloning with explicit --branch failed (e.g. empty or default branch mismatch), try default clone
+                    List<String> fallbackArgs = List.of("clone", authenticatedUrl, dirName);
+                    cloneRes = runGit(parent, fallbackArgs);
+                    if (cloneRes.isSuccess()) {
+                        runGit(targetDir, List.of("checkout", effectiveBranch));
+                    }
+                }
+                if (!cloneRes.isSuccess()) {
                     TrystLog.error(GitService.class, "Clone failed: " + maskOutput(cloneRes.error(), token));
                     return new GitCommandResult(cloneRes.exitCode(), maskOutput(cloneRes.output(), token), maskOutput(cloneRes.error(), token));
                 }

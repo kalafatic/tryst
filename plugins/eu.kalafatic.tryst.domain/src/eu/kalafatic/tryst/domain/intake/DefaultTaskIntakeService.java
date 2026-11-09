@@ -18,6 +18,7 @@ import eu.kalafatic.tryst.domain.security.SecurityContext;
 import eu.kalafatic.tryst.domain.service.TaskOrchestrator;
 import eu.kalafatic.tryst.domain.service.WorkspaceService;
 
+import java.net.URI;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -106,15 +107,21 @@ public class DefaultTaskIntakeService implements TaskIntakeService {
                 errors.add("Referenced project ID does not exist: " + projectId);
             }
         } else if (!repoUrl.isEmpty()) {
-            repoContext = "GitHub: " + repoUrl + " (" + branch + ")";
-            // Validate GitHub URL format
-            if (!repoUrl.startsWith("http://") && !repoUrl.startsWith("https://") && !repoUrl.startsWith("git@")) {
-                errors.add("Repository URL must be a valid HTTP(S) or Git clone URL: " + repoUrl);
-            }
-            if (gitHubCredentialRepository != null) {
-                boolean hasCred = gitHubCredentialRepository.findByUserId(effectiveUser).isPresent();
-                if (!hasCred && (repoUrl.contains("github.com") && !repoUrl.contains("/public/"))) {
-                    missingInfo.add("No connected GitHub credential found for user. Access to private repositories will fail unless public.");
+            boolean isLocalPath = repoUrl.startsWith("/") || repoUrl.startsWith("./") || repoUrl.startsWith("../") ||
+                    repoUrl.startsWith("file://") || repoUrl.startsWith("~") || (repoUrl.length() > 2 && repoUrl.charAt(1) == ':');
+            if (isLocalPath) {
+                repoContext = "Local Repository: " + repoUrl + " (" + branch + ")";
+            } else {
+                repoContext = "Repository: " + repoUrl + " (" + branch + ")";
+                // Validate repository clone URL format
+                if (!repoUrl.startsWith("http://") && !repoUrl.startsWith("https://") && !repoUrl.startsWith("git@") && !repoUrl.startsWith("ssh://")) {
+                    errors.add("Repository URL must be a valid HTTP(S), Git, or local repository path: " + repoUrl);
+                }
+                if (gitHubCredentialRepository != null) {
+                    boolean hasCred = gitHubCredentialRepository.findByUserId(effectiveUser).isPresent();
+                    if (!hasCred && (repoUrl.contains("github.com") && !repoUrl.contains("/public/"))) {
+                        missingInfo.add("No connected GitHub credential found for user. Access to private repositories will fail unless public.");
+                    }
                 }
             }
         } else if (workspaceService != null && workspaceService.getCurrentWorkspace() != null) {
@@ -177,11 +184,18 @@ public class DefaultTaskIntakeService implements TaskIntakeService {
         String repoUrl = request.repositoryUrl() != null && !request.repositoryUrl().trim().isEmpty() ? request.repositoryUrl().trim() : null;
         String branch = (request.branch() != null && !request.branch().trim().isEmpty()) ? request.branch().trim() : "main";
 
-        // Auto-provision or register Project if GitHub repo is specified without a local project
+        // Auto-provision or register Project if repository URL/path is specified without a local project
         if (projectId == null && repoUrl != null && projectRepository != null) {
             String repoName = extractRepoName(repoUrl);
-            Path projectPath = Path.of(System.getProperty("user.home"), ".tryst", "projects", effectiveUser, repoName);
-            Project project = new Project(UUID.randomUUID().toString(), effectiveUser, repoName, "GitHub: " + repoUrl, projectPath, eu.kalafatic.tryst.domain.model.ProjectStatus.ACTIVE, false, java.time.Instant.now(), java.time.Instant.now());
+            Path projectPath;
+            if (repoUrl.startsWith("/") || (repoUrl.length() > 2 && repoUrl.charAt(1) == ':')) {
+                projectPath = Path.of(repoUrl);
+            } else if (repoUrl.startsWith("file://")) {
+                projectPath = Path.of(URI.create(repoUrl));
+            } else {
+                projectPath = Path.of(System.getProperty("user.home"), ".tryst", "projects", effectiveUser, repoName);
+            }
+            Project project = new Project(UUID.randomUUID().toString(), effectiveUser, repoName, "Repository: " + repoUrl, projectPath, eu.kalafatic.tryst.domain.model.ProjectStatus.ACTIVE, false, java.time.Instant.now(), java.time.Instant.now());
             projectRepository.save(project);
             projectId = project.getId();
         }
