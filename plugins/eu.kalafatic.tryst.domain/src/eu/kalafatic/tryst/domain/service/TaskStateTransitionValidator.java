@@ -194,6 +194,7 @@ public final class TaskStateTransitionValidator {
         // From COMMITTING
         ALLOWED_TRANSITIONS.put(TaskStatus.COMMITTING, EnumSet.of(
                 TaskStatus.COMPLETED,
+                TaskStatus.WAITING_FOR_REVIEW,
                 TaskStatus.FAILED,
                 TaskStatus.CANCELLED,
                 TaskStatus.RECOVERY_REQUIRED

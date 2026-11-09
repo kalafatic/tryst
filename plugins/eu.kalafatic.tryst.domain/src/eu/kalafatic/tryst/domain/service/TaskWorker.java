@@ -214,6 +214,13 @@ public class TaskWorker implements Callable<ExecutionResult> {
             if (ws != null) {
                 if (task.getReworkCount() > 0 && ws.getStatus() == eu.kalafatic.tryst.domain.model.WorkspaceStatus.WAITING_FOR_REVIEW) {
                     ws.rework();
+                } else if (ws.getStatus() == eu.kalafatic.tryst.domain.model.WorkspaceStatus.ALLOCATED) {
+                    ws.initialize();
+                    ws.markReady();
+                    ws.activate();
+                } else if (ws.getStatus() == eu.kalafatic.tryst.domain.model.WorkspaceStatus.INITIALIZING) {
+                    ws.markReady();
+                    ws.activate();
                 } else if (ws.getStatus() == eu.kalafatic.tryst.domain.model.WorkspaceStatus.READY) {
                     ws.activate();
                 }

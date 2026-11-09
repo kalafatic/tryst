@@ -1187,8 +1187,13 @@ public class TrystHttpServer implements TrystHttpService {
                     return;
                 }
 
+            String normPath = path;
+            if (normPath.startsWith("/tryst/")) {
+                normPath = normPath.substring("/tryst".length());
+            }
+
             // Route: GET /api/reviews
-            if (path.equals("/api/reviews") && "GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+            if (normPath.equals("/api/reviews") && "GET".equalsIgnoreCase(exchange.getRequestMethod())) {
                 List<CodeReview> list = codeReviewRepository.findAll();
                 StringBuilder sb = new StringBuilder();
                 sb.append("{\"reviews\": [");
@@ -1202,7 +1207,7 @@ public class TrystHttpServer implements TrystHttpService {
                 return;
             }
 
-            String subPath = path.substring("/api/reviews/".length());
+            String subPath = normPath.substring("/api/reviews/".length());
             String[] parts = subPath.split("/");
             String reviewId = parts[0];
 
