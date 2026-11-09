@@ -4294,6 +4294,7 @@ public class TrystHttpServer implements TrystHttpService {
                                         <div class="flex-row">
                                             <button id="btnVoiceDictate" class="btn btn-sm btn-default" onclick="toggleVoiceDictation()">Dictate</button>
                                             <span id="voiceStatus" style="font-size: 11px; color: var(--yellow); display: none;">Listening...</span>
+                                            <span id="voiceNotice" style="font-size: 11px; color: var(--red);"></span>
                                         </div>
                                     </div>
                                     <textarea id="intakeDescription" class="code-editor" style="height: 110px;" placeholder="Describe desired changes, requirements, bugs to fix, or features to implement..."></textarea>
@@ -4405,7 +4406,8 @@ public class TrystHttpServer implements TrystHttpService {
                     </div>
 <script>
                         let activeReview = null;
-                        let authToken = localStorage.getItem('tryst_auth_token') || '';
+                        let authToken = localStorage.getItem('tryst_token') || localStorage.getItem('tryst_auth_token') || '';
+                        let csrfToken = localStorage.getItem('tryst_csrf') || '';
 
                         // Determine the base context path dynamically from window.location.pathname
                         function getContextBase() {
@@ -4428,29 +4430,12 @@ public class TrystHttpServer implements TrystHttpService {
                         function getAuthHeaders() {
                             const h = { 'Content-Type': 'application/json' };
                             if (authToken) h['Authorization'] = 'Bearer ' + authToken;
+                            if (csrfToken) h['X-CSRF-Token'] = csrfToken;
                             return h;
                         }
 
                         async function promptLogin() {
-                            const u = prompt('Admin/User Username:');
-                            if (!u) return;
-                            const p = prompt('Password:');
-                            if (!p) return;
-                            const res = await fetch(apiUrl('/api/auth/login'), {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ username: u, password: p })
-                            });
-                            const d = await res.json();
-                            if (d.success) {
-                                authToken = d.token;
-                                localStorage.setItem('tryst_auth_token', authToken);
-                                document.getElementById('userStatus').textContent = `User: ${d.user.username} (${d.user.role})`;
-                                alert('Logged in successfully as ' + d.user.username);
-                                loadAdminOverview();
-                            } else {
-                                alert('Login failed: ' + d.error);
-                            }
+                            toggleAuthModal();
                         }
 
                         let currentNavSection = 'reviews';
@@ -5376,6 +5361,71 @@ public class TrystHttpServer implements TrystHttpService {
                             switchAdminSub('github');
                         }
 
+                        async function openCreateProjectModal() {
+                            const name = prompt('Project Name:');
+                            if (!name || !name.trim()) return;
+                            const location = prompt('Filesystem Location / Root Path (optional):', '');
+                            try {
+                                const res = await fetch(apiUrl('/api/projects'), {
+                                    method: 'POST',
+                                    headers: getAuthHeaders(),
+                                    body: JSON.stringify({ name: name.trim(), location: location ? location.trim() : '' })
+                                });
+                                const data = await res.json();
+                                if (res.ok && data.id) {
+                                    alert(`Project created: ${data.name} (${data.id.substring(0,8)})`);
+                                    loadProjectsControlPlane();
+                                    loadProjects();
+                                    if (typeof refreshIntakeRepos === 'function') refreshIntakeRepos();
+                                } else {
+                                    alert('Failed to create project: ' + (data.error || 'Server error'));
+                                }
+                            } catch (e) {
+                                alert('Error creating project: ' + e);
+                            }
+                        }
+
+                        async function cancelAdminTask(taskId) {
+                            if (!taskId) return;
+                            if (!confirm(`Cancel task ${taskId.substring(0,8)}?`)) return;
+                            try {
+                                const res = await fetch(apiUrl(`/api/admin/tasks/${taskId}/cancel`), {
+                                    method: 'POST',
+                                    headers: getAuthHeaders(),
+                                    body: JSON.stringify({ reason: 'Cancelled by user via web interface' })
+                                });
+                                const data = await res.json();
+                                if (data.success) {
+                                    alert(`Task ${taskId.substring(0,8)} cancelled.`);
+                                    refreshQueueAndSchedules();
+                                    if (currentNavSection === 'admin') switchAdminSub('tasks');
+                                } else {
+                                    alert('Failed to cancel task: ' + (data.error || 'Unknown error'));
+                                }
+                            } catch (e) {
+                                alert('Error cancelling task: ' + e);
+                            }
+                        }
+
+                        async function toggleService(serviceName, action) {
+                            if (!serviceName || !action) return;
+                            try {
+                                const res = await fetch(apiUrl(`/api/admin/services/${serviceName}/action`), {
+                                    method: 'POST',
+                                    headers: getAuthHeaders(),
+                                    body: JSON.stringify({ action: action })
+                                });
+                                const data = await res.json();
+                                if (data.success) {
+                                    switchAdminSub('services');
+                                } else {
+                                    alert(`Failed to ${action} service ${serviceName}: ` + (data.error || 'Error'));
+                                }
+                            } catch (e) {
+                                alert(`Error invoking service ${action}: ` + e);
+                            }
+                        }
+
                         async function loadAdminOverview() {
                             try {
                                 const res = await fetch(apiUrl('/api/admin/overview'), { headers: getAuthHeaders() });
@@ -6136,13 +6186,17 @@ public class TrystHttpServer implements TrystHttpService {
                                 });
                                 const data = await res.json();
                                 if (data.success) {
-                                    localStorage.setItem('tryst_token', data.token);
-                                    localStorage.setItem('tryst_csrf', data.csrfToken);
+                                    authToken = data.token;
+                                    csrfToken = data.csrfToken || '';
+                                    localStorage.setItem('tryst_token', authToken);
+                                    localStorage.setItem('tryst_auth_token', authToken);
+                                    if (csrfToken) localStorage.setItem('tryst_csrf', csrfToken);
                                     document.getElementById('userStatus').textContent = `User: ${data.user.username} (${data.user.role})`;
                                     document.getElementById('btnAuthAction').textContent = 'Logout';
                                     toggleAuthModal();
                                     loadReviews();
                                     loadProjectsControlPlane();
+                                    if (currentNavSection === 'admin') loadAdminOverview();
                                 } else {
                                     alert('Login failed: ' + (data.error || 'Invalid credentials'));
                                 }
@@ -6158,7 +6212,10 @@ public class TrystHttpServer implements TrystHttpService {
                                     headers: getAuthHeaders()
                                 });
                             } catch (e) {}
+                            authToken = '';
+                            csrfToken = '';
                             localStorage.removeItem('tryst_token');
+                            localStorage.removeItem('tryst_auth_token');
                             localStorage.removeItem('tryst_csrf');
                             document.getElementById('userStatus').textContent = 'User: Anonymous';
                             document.getElementById('btnAuthAction').textContent = 'Login';
