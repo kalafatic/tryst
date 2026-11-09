@@ -4528,8 +4528,15 @@ public class TrystHttpServer implements TrystHttpService {
                     </div>
 <script>
                         let activeReview = null;
+                        let activeDetails = null;
+                        let selectedLines = [];
                         let authToken = localStorage.getItem('tryst_token') || localStorage.getItem('tryst_auth_token') || '';
                         let csrfToken = localStorage.getItem('tryst_csrf') || '';
+
+                        // In-memory registries to avoid unsafe inline serialization in HTML attributes
+                        const projectsRegistry = new Map();
+                        const reviewsRegistry = new Map();
+                        const workflowsRegistry = new Map();
 
                         // Determine the base context path dynamically from window.location.pathname
                         function getContextBase() {
@@ -4663,39 +4670,55 @@ public class TrystHttpServer implements TrystHttpService {
                                 const sideList = document.getElementById('projectsSideList');
                                 const globalSel = document.getElementById('globalProjectSelector');
 
-                                globalSel.innerHTML = '<option value="">-- All Projects --</option>' +
-                                    list.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
+                                projectsRegistry.clear();
+                                list.forEach(p => projectsRegistry.set(p.id, p));
 
-                                if (list.length === 0) {
-                                    sideList.innerHTML = '<div style="color:var(--muted);">No projects available.</div>';
-                                    return;
+                                if (globalSel) {
+                                    globalSel.innerHTML = '<option value="">-- All Projects --</option>' +
+                                        list.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`).join('');
                                 }
 
-                                sideList.innerHTML = list.map(p => `
-                                    <div class="list-item" onclick="selectProjectDetail('${p.id}', '${escapeHtml(p.name)}', '${escapeHtml(p.location)}')">
-                                        <b>${escapeHtml(p.name)}</b>
-                                        <div style="font-size: 11px; color: var(--muted);">${p.id.substring(0,8)}</div>
-                                    </div>
-                                `).join('');
+                                if (sideList) {
+                                    if (list.length === 0) {
+                                        sideList.innerHTML = '<div style="color:var(--muted);">No projects available.</div>';
+                                    } else {
+                                        sideList.innerHTML = list.map(p => `
+                                            <div class="list-item" onclick="selectProjectById('${escapeHtml(p.id)}')">
+                                                <b>${escapeHtml(p.name)}</b>
+                                                <div style="font-size: 11px; color: var(--muted);">${escapeHtml(p.id.substring(0,8))}</div>
+                                            </div>
+                                        `).join('');
+                                    }
+                                }
 
                                 if (list.length > 0) {
-                                    selectProjectDetail(list[0].id, list[0].name, list[0].location);
+                                    selectProjectById(list[0].id);
                                 }
                             } catch (e) {
                                 console.warn('Failed to load projects:', e);
                             }
                         }
 
+                        function selectProjectById(id) {
+                            const p = projectsRegistry.get(id);
+                            if (!p) return;
+                            selectProjectDetail(p.id, p.name, p.location);
+                        }
+
                         function selectProjectDetail(id, name, location) {
-                            document.getElementById('projDetailName').textContent = name;
-                            document.getElementById('projDetailMeta').textContent = `Project ID: ${id} | Location: ${location}`;
+                            const nameEl = document.getElementById('projDetailName');
+                            const metaEl = document.getElementById('projDetailMeta');
                             const container = document.getElementById('projReposContainer');
-                            container.innerHTML = `
-                                <table>
-                                    <tr><th>VCS Provider</th><th>Branch / Ref</th><th>Path / URL</th><th>Isolation Mode</th></tr>
-                                    <tr><td><b>Git</b> (Local / Remote)</td><td><code>main</code></td><td>${location}</td><td><span class="badge badge-success">Bare Mirror & Worktree Sandbox</span></td></tr>
-                                </table>
-                            `;
+                            if (nameEl) nameEl.textContent = name || '';
+                            if (metaEl) metaEl.textContent = `Project ID: ${id || ''} | Location: ${location || ''}`;
+                            if (container) {
+                                container.innerHTML = `
+                                    <table>
+                                        <tr><th>VCS Provider</th><th>Branch / Ref</th><th>Path / URL</th><th>Isolation Mode</th></tr>
+                                        <tr><td><b>Git</b> (Local / Remote)</td><td><code>main</code></td><td>${escapeHtml(location || '')}</td><td><span class="badge badge-success">Bare Mirror & Worktree Sandbox</span></td></tr>
+                                    </table>
+                                `;
+                            }
                         }
 
                         async function refreshQueueAndSchedules() {
@@ -5190,24 +5213,33 @@ public class TrystHttpServer implements TrystHttpService {
 
                         async function loadSavedWorkflows() {
                             const list = document.getElementById('wfSavedList');
+                            if (!list) return;
                             try {
                                 const res = await fetch(apiUrl('/api/workflows'));
                                 if (res.ok) {
                                     const d = await res.json();
-                                    if (!d.workflows || d.workflows.length === 0) {
+                                    const wfs = d.workflows || [];
+                                    workflowsRegistry.clear();
+                                    wfs.forEach(w => workflowsRegistry.set(w.id, w));
+                                    if (wfs.length === 0) {
                                         list.innerHTML = '<div style="color:var(--muted); padding:8px;">No saved workflows yet.</div>';
                                         return;
                                     }
-                                    list.innerHTML = d.workflows.map(w => `
-                                        <div class="list-item" onclick='loadWorkflowDef(${JSON.stringify(w)})'>
+                                    list.innerHTML = wfs.map(w => `
+                                        <div class="list-item" onclick="loadWorkflowDefById('${escapeHtml(w.id)}')">
                                             <div><b>${escapeHtml(w.name)}</b></div>
-                                            <small style="color:var(--muted); font-size:10px;">ID: ${w.id.substring(0,8)}</small>
+                                            <small style="color:var(--muted); font-size:10px;">ID: ${escapeHtml(w.id.substring(0,8))}</small>
                                         </div>
                                     `).join('');
                                     return;
                                 }
                             } catch (ignored) {}
                             list.innerHTML = '<div style="color:var(--muted); padding:8px;">No saved workflows yet.</div>';
+                        }
+
+                        function loadWorkflowDefById(id) {
+                            const w = workflowsRegistry.get(id);
+                            if (w) loadWorkflowDef(w);
                         }
 
                         function loadWorkflowDef(w) {
@@ -5580,13 +5612,28 @@ public class TrystHttpServer implements TrystHttpService {
                                 const res = await fetch(apiUrl('/api/reviews'));
                                 const data = await res.json();
                                 const list = document.getElementById('reviewList');
-                                list.innerHTML = data.reviews.map(r => `
-                                    <div class="list-item ${activeReview && activeReview.id === r.id ? 'active' : ''}" onclick='selectReview(${JSON.stringify(r)})'>
-                                        <div><strong>${r.branch}</strong> <span class="badge badge-${r.status==='APPROVED'?'success':r.status==='REJECTED'?'error':'warning'}">${r.status}</span></div>
-                                        <div style="font-size: 11px; color: var(--muted); margin-top: 4px;">Task: ${r.taskId.substring(0,8)}</div>
+                                if (!list) return;
+                                const reviews = data.reviews || [];
+                                reviewsRegistry.clear();
+                                reviews.forEach(r => reviewsRegistry.set(r.id, r));
+                                if (reviews.length === 0) {
+                                    list.innerHTML = '<div style="color:var(--muted); padding:8px;">No reviews available.</div>';
+                                    return;
+                                }
+                                list.innerHTML = reviews.map(r => `
+                                    <div class="list-item ${activeReview && activeReview.id === r.id ? 'active' : ''}" onclick="selectReviewById('${escapeHtml(r.id)}')">
+                                        <div><strong>${escapeHtml(r.branch)}</strong> <span class="badge badge-${r.status==='APPROVED'?'success':r.status==='REJECTED'?'error':'warning'}">${escapeHtml(r.status)}</span></div>
+                                        <div style="font-size: 11px; color: var(--muted); margin-top: 4px;">Task: ${escapeHtml(r.taskId ? r.taskId.substring(0,8) : '')}</div>
                                     </div>
                                 `).join('');
-                            } catch(e) {}
+                            } catch(e) {
+                                console.warn('Failed to load reviews:', e);
+                            }
+                        }
+
+                        function selectReviewById(id) {
+                            const r = reviewsRegistry.get(id);
+                            if (r) selectReview(r);
                         }
 
                         async function selectReview(r) {
@@ -5996,8 +6043,13 @@ public class TrystHttpServer implements TrystHttpService {
                         }
 
                         function escapeHtml(s) {
-                            if (!s) return '';
-                            return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                            if (s === null || s === undefined) return '';
+                            return String(s)
+                                .replace(/&/g, "&amp;")
+                                .replace(/</g, "&lt;")
+                                .replace(/>/g, "&gt;")
+                                .replace(/"/g, "&quot;")
+                                .replace(/'/g, "&#39;");
                         }
 
                         let lastNotificationSeq = 0;
@@ -6452,7 +6504,7 @@ public class TrystHttpServer implements TrystHttpService {
                                 alert('Please provide or dictate a task description first.');
                                 return;
                             }
-                            let title = desc.split('\n')[0].replace(/^[-*#0-9.]+\s*/, '').trim();
+                            let title = desc.split('\\n')[0].replace(/^[-*#0-9.]+\\s*/, '').trim();
                             if (title.length > 55) {
                                 title = title.substring(0, 52) + '...';
                             }
@@ -6514,10 +6566,15 @@ public class TrystHttpServer implements TrystHttpService {
                         }
 
                         function switchIntakeTab(tab) {
-                            document.getElementById('intakeSectionBasic').style.display = (tab === 'basic') ? 'block' : 'none';
-                            document.getElementById('intakeSectionAdvanced').style.display = (tab === 'advanced') ? 'block' : 'none';
-                            document.getElementById('btnIntakeTabBasic').className = (tab === 'basic') ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-default';
-                            document.getElementById('btnIntakeTabAdvanced').className = (tab === 'advanced') ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-default';
+                            // Modal tabs compatibility wrapper
+                            const basicSec = document.getElementById('intakeSectionBasic');
+                            const advSec = document.getElementById('intakeSectionAdvanced');
+                            const basicBtn = document.getElementById('btnIntakeTabBasic');
+                            const advBtn = document.getElementById('btnIntakeTabAdvanced');
+                            if (basicSec) basicSec.style.display = (tab === 'basic') ? 'block' : 'none';
+                            if (advSec) advSec.style.display = (tab === 'advanced') ? 'block' : 'none';
+                            if (basicBtn) basicBtn.className = (tab === 'basic') ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-default';
+                            if (advBtn) advBtn.className = (tab === 'advanced') ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-default';
                         }
 
                         function onIntakeExecModeChanged() {
@@ -6529,9 +6586,10 @@ public class TrystHttpServer implements TrystHttpService {
 
                         function collectIntakePayload() {
                             const sel = document.getElementById('intakeRepoSelect');
-                            const selVal = sel.value || '';
+                            const selVal = (sel && sel.value) ? sel.value : '';
                             let projectId = null;
-                            let repoUrl = document.getElementById('intakeCustomRepoUrl').value.trim();
+                            const customRepoEl = document.getElementById('intakeCustomRepoUrl');
+                            let repoUrl = customRepoEl ? customRepoEl.value.trim() : '';
 
                             if (selVal.startsWith('local:')) {
                                 projectId = selVal.substring(6);
@@ -6539,24 +6597,46 @@ public class TrystHttpServer implements TrystHttpService {
                                 repoUrl = selVal.substring(3);
                             }
 
-                            const branch = document.getElementById('intakeBranchInput').value.trim() || 'main';
-                            const title = document.getElementById('intakeTitle').value.trim();
-                            const description = document.getElementById('intakeDescription').value.trim();
-                            const priority = document.getElementById('intakePriority').value;
-                            const expectedOutcome = document.getElementById('intakeExpectedOutcome').value.trim();
+                            const branchEl = document.getElementById('intakeBranchInput');
+                            const branch = branchEl ? (branchEl.value.trim() || 'main') : 'main';
 
-                            const criteriaRaw = document.getElementById('intakeAcceptanceCriteria').value;
-                            const acceptanceCriteria = criteriaRaw.split('\n').map(s => s.trim()).filter(s => s.length > 0);
+                            const titleEl = document.getElementById('intakeTitle');
+                            const title = titleEl ? titleEl.value.trim() : '';
 
-                            const constraintsRaw = document.getElementById('intakeConstraints').value;
+                            const descEl = document.getElementById('intakeDescription');
+                            const description = descEl ? descEl.value.trim() : '';
+
+                            const prioEl = document.getElementById('intakePriority');
+                            const priority = prioEl ? prioEl.value : 'NORMAL';
+
+                            const outcomeEl = document.getElementById('intakeExpectedOutcome');
+                            const expectedOutcome = outcomeEl ? outcomeEl.value.trim() : '';
+
+                            const critEl = document.getElementById('intakeAcceptanceCriteria');
+                            const criteriaRaw = critEl ? critEl.value : '';
+                            const acceptanceCriteria = criteriaRaw.split('\\n').map(s => s.trim()).filter(s => s.length > 0);
+
+                            const constrEl = document.getElementById('intakeConstraints');
+                            const constraintsRaw = constrEl ? constrEl.value : '';
                             const constraints = constraintsRaw.split(',').map(s => s.trim()).filter(s => s.length > 0);
 
-                            const execMode = document.getElementById('intakeExecMode') ? document.getElementById('intakeExecMode').value : 'IMMEDIATE';
-                            const scheduledTime = document.getElementById('intakeScheduledTime') ? document.getElementById('intakeScheduledTime').value.trim() : null;
-                            const cron = document.getElementById('intakeCron') ? document.getElementById('intakeCron').value.trim() : null;
-                            const model = document.getElementById('intakeModelSelect') ? document.getElementById('intakeModelSelect').value : null;
-                            const timeout = document.getElementById('intakeTimeout') ? parseInt(document.getElementById('intakeTimeout').value) : 10;
-                            const buildStrategy = document.getElementById('intakeBuildStrategy') ? document.getElementById('intakeBuildStrategy').value : 'AUTO';
+                            const execModeEl = document.getElementById('intakeExecMode');
+                            const execMode = execModeEl ? execModeEl.value : 'IMMEDIATE';
+
+                            const schedEl = document.getElementById('intakeScheduledTime');
+                            const scheduledTime = (schedEl && schedEl.value.trim()) ? schedEl.value.trim() : null;
+
+                            const cronEl = document.getElementById('intakeCron');
+                            const cron = (cronEl && cronEl.value.trim()) ? cronEl.value.trim() : null;
+
+                            const modelEl = document.getElementById('intakeModelSelect');
+                            const model = (modelEl && modelEl.value) ? modelEl.value : null;
+
+                            const timeoutEl = document.getElementById('intakeTimeout');
+                            const timeout = (timeoutEl && timeoutEl.value) ? parseInt(timeoutEl.value) : 10;
+
+                            const buildStratEl = document.getElementById('intakeBuildStrategy');
+                            const buildStrategy = (buildStratEl && buildStratEl.value) ? buildStratEl.value : 'AUTO';
 
                             const executionOptions = {
                                 notifyProgress: document.getElementById('optNotifyProgress') ? document.getElementById('optNotifyProgress').checked : true,
@@ -6664,20 +6744,64 @@ public class TrystHttpServer implements TrystHttpService {
                                     loadReviews();
                                     switchTab('reviews');
                                 } else {
-                                    alert('Failed to submit task:\n' + (data.error || 'Server error') + '\n\nYour inputs have been preserved.');
+                                    alert('Failed to submit task:\\n' + (data.error || 'Server error') + '\\n\\nYour inputs have been preserved.');
                                 }
                             } catch (e) {
-                                alert('Submission error: ' + e + '\n\nYour inputs have been preserved.');
+                                alert('Submission error: ' + e + '\\n\\nYour inputs have been preserved.');
                             } finally {
                                 btn.disabled = false;
                                 btn.textContent = 'CREATE AND SUBMIT TASK';
                             }
                         }
 
-                        loadProjects();
-                        loadReviews();
-                        loadNotifications();
-                        connectNotificationStream();
+                        // Structured DOMContentLoaded initialization with isolated component error boundaries
+                        document.addEventListener('DOMContentLoaded', () => {
+                            // 1. Initialize authentication status
+                            try {
+                                if (authToken) {
+                                    const uStatus = document.getElementById('userStatus');
+                                    const authBtn = document.getElementById('btnAuthAction');
+                                    if (uStatus) uStatus.textContent = 'User: Authenticated';
+                                    if (authBtn) authBtn.textContent = 'Logout';
+                                }
+                            } catch (e) {
+                                console.warn('Auth UI init error:', e);
+                            }
+
+                            // 2. Initialize Navigation and default section
+                            try {
+                                switchNavSection(currentNavSection || 'reviews');
+                            } catch (e) {
+                                console.error('Navigation init error:', e);
+                            }
+
+                            // 3. Initialize Projects
+                            try {
+                                loadProjects();
+                            } catch (e) {
+                                console.error('Projects init error:', e);
+                            }
+
+                            // 4. Initialize Reviews
+                            try {
+                                loadReviews();
+                            } catch (e) {
+                                console.error('Reviews init error:', e);
+                            }
+
+                            // 5. Initialize Notifications & SSE Stream
+                            try {
+                                loadNotifications();
+                            } catch (e) {
+                                console.error('Notifications init error:', e);
+                            }
+
+                            try {
+                                connectNotificationStream();
+                            } catch (e) {
+                                console.warn('Notification stream connection failed:', e);
+                            }
+                        });
                     </script>
                 </body>
                 </html>
