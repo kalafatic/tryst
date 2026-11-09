@@ -26,6 +26,8 @@ public class NotificationService {
         this(notificationRepository, null, eventBus, null);
     }
 
+    private eu.kalafatic.tryst.domain.repository.UserRepository userRepository;
+
     public NotificationService(NotificationRepository notificationRepository,
                                NotificationPreferenceRepository preferenceRepository,
                                EventBus eventBus) {
@@ -83,6 +85,10 @@ public class NotificationService {
             effectiveDedupKey = userId + ":" + (type != null ? type.name() : typeStr) + ":" + (refId != null ? refId : "global");
         }
 
+        if (userRepository != null && !userRepository.findById(userId).isPresent()) {
+            return Optional.empty();
+        }
+
         Notification notification = new Notification(
                 UUID.randomUUID().toString(),
                 userId,
@@ -97,7 +103,13 @@ public class NotificationService {
                 0L
         );
 
-        boolean saved = notificationRepository.saveIfAbsent(notification);
+        boolean saved = false;
+        try {
+            saved = notificationRepository.saveIfAbsent(notification);
+        } catch (Exception e) {
+            TrystLog.warn(NotificationService.class, "Failed to persist notification for user " + userId + ": " + e.getMessage());
+            return Optional.empty();
+        }
         if (!saved) {
             return Optional.empty();
         }

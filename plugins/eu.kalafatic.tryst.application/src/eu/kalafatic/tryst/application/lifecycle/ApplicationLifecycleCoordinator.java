@@ -334,12 +334,14 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
         // GitHub Integration
         this.gitHubCredentialRepository = new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteGitHubCredentialRepository(databaseManager);
         this.gitHubCredentialEncryptionService = new eu.kalafatic.tryst.infrastructure.github.DefaultGitHubCredentialEncryptionService();
-        this.gitHubService = new eu.kalafatic.tryst.infrastructure.github.DefaultGitHubService(
-                this.gitHubCredentialRepository,
-                this.gitHubCredentialEncryptionService,
-                this.gitService,
-                this.repositoryPoolManager
-        );
+        eu.kalafatic.tryst.infrastructure.github.DefaultGitHubService ghService =
+                new eu.kalafatic.tryst.infrastructure.github.DefaultGitHubService(
+                        this.gitHubCredentialRepository,
+                        this.gitHubCredentialEncryptionService,
+                        this.gitService
+                );
+        ghService.setRepositoryPoolManager(this.repositoryPoolManager);
+        this.gitHubService = ghService;
 
         this.sessionTaskOrchestrator = new SessionTaskOrchestrator(
                 sessionRepository,
@@ -435,6 +437,11 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
         }
         this.processExecutionManager = new eu.kalafatic.tryst.domain.service.ProcessExecutionManager();
         this.notificationService = new eu.kalafatic.tryst.domain.service.NotificationService(
+                this.notificationRepository,
+                this.notificationPreferenceRepository,
+                this.eventBus,
+                this.userRepository
+        );
                 this.notificationRepository, this.notificationPreferenceRepository, this.eventBus, this.userRepository);
         this.logDiagnosticService = new eu.kalafatic.tryst.domain.service.LogDiagnosticService();
         eu.kalafatic.tryst.domain.service.ManagedServiceController serviceController =
@@ -1120,6 +1127,7 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
         server.setGitHubService(this.gitHubService, this.gitHubCredentialRepository, this.gitHubCredentialEncryptionService);
         server.setGitCommitRepository(this.gitCommitRepository);
         server.setTaskIntakeService(this.taskIntakeService);
+        server.setRepositoryPoolManager(this.repositoryPoolManager);
         server.setPortRegistry(configurationService.getPortRegistry());
 
         if (this.databaseManager != null) {

@@ -39,16 +39,16 @@ public class DefaultGitHubService implements GitHubService {
 
     public DefaultGitHubService(GitHubCredentialRepository credentialRepository,
                                 GitHubCredentialEncryptionService encryptionService,
-                                GitService gitService,
-                                eu.kalafatic.tryst.infrastructure.vcs.RepositoryPoolManager repositoryPoolManager) {
+                                GitService gitService) {
         this(DEFAULT_API_BASE, credentialRepository, encryptionService, gitService, Duration.ofSeconds(30));
+    }
+
+    public void setRepositoryPoolManager(eu.kalafatic.tryst.infrastructure.vcs.RepositoryPoolManager repositoryPoolManager) {
         this.repositoryPoolManager = repositoryPoolManager;
     }
 
-    public DefaultGitHubService(GitHubCredentialRepository credentialRepository,
-                                GitHubCredentialEncryptionService encryptionService,
-                                GitService gitService) {
-        this(DEFAULT_API_BASE, credentialRepository, encryptionService, gitService, Duration.ofSeconds(30));
+    public eu.kalafatic.tryst.infrastructure.vcs.RepositoryPoolManager getRepositoryPoolManager() {
+        return repositoryPoolManager;
     }
 
     public DefaultGitHubService(String apiBase,
