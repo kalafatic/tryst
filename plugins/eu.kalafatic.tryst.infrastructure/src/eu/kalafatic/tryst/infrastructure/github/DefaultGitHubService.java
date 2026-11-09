@@ -35,6 +35,15 @@ public class DefaultGitHubService implements GitHubService {
     private final GitService gitService;
     private final HttpClient httpClient;
     private final Duration requestTimeout;
+    private eu.kalafatic.tryst.infrastructure.vcs.RepositoryPoolManager repositoryPoolManager;
+
+    public DefaultGitHubService(GitHubCredentialRepository credentialRepository,
+                                GitHubCredentialEncryptionService encryptionService,
+                                GitService gitService,
+                                eu.kalafatic.tryst.infrastructure.vcs.RepositoryPoolManager repositoryPoolManager) {
+        this(DEFAULT_API_BASE, credentialRepository, encryptionService, gitService, Duration.ofSeconds(30));
+        this.repositoryPoolManager = repositoryPoolManager;
+    }
 
     public DefaultGitHubService(GitHubCredentialRepository credentialRepository,
                                 GitHubCredentialEncryptionService encryptionService,
@@ -251,6 +260,18 @@ public class DefaultGitHubService implements GitHubService {
         }
 
         TrystLog.info(DefaultGitHubService.class, "Executing clone or fetch for repository " + cloneUrl + " into sandbox " + targetDir);
+        if (repositoryPoolManager != null && !gitService.isGitRepository(targetDir)) {
+            try {
+                Path mirror = repositoryPoolManager.ensureMirror(cloneUrl, token);
+                boolean ok = repositoryPoolManager.createWorktree(mirror, targetDir, effectiveBranch);
+                if (ok) {
+                    TrystLog.info(DefaultGitHubService.class, "Successfully allocated isolated workspace from bare mirror for " + cloneUrl);
+                    return;
+                }
+            } catch (Exception e) {
+                TrystLog.warn(DefaultGitHubService.class, "Mirror-assisted checkout failed; falling back to direct clone/fetch: " + e.getMessage());
+            }
+        }
         GitService.GitCommandResult result = gitService.cloneOrFetch(targetDir, cloneUrl, effectiveBranch, token);
         if (!result.isSuccess()) {
             throw new TrystInfrastructureException("Git clone/fetch failed: " + result.error());

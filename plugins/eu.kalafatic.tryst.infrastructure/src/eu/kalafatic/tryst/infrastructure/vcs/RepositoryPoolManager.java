@@ -94,6 +94,22 @@ public class RepositoryPoolManager {
         }
     }
 
+
+    public Path getMirrorsBaseDir() {
+        return mirrorsBaseDir;
+    }
+
+    public List<String> listMirrors() {
+        if (!java.nio.file.Files.exists(mirrorsBaseDir)) return List.of();
+        try (var s = java.nio.file.Files.list(mirrorsBaseDir)) {
+            return s.filter(java.nio.file.Files::isDirectory)
+                    .map(p -> p.getFileName().toString())
+                    .toList();
+        } catch (java.io.IOException e) {
+            return List.of();
+        }
+    }
+
     private String sanitizeRepoUrl(String url) {
         return url.replaceAll("[^a-zA-Z0-9_-]", "_");
     }
