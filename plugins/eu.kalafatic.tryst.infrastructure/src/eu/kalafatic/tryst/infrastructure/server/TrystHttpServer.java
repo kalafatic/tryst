@@ -909,6 +909,55 @@ public class TrystHttpServer implements TrystHttpService {
             String userId = ctx.map(SecurityContext::getUserId).orElseGet(() -> getUserId(exchange));
             String path = exchange.getRequestURI().getPath();
 
+            // Repository Validation Pre-check: POST /api/tasks/intake/validate-repo
+            if (path.endsWith("/intake/validate-repo") && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                String repoUrl = extractJsonField(body, "repositoryUrl");
+                String branch = extractJsonField(body, "branch");
+                String projectId = extractJsonField(body, "projectId");
+                if (branch == null || branch.isBlank()) branch = "main";
+
+                boolean valid = false;
+                String message = "";
+                String detectedType = "GIT";
+
+                if (projectId != null && !projectId.isBlank() && projectRepository != null) {
+                    var projOpt = projectRepository.findById(projectId);
+                    if (projOpt.isPresent()) {
+                        valid = true;
+                        detectedType = "PROJECT";
+                        message = "Connected to project: " + projOpt.get().getName() + " (" + projOpt.get().getLocation() + ")";
+                    } else {
+                        message = "Project not found";
+                    }
+                } else if (repoUrl != null && !repoUrl.isBlank()) {
+                    boolean isLocal = repoUrl.startsWith("/") || repoUrl.startsWith("./") || repoUrl.startsWith("file://") || (repoUrl.length() > 2 && repoUrl.charAt(1) == ':');
+                    if (isLocal) {
+                        detectedType = "LOCAL";
+                        java.nio.file.Path p = repoUrl.startsWith("file://") ? java.nio.file.Path.of(java.net.URI.create(repoUrl)) : java.nio.file.Path.of(repoUrl);
+                        if (java.nio.file.Files.exists(p)) {
+                            valid = true;
+                            message = "Local directory accessible (" + p.toAbsolutePath() + ")";
+                        } else {
+                            message = "Local directory does not exist on server filesystem: " + repoUrl;
+                        }
+                    } else if (repoUrl.startsWith("http://") || repoUrl.startsWith("https://") || repoUrl.startsWith("git@") || repoUrl.startsWith("ssh://")) {
+                        valid = true;
+                        detectedType = "GIT";
+                        message = "Repository validation and connected (" + branch + ").";
+                    } else {
+                        message = "Invalid repository format. Must be Git URL or valid server path.";
+                    }
+                } else {
+                    message = "No repository or project specified.";
+                }
+
+                String resJson = String.format("{\"valid\": %b, \"type\": \"%s\", \"branch\": \"%s\", \"message\": \"%s\"}",
+                        valid, escapeJson(detectedType), escapeJson(branch), escapeJson(message));
+                sendJsonResponse(exchange, 200, resJson);
+                return;
+            }
+
             // Task Intake Analysis: POST /api/tasks/intake/analyze
             if (path.endsWith("/intake/analyze") && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
                 if (taskIntakeService == null) {
@@ -930,11 +979,14 @@ public class TrystHttpServer implements TrystHttpService {
                 List<String> criteria = extractJsonStringArray(body, "acceptanceCriteria");
                 List<String> constraints = extractJsonStringArray(body, "constraints");
                 List<String> supplementary = extractJsonStringArray(body, "supplementaryInstructions");
+                List<eu.kalafatic.tryst.domain.intake.TaskIntakeService.TaskAttachment> attachments = extractJsonAttachments(body);
+                eu.kalafatic.tryst.domain.intake.TaskIntakeService.ExecutionOptions execOptions = extractJsonExecutionOptions(body);
 
                 eu.kalafatic.tryst.domain.intake.TaskIntakeService.TaskIntakeRequest req =
                         new eu.kalafatic.tryst.domain.intake.TaskIntakeService.TaskIntakeRequest(
                                 projectId, repoUrl, branch, title, description, priority,
-                                expectedOutcome, criteria, constraints, supplementary
+                                expectedOutcome, criteria, constraints, supplementary,
+                                attachments, execOptions
                         );
 
                 eu.kalafatic.tryst.domain.intake.TaskIntakeService.TaskIntakeAnalysis analysis =
@@ -988,11 +1040,14 @@ public class TrystHttpServer implements TrystHttpService {
                 List<String> criteria = extractJsonStringArray(body, "acceptanceCriteria");
                 List<String> constraints = extractJsonStringArray(body, "constraints");
                 List<String> supplementary = extractJsonStringArray(body, "supplementaryInstructions");
+                List<eu.kalafatic.tryst.domain.intake.TaskIntakeService.TaskAttachment> attachments = extractJsonAttachments(body);
+                eu.kalafatic.tryst.domain.intake.TaskIntakeService.ExecutionOptions execOptions = extractJsonExecutionOptions(body);
 
                 eu.kalafatic.tryst.domain.intake.TaskIntakeService.TaskIntakeRequest req =
                         new eu.kalafatic.tryst.domain.intake.TaskIntakeService.TaskIntakeRequest(
                                 projectId, repoUrl, branch, title, description, priority,
-                                expectedOutcome, criteria, constraints, supplementary
+                                expectedOutcome, criteria, constraints, supplementary,
+                                attachments, execOptions
                         );
 
                 String execMode = extractJsonField(body, "executionMode");
@@ -4247,160 +4302,227 @@ public class TrystHttpServer implements TrystHttpService {
                     </div>
 
                     <!-- Intelligent Task Intake Modal -->
-                    <div id="newTaskModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(15, 23, 42, 0.45); z-index: 2000; align-items: center; justify-content: center;">
-                        <div style="background: var(--panel); border: 1px solid var(--border); border-radius: 4px; width: 780px; max-width: 95vw; max-height: 90vh; overflow-y: auto; padding: 20px; box-shadow: 0 4px 16px rgba(0,0,0,0.15); position: relative;">
-                            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 10px; margin-bottom: 14px;">
+                    <div id="newTaskModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(15, 23, 42, 0.45); z-index: 2000; align-items: center; justify-content: center; backdrop-filter: blur(1px);">
+                        <div style="background: var(--panel); border: 1px solid var(--border); border-radius: 6px; width: 880px; max-width: 95vw; max-height: 94vh; display: flex; flex-direction: column; box-shadow: 0 8px 30px rgba(0,0,0,0.2); position: relative; overflow: hidden;">
+                            <!-- Header -->
+                            <div style="display: flex; justify-content: space-between; align-items: flex-start; padding: 16px 20px 12px 20px; border-bottom: 1px solid var(--border); background: #fafbfc;">
                                 <div>
-                                    <h3 style="margin: 0; font-size: 16px; font-weight: 600;">Configure & Submit Development Task</h3>
-                                    <div style="font-size: 11px; color: var(--muted); margin-top: 2px;">The RCP backend autonomously resolves repository mirrors, worktrees, and isolated sandboxes.</div>
+                                    <h2 style="margin: 0; font-size: 16px; font-weight: 700; letter-spacing: 0.5px; color: #1e293b; text-transform: uppercase;">NEW TASK</h2>
+                                    <div style="font-size: 12px; color: var(--muted); margin-top: 3px;">Create and configure a repository development task.</div>
                                 </div>
-                                <button class="btn btn-sm btn-default" onclick="closeNewTaskModal()">✕</button>
+                                <button class="btn btn-sm btn-default" onclick="closeNewTaskModal()" title="Close dialog" style="font-size: 14px; padding: 2px 8px; border: none; background: transparent; cursor: pointer;">✕</button>
                             </div>
 
-                            <!-- Tabs for Basic / Advanced Configuration -->
-                            <div class="flex-row" style="margin-bottom: 14px; border-bottom: 1px solid var(--border-subtle); padding-bottom: 6px;">
-                                <button id="btnIntakeTabBasic" class="btn btn-sm btn-primary" onclick="switchIntakeTab('basic')">Basic Configuration</button>
-                                <button id="btnIntakeTabAdvanced" class="btn btn-sm btn-default" onclick="switchIntakeTab('advanced')">Advanced Execution & Orchestration</button>
-                            </div>
+                            <!-- Scrollable Content Body -->
+                            <div style="flex: 1; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 16px;">
 
-                            <!-- BASIC CONFIGURATION SECTION -->
-                            <div id="intakeSectionBasic">
-                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
-                                    <div>
-                                        <label style="font-size: 11px; font-weight: 600; color: var(--muted);">Target Project & Repository:</label>
-                                        <select id="intakeRepoSelect" class="input-ctrl" style="width: 100%; margin-top: 4px;" onchange="onIntakeRepoSelected()">
-                                            <option value="">-- Select Project or Repository --</option>
-                                        </select>
+                                <!-- SECTION A: REPOSITORY -->
+                                <div style="border: 1px solid var(--border-subtle); border-radius: 4px; padding: 12px; background: #fff;">
+                                    <div style="font-size: 11px; font-weight: 700; color: #475569; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 8px;">REPOSITORY</div>
+                                    <div style="display: grid; grid-template-columns: 2fr 1.5fr 1fr; gap: 8px; align-items: center;">
+                                        <div>
+                                            <input id="intakeCustomRepoUrl" class="input-ctrl" type="text" placeholder="https://git repository URL or local server path" style="width: 100%; font-size: 12px;" oninput="onRepoInputChanged()" />
+                                        </div>
+                                        <div>
+                                            <select id="intakeRepoSelect" class="input-ctrl" style="width: 100%; font-size: 12px;" onchange="onIntakeRepoSelected()">
+                                                <option value="">Select existing TRYST project</option>
+                                            </select>
+                                        </div>
+                                        <div style="position: relative; display: flex; align-items: center;">
+                                            <input id="intakeBranchInput" class="input-ctrl" type="text" placeholder="Branch or manual" style="width: 100%; font-size: 12px; padding-right: 22px;" value="main" oninput="onRepoInputChanged()" />
+                                            <span onclick="document.getElementById('intakeBranchInput').value=''; onRepoInputChanged();" style="position: absolute; right: 6px; cursor: pointer; color: var(--muted); font-size: 12px;" title="Clear branch">✕</span>
+                                        </div>
                                     </div>
-                                    <div>
-                                        <label style="font-size: 11px; font-weight: 600; color: var(--muted);">VCS Provider & Branch:</label>
-                                        <div class="flex-row" style="margin-top: 4px;">
-                                            <select id="intakeVcsProvider" class="input-ctrl" style="width: 100px;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px; font-size: 12px;">
+                                        <div id="repoStatusIndicator" style="display: flex; align-items: center; gap: 6px; color: var(--green);">
+                                            <span id="repoStatusIcon">✔</span>
+                                            <span id="repoStatusText">Repository validation and connected.</span>
+                                        </div>
+                                        <div style="display: flex; gap: 8px; font-size: 11px;">
+                                            <select id="intakeVcsProvider" class="input-ctrl" style="padding: 2px 6px; font-size: 11px;">
                                                 <option value="GIT">Git</option>
                                                 <option value="LOCAL">Local FS</option>
                                             </select>
-                                            <input id="intakeBranchInput" class="input-ctrl" type="text" placeholder="main" style="flex: 1;" />
-                                            <button class="btn btn-sm btn-default" onclick="refreshIntakeRepos()">↻</button>
+                                            <button class="btn btn-sm btn-default" onclick="refreshIntakeRepos()" title="Reload projects and repositories" style="padding: 2px 8px;">↻ Refresh</button>
                                         </div>
                                     </div>
                                 </div>
-                                <div style="margin-bottom: 12px;">
-                                    <input id="intakeCustomRepoUrl" class="input-ctrl" type="text" placeholder="Custom Git URL (e.g., https://github.com/org/repo.git or local path)..." style="width: 100%; font-size: 12px;" />
-                                </div>
 
-                                <div style="margin-bottom: 12px;">
-                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-                                        <label style="font-size: 11px; font-weight: 600; color: var(--muted);">Task Description & Instructions:</label>
-                                        <div class="flex-row">
-                                            <button id="btnVoiceDictate" class="btn btn-sm btn-default" onclick="toggleVoiceDictation()">Dictate</button>
+                                <!-- SECTION B: TASK INSTRUCTIONS -->
+                                <div style="border: 1px solid var(--border-subtle); border-radius: 4px; padding: 12px; background: #fff; display: flex; flex-direction: column; gap: 8px;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                                        <div style="font-size: 11px; font-weight: 700; color: #475569; letter-spacing: 0.5px; text-transform: uppercase;">TASK INSTRUCTIONS</div>
+                                        <div class="flex-row" style="gap: 6px;">
+                                            <button id="btnVoiceDictate" class="btn btn-sm btn-default" onclick="toggleVoiceDictation()" style="padding: 2px 8px; font-size: 11px;">🎙️ Dictate</button>
                                             <span id="voiceStatus" style="font-size: 11px; color: var(--yellow); display: none;">Listening...</span>
                                             <span id="voiceNotice" style="font-size: 11px; color: var(--red);"></span>
                                         </div>
                                     </div>
-                                    <textarea id="intakeDescription" class="code-editor" style="height: 110px;" placeholder="Describe desired changes, requirements, bugs to fix, or features to implement..."></textarea>
-                                </div>
-
-                                <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 12px; margin-bottom: 12px;">
-                                    <div>
-                                        <label style="font-size: 11px; font-weight: 600; color: var(--muted);">Task Title:</label>
-                                        <div class="flex-row" style="margin-top: 4px;">
-                                            <input id="intakeTitle" class="input-ctrl" type="text" placeholder="Auto-generated if left blank..." style="flex: 1;" />
-                                            <button class="btn btn-sm btn-default" onclick="autoSuggestTitle()">Suggest</button>
-                                        </div>
-                                    </div>
-                                    <div>
-                                        <label style="font-size: 11px; font-weight: 600; color: var(--muted);">Priority:</label>
-                                        <select id="intakePriority" class="input-ctrl" style="width: 100%; margin-top: 4px;">
+                                    <div style="display: flex; gap: 8px; align-items: center;">
+                                        <input id="intakeTitle" class="input-ctrl" type="text" placeholder="Title (e.g., Refactor logging context or fix NPE in auth)" style="flex: 1; font-weight: 600; font-size: 12px;" />
+                                        <button class="btn btn-sm btn-default" onclick="autoSuggestTitle()" title="Auto-suggest title from description" style="padding: 4px 8px; font-size: 11px;">Suggest</button>
+                                        <select id="intakePriority" class="input-ctrl" style="font-size: 12px; width: 100px;">
                                             <option value="NORMAL" selected>Normal</option>
                                             <option value="LOW">Low</option>
                                             <option value="HIGH">High</option>
                                             <option value="URGENT">Urgent</option>
                                         </select>
                                     </div>
+                                    <div style="position: relative;">
+                                        <textarea id="intakeDescription" class="code-editor" style="width: 100%; min-height: 180px; max-height: 320px; resize: vertical; font-family: 'Consolas', 'Courier New', monospace; font-size: 12px; line-height: 1.5; padding: 10px; border: 1px solid var(--border); border-radius: 4px; box-sizing: border-box;" placeholder="Prompt - Markdown formatting.&#10;&#10;Supports markdown formatting and extensive technical instructions via paste. Enter implementation objectives, constraints, bug reports, and requirements..."></textarea>
+                                    </div>
                                 </div>
-                            </div>
 
-                            <!-- ADVANCED CONFIGURATION SECTION -->
-                            <div id="intakeSectionAdvanced" style="display: none;">
-                                <div style="background: var(--bg); border: 1px solid var(--border-subtle); border-radius: 4px; padding: 12px; margin-bottom: 12px;">
-                                    <div class="section-title">Execution Mode & Scheduling</div>
-                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 8px;">
-                                        <div>
-                                            <label style="font-size: 11px; color: var(--muted);">Execution Mode:</label>
-                                            <select id="intakeExecMode" class="input-ctrl" style="width: 100%; margin-top: 4px;" onchange="onIntakeExecModeChanged()">
-                                                <option value="IMMEDIATE" selected>Immediate Execution (Dispatch loop)</option>
-                                                <option value="QUEUED">Queued (Await next available worker)</option>
-                                                <option value="SCHEDULED">Scheduled / Recurring</option>
-                                                <option value="INTERACTIVE">Interactive (Step approval)</option>
-                                            </select>
+                                <!-- SECTION C: ATTACHMENTS -->
+                                <div style="border: 1px solid var(--border-subtle); border-radius: 4px; padding: 12px; background: #fff;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                        <div style="font-size: 11px; font-weight: 700; color: #475569; letter-spacing: 0.5px; text-transform: uppercase;">ATTACHMENTS</div>
+                                        <div style="font-size: 11px; color: var(--muted);">Additional context (.md, .txt, documentation)</div>
+                                    </div>
+
+                                    <!-- Drag and drop zone -->
+                                    <div id="attachmentDropZone" ondragover="onAttachmentDragOver(event)" ondragleave="onAttachmentDragLeave(event)" ondrop="onAttachmentDrop(event)" style="border: 2px dashed #cbd5e1; border-radius: 4px; padding: 14px 20px; background: #f8fafc; text-align: center; display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: background 0.2s, border-color 0.2s;" onclick="document.getElementById('attachmentFileInput').click()">
+                                        <div style="font-size: 12px; color: #64748b; text-align: left;">
+                                            Drag and drop files or use a file picker. Supported: .md, .txt, source files.
+                                        </div>
+                                        <button type="button" class="btn btn-sm btn-default" style="font-size: 11px; padding: 4px 12px; background: #fff;" onclick="event.stopPropagation(); document.getElementById('attachmentFileInput').click()">File picker</button>
+                                        <input type="file" id="attachmentFileInput" multiple style="display: none;" onchange="handleAttachmentFiles(this.files)" accept=".md,.txt,.json,.xml,.yaml,.yml,.java,.py,.js,.ts,.html,.css,.sql,.properties,.conf,.sh" />
+                                    </div>
+
+                                    <!-- Attachment Table / List -->
+                                    <div id="attachmentsContainer" style="margin-top: 10px; display: none;">
+                                        <table style="width: 100%; border-collapse: collapse; font-size: 11px; text-align: left;">
+                                            <thead>
+                                                <tr style="border-bottom: 1px solid var(--border); color: #64748b;">
+                                                    <th style="padding: 6px 8px;">Filename</th>
+                                                    <th style="padding: 6px 8px; width: 90px;">Type</th>
+                                                    <th style="padding: 6px 8px; width: 70px;">Size</th>
+                                                    <th style="padding: 6px 8px; width: 80px;">Status</th>
+                                                    <th style="padding: 6px 8px; width: 40px; text-align: right;">Action</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="attachmentTableBody">
+                                                <!-- Dynamic rows -->
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+
+                                <!-- SECTION D: EXECUTION OPTIONS -->
+                                <div style="border: 1px solid var(--border-subtle); border-radius: 4px; padding: 12px; background: #fff;">
+                                    <div style="font-size: 11px; font-weight: 700; color: #475569; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 10px;">EXECUTION OPTIONS</div>
+                                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; font-size: 12px;">
+
+                                        <!-- Column 1: Notifications -->
+                                        <div style="background: #f8fafc; border: 1px solid var(--border-subtle); border-radius: 4px; padding: 10px;">
+                                            <div style="font-weight: 600; margin-bottom: 8px; color: #334155; font-size: 11px; text-transform: uppercase;">Notifications</div>
+                                            <div style="display: flex; flex-direction: column; gap: 6px;">
+                                                <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                                                    <input type="checkbox" id="optNotifyProgress" checked /> Progress
+                                                </label>
+                                                <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                                                    <input type="checkbox" id="optNotifyCompletion" checked /> Completion
+                                                </label>
+                                                <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                                                    <input type="checkbox" id="optNotifyIntervention" checked /> Intervention
+                                                </label>
+                                            </div>
+                                        </div>
+
+                                        <!-- Column 2: Code Review -->
+                                        <div style="background: #f8fafc; border: 1px solid var(--border-subtle); border-radius: 4px; padding: 10px;">
+                                            <div style="font-weight: 600; margin-bottom: 8px; color: #334155; font-size: 11px; text-transform: uppercase;">Code Review</div>
+                                            <div style="display: flex; flex-direction: column; gap: 6px;">
+                                                <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                                                    <input type="checkbox" id="optGenerateReview" checked /> Generate
+                                                </label>
+                                                <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                                                    <input type="checkbox" id="optRequireApproval" checked /> Require approval
+                                                </label>
+                                            </div>
+                                        </div>
+
+                                        <!-- Column 3: Automation -->
+                                        <div style="background: #f8fafc; border: 1px solid var(--border-subtle); border-radius: 4px; padding: 10px;">
+                                            <div style="font-weight: 600; margin-bottom: 8px; color: #334155; font-size: 11px; text-transform: uppercase;">Automation</div>
+                                            <div style="display: flex; flex-direction: column; gap: 6px;">
+                                                <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                                                    <input type="checkbox" id="optAutoExecute" checked /> Auto execute
+                                                </label>
+                                                <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                                                    <input type="checkbox" id="optAutoCommit" /> Auto commit
+                                                </label>
+                                                <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                                                    <input type="checkbox" id="optAutoPush" onchange="onAutoPushToggled(this)" /> Auto push
+                                                </label>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Collapsible Supplementary Details (Execution Mode, Limits, Acceptance Criteria) -->
+                                <details style="border: 1px solid var(--border-subtle); border-radius: 4px; padding: 8px 12px; background: #fff; font-size: 12px;">
+                                    <summary style="font-size: 11px; font-weight: 600; color: #64748b; cursor: pointer; user-select: none;">Advanced Orchestration & Acceptance Criteria (Optional)</summary>
+                                    <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 10px;">
+                                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                                            <div>
+                                                <label style="font-size: 11px; color: var(--muted);">Execution Mode:</label>
+                                                <select id="intakeExecMode" class="input-ctrl" style="width: 100%; margin-top: 4px;" onchange="onIntakeExecModeChanged()">
+                                                    <option value="IMMEDIATE" selected>Immediate Execution (Dispatch loop)</option>
+                                                    <option value="QUEUED">Queued (Await next available worker)</option>
+                                                    <option value="SCHEDULED">Scheduled / Recurring</option>
+                                                    <option value="INTERACTIVE">Interactive (Step approval)</option>
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label style="font-size: 11px; color: var(--muted);">Build/Test Strategy:</label>
+                                                <select id="intakeBuildStrategy" class="input-ctrl" style="width: 100%; margin-top: 4px;">
+                                                    <option value="AUTO" selected>Auto-detect project type</option>
+                                                    <option value="MAVEN">Maven</option>
+                                                    <option value="GRADLE">Gradle</option>
+                                                    <option value="NPM">Node / NPM</option>
+                                                    <option value="CARGO">Rust / Cargo</option>
+                                                    <option value="PYTHON">Python pytest</option>
+                                                </select>
+                                            </div>
                                         </div>
                                         <div id="intakeScheduleTimeContainer" style="display: none;">
                                             <label style="font-size: 11px; color: var(--muted);">Scheduled Time (ISO-8601):</label>
                                             <input id="intakeScheduledTime" class="input-ctrl" type="text" placeholder="2026-11-09T12:00:00Z" style="width: 100%; margin-top: 4px;" />
                                         </div>
+                                        <div id="intakeCronContainer" style="display: none;">
+                                            <label style="font-size: 11px; color: var(--muted);">Cron Expression:</label>
+                                            <input id="intakeCron" class="input-ctrl" type="text" placeholder="0 0 * * * (daily midnight)" style="width: 100%; margin-top: 4px;" />
+                                        </div>
+                                        <div>
+                                            <input id="intakeExpectedOutcome" class="input-ctrl" type="text" placeholder="Expected outcome / post-condition..." style="width: 100%;" />
+                                        </div>
+                                        <div>
+                                            <textarea id="intakeAcceptanceCriteria" class="input-ctrl" style="width: 100%; height: 40px; resize: vertical;" placeholder="Acceptance criteria (one per line)..."></textarea>
+                                        </div>
+                                        <div>
+                                            <input id="intakeConstraints" class="input-ctrl" type="text" placeholder="Execution constraints (e.g. 'Preserve public API, 0 warnings')..." style="width: 100%;" />
+                                        </div>
                                     </div>
-                                    <div id="intakeCronContainer" style="display: none; margin-bottom: 8px;">
-                                        <label style="font-size: 11px; color: var(--muted);">Cron Expression (for recurring tasks):</label>
-                                        <input id="intakeCron" class="input-ctrl" type="text" placeholder="0 0 * * * (daily midnight)" style="width: 100%; margin-top: 4px;" />
-                                    </div>
-                                </div>
+                                </details>
 
-                                <div style="background: var(--bg); border: 1px solid var(--border-subtle); border-radius: 4px; padding: 12px; margin-bottom: 12px;">
-                                    <div class="section-title">AI Provider & Resource Limits</div>
-                                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px;">
-                                        <div>
-                                            <label style="font-size: 11px; color: var(--muted);">AI Execution Model:</label>
-                                            <select id="intakeModelSelect" class="input-ctrl" style="width: 100%; margin-top: 4px;">
-                                                <option value="">Default (Autonomous Resolver)</option>
-                                            </select>
-                                        </div>
-                                        <div>
-                                            <label style="font-size: 11px; color: var(--muted);">Execution Timeout (min):</label>
-                                            <input id="intakeTimeout" class="input-ctrl" type="number" value="10" style="width: 100%; margin-top: 4px;" />
-                                        </div>
-                                        <div>
-                                            <label style="font-size: 11px; color: var(--muted);">Build/Test Strategy:</label>
-                                            <select id="intakeBuildStrategy" class="input-ctrl" style="width: 100%; margin-top: 4px;">
-                                                <option value="AUTO" selected>Auto-detect project type</option>
-                                                <option value="MAVEN">Maven</option>
-                                                <option value="GRADLE">Gradle</option>
-                                                <option value="NPM">Node / NPM</option>
-                                                <option value="CARGO">Rust / Cargo</option>
-                                                <option value="PYTHON">Python pytest</option>
-                                            </select>
-                                        </div>
+                                <!-- Preliminary Analysis & Validation Feedback Banner -->
+                                <div id="intakeAnalysisCard" style="display: none; padding: 12px; border-radius: 4px; border: 1px solid var(--border); font-size: 12px; background: #f8fafc;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                                        <b id="intakeAnalysisHeading">Intake Pre-check & Architecture Analysis</b>
+                                        <span id="intakeClassificationBadge" class="badge badge-info">FEATURE</span>
                                     </div>
-                                </div>
-
-                                <div style="background: var(--bg); border: 1px solid var(--border-subtle); border-radius: 4px; padding: 12px; margin-bottom: 12px;">
-                                    <div class="section-title">Acceptance Criteria & Supplementary Constraints</div>
-                                    <div style="margin-bottom: 8px;">
-                                        <input id="intakeExpectedOutcome" class="input-ctrl" type="text" placeholder="Expected outcome / post-condition..." style="width: 100%;" />
-                                    </div>
-                                    <div style="margin-bottom: 8px;">
-                                        <textarea id="intakeAcceptanceCriteria" class="input-ctrl" style="width: 100%; height: 45px; resize: vertical;" placeholder="Acceptance criteria (one per line)..."></textarea>
-                                    </div>
-                                    <div>
-                                        <input id="intakeConstraints" class="input-ctrl" type="text" placeholder="Execution constraints (e.g. 'Preserve public API, 0 warnings')..." style="width: 100%;" />
-                                    </div>
+                                    <div id="intakeAnalysisSummary" style="color: var(--muted); margin-bottom: 4px;"></div>
+                                    <div id="intakeWarnings" style="color: var(--yellow);"></div>
+                                    <div id="intakeErrors" style="color: var(--red);"></div>
                                 </div>
                             </div>
 
-                            <!-- Preliminary Analysis & Validation Feedback Banner -->
-                            <div id="intakeAnalysisCard" style="display: none; margin-bottom: 12px; padding: 12px; border-radius: 4px; border: 1px solid var(--border); font-size: 12px; background: #f8fafc;">
-                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-                                    <b id="intakeAnalysisHeading">Intake Pre-check & Architecture Analysis</b>
-                                    <span id="intakeClassificationBadge" class="badge badge-info">FEATURE</span>
-                                </div>
-                                <div id="intakeAnalysisSummary" style="color: var(--muted); margin-bottom: 4px;"></div>
-                                <div id="intakeWarnings" style="color: var(--yellow);"></div>
-                                <div id="intakeErrors" style="color: var(--red);"></div>
-                            </div>
-
-                            <!-- Actions -->
-                            <div class="flex-row" style="justify-content: flex-end; gap: 8px; border-top: 1px solid var(--border); padding-top: 12px;">
-                                <button class="btn btn-default" onclick="validateAndAnalyzeIntake()">Validate & Analyze</button>
-                                <button id="btnSubmitIntakeTask" class="btn btn-primary" onclick="submitIntakeTask()">Submit Task</button>
+                            <!-- Footer Actions Bar -->
+                            <div style="display: flex; justify-content: flex-end; align-items: center; gap: 10px; padding: 12px 20px; border-top: 1px solid var(--border); background: #fafbfc;">
+                                <button type="button" class="btn btn-default" onclick="closeNewTaskModal()" style="font-size: 12px; padding: 6px 14px;">Cancel</button>
+                                <button type="button" class="btn btn-default" onclick="validateAndAnalyzeIntake()" style="font-size: 12px; padding: 6px 14px;">Validate & Analyze</button>
+                                <button id="btnSubmitIntakeTask" type="button" class="btn btn-primary" onclick="submitIntakeTask()" style="font-size: 12px; font-weight: 700; padding: 6px 18px; letter-spacing: 0.5px; text-transform: uppercase;">CREATE AND SUBMIT TASK</button>
                             </div>
                         </div>
                     </div>
@@ -5992,14 +6114,17 @@ public class TrystHttpServer implements TrystHttpService {
                             }
                         }
 
-                        // --- Intelligent Task Intake & Voice Dictation Logic ---
+                        // --- Intelligent Task Intake & Workspace Logic ---
                         let speechRecognizer = null;
                         let isDictating = false;
+                        let taskAttachments = [];
+                        let repoValidationTimer = null;
 
                         function openNewTaskModal() {
                             const modal = document.getElementById('newTaskModal');
                             modal.style.display = 'flex';
                             refreshIntakeRepos();
+                            triggerRepoValidation();
                         }
 
                         function closeNewTaskModal() {
@@ -6008,8 +6133,173 @@ public class TrystHttpServer implements TrystHttpService {
                             stopVoiceDictation();
                         }
 
+                        function onAutoPushToggled(cb) {
+                            if (cb.checked) {
+                                const confirmPush = confirm('WARNING: Automatic Push will push committed changes directly to the remote repository upon task completion. Ensure remote credentials and branch targets are verified. Enable auto-push?');
+                                if (!confirmPush) {
+                                    cb.checked = false;
+                                }
+                            }
+                        }
+
+                        function onRepoInputChanged() {
+                            if (repoValidationTimer) clearTimeout(repoValidationTimer);
+                            repoValidationTimer = setTimeout(triggerRepoValidation, 400);
+                        }
+
+                        async function triggerRepoValidation() {
+                            const sel = document.getElementById('intakeRepoSelect');
+                            const selVal = sel ? sel.value : '';
+                            const customUrl = document.getElementById('intakeCustomRepoUrl') ? document.getElementById('intakeCustomRepoUrl').value.trim() : '';
+                            const branch = document.getElementById('intakeBranchInput') ? document.getElementById('intakeBranchInput').value.trim() : '';
+
+                            const statusIndicator = document.getElementById('repoStatusIndicator');
+                            const statusIcon = document.getElementById('repoStatusIcon');
+                            const statusText = document.getElementById('repoStatusText');
+
+                            if (!statusIndicator) return;
+
+                            let projectId = null;
+                            let repoUrl = customUrl;
+                            if (selVal.startsWith('local:')) {
+                                projectId = selVal.substring(6);
+                            } else if (selVal.startsWith('gh:') && !repoUrl) {
+                                repoUrl = selVal.substring(3);
+                            }
+
+                            if (!projectId && !repoUrl) {
+                                statusIndicator.style.color = '#64748b';
+                                statusIcon.textContent = '○';
+                                statusText.textContent = 'Specify Git URL or select an existing project.';
+                                return;
+                            }
+
+                            try {
+                                const res = await fetch(apiUrl('/api/tasks/intake/validate-repo'), {
+                                    method: 'POST',
+                                    headers: getAuthHeaders(),
+                                    body: JSON.stringify({ projectId, repositoryUrl: repoUrl, branch })
+                                });
+                                if (res.ok) {
+                                    const data = await res.json();
+                                    if (data.valid) {
+                                        statusIndicator.style.color = 'var(--green)';
+                                        statusIcon.textContent = '✔';
+                                        statusText.textContent = `${data.message} [${data.type || 'REPO'}] (${data.resolvedBranch || branch || 'default'})`;
+                                    } else {
+                                        statusIndicator.style.color = 'var(--yellow)';
+                                        statusIcon.textContent = '⚠';
+                                        statusText.textContent = data.message || 'Validation warning.';
+                                    }
+                                } else {
+                                    statusIndicator.style.color = 'var(--red)';
+                                    statusIcon.textContent = '✖';
+                                    statusText.textContent = 'Validation service unavailable.';
+                                }
+                            } catch (e) {
+                                statusIndicator.style.color = '#64748b';
+                                statusIcon.textContent = '○';
+                                statusText.textContent = 'Status: ' + (repoUrl || 'Project selected');
+                            }
+                        }
+
+                        // Attachment Drag & Drop and File Picker Handling
+                        function onAttachmentDragOver(e) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const zone = document.getElementById('attachmentDropZone');
+                            if (zone) zone.style.background = '#e2e8f0';
+                        }
+
+                        function onAttachmentDragLeave(e) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const zone = document.getElementById('attachmentDropZone');
+                            if (zone) zone.style.background = '#f8fafc';
+                        }
+
+                        function onAttachmentDrop(e) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const zone = document.getElementById('attachmentDropZone');
+                            if (zone) zone.style.background = '#f8fafc';
+                            if (e.dataTransfer && e.dataTransfer.files) {
+                                handleAttachmentFiles(e.dataTransfer.files);
+                            }
+                        }
+
+                        function handleAttachmentFiles(fileList) {
+                            if (!fileList || fileList.length === 0) return;
+                            for (let i = 0; i < fileList.length; i++) {
+                                const file = fileList[i];
+                                const reader = new FileReader();
+                                reader.onload = function(evt) {
+                                    const content = evt.target.result;
+                                    const att = {
+                                        name: file.name,
+                                        type: file.type || getFileExtension(file.name),
+                                        size: file.size,
+                                        content: content,
+                                        status: 'Ready'
+                                    };
+                                    taskAttachments.push(att);
+                                    renderAttachments();
+                                };
+                                reader.onerror = function() {
+                                    alert('Failed to read file: ' + file.name);
+                                };
+                                reader.readAsText(file);
+                            }
+                        }
+
+                        function getFileExtension(filename) {
+                            const idx = filename.lastIndexOf('.');
+                            return idx >= 0 ? filename.substring(idx) : 'text/plain';
+                        }
+
+                        function removeAttachment(index) {
+                            if (index >= 0 && index < taskAttachments.length) {
+                                taskAttachments.splice(index, 1);
+                                renderAttachments();
+                            }
+                        }
+
+                        function formatBytes(bytes) {
+                            if (bytes === 0) return '0 B';
+                            const k = 1024;
+                            const sizes = ['B', 'KB', 'MB'];
+                            const i = Math.floor(Math.log(bytes) / Math.log(k));
+                            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+                        }
+
+                        function renderAttachments() {
+                            const container = document.getElementById('attachmentsContainer');
+                            const tbody = document.getElementById('attachmentTableBody');
+                            if (!container || !tbody) return;
+
+                            if (taskAttachments.length === 0) {
+                                container.style.display = 'none';
+                                tbody.innerHTML = '';
+                                return;
+                            }
+
+                            container.style.display = 'block';
+                            tbody.innerHTML = taskAttachments.map((att, idx) => `
+                                <tr style="border-bottom: 1px solid var(--border-subtle);">
+                                    <td style="padding: 6px 8px; font-weight: 500;">${escapeHtml(att.name)}</td>
+                                    <td style="padding: 6px 8px; color: var(--muted);">${escapeHtml(att.type)}</td>
+                                    <td style="padding: 6px 8px; color: var(--muted);">${formatBytes(att.size)}</td>
+                                    <td style="padding: 6px 8px;"><span class="badge badge-info" style="font-size: 10px; padding: 2px 4px;">${escapeHtml(att.status)}</span></td>
+                                    <td style="padding: 6px 8px; text-align: right;">
+                                        <button type="button" class="btn btn-sm btn-default" onclick="removeAttachment(${idx})" style="padding: 1px 6px; font-size: 11px; color: var(--red);">✕</button>
+                                    </td>
+                                </tr>
+                            `).join('');
+                        }
+
                         async function refreshIntakeRepos() {
                             const sel = document.getElementById('intakeRepoSelect');
+                            if (!sel) return;
                             sel.innerHTML = '<option value="">Loading repositories...</option>';
                             try {
                                 const [ghRes, projRes] = await Promise.all([
@@ -6017,7 +6307,7 @@ public class TrystHttpServer implements TrystHttpService {
                                     fetch(apiUrl('/api/projects'), { headers: getAuthHeaders() })
                                 ]);
 
-                                let options = '<option value="">-- Select GitHub Repository or Local Project --</option>';
+                                let options = '<option value="">Select existing TRYST project</option>';
 
                                 if (ghRes.ok) {
                                     const ghData = await ghRes.json();
@@ -6062,6 +6352,7 @@ public class TrystHttpServer implements TrystHttpService {
                                     branchInput.value = 'main';
                                 }
                             }
+                            triggerRepoValidation();
                         }
 
                         function initSpeechRecognition() {
@@ -6267,6 +6558,24 @@ public class TrystHttpServer implements TrystHttpService {
                             const timeout = document.getElementById('intakeTimeout') ? parseInt(document.getElementById('intakeTimeout').value) : 10;
                             const buildStrategy = document.getElementById('intakeBuildStrategy') ? document.getElementById('intakeBuildStrategy').value : 'AUTO';
 
+                            const executionOptions = {
+                                notifyProgress: document.getElementById('optNotifyProgress') ? document.getElementById('optNotifyProgress').checked : true,
+                                notifyCompletion: document.getElementById('optNotifyCompletion') ? document.getElementById('optNotifyCompletion').checked : true,
+                                notifyIntervention: document.getElementById('optNotifyIntervention') ? document.getElementById('optNotifyIntervention').checked : true,
+                                generateCodeReview: document.getElementById('optGenerateReview') ? document.getElementById('optGenerateReview').checked : true,
+                                requireApproval: document.getElementById('optRequireApproval') ? document.getElementById('optRequireApproval').checked : true,
+                                autoExecute: document.getElementById('optAutoExecute') ? document.getElementById('optAutoExecute').checked : true,
+                                autoCommit: document.getElementById('optAutoCommit') ? document.getElementById('optAutoCommit').checked : false,
+                                autoPush: document.getElementById('optAutoPush') ? document.getElementById('optAutoPush').checked : false
+                            };
+
+                            const attachments = (taskAttachments || []).map(att => ({
+                                name: att.name,
+                                type: att.type,
+                                size: att.size,
+                                content: att.content
+                            }));
+
                             return {
                                 projectId,
                                 repositoryUrl: repoUrl,
@@ -6282,7 +6591,9 @@ public class TrystHttpServer implements TrystHttpService {
                                 cronExpression: cron,
                                 model: model,
                                 timeoutMinutes: timeout,
-                                buildStrategy: buildStrategy
+                                buildStrategy: buildStrategy,
+                                executionOptions: executionOptions,
+                                attachments: attachments
                             };
                         }
 
@@ -6347,17 +6658,19 @@ public class TrystHttpServer implements TrystHttpService {
                                 const data = await res.json();
                                 if (res.ok && data.taskId) {
                                     alert(`Task submitted successfully!\\nTask ID: ${data.taskId}\\nTitle: ${data.title}\\nStatus: ${data.status}\\nPersisted Instructions: ${data.persistedInstructionsCount}`);
+                                    taskAttachments = [];
+                                    renderAttachments();
                                     closeNewTaskModal();
                                     loadReviews();
                                     switchTab('reviews');
                                 } else {
-                                    alert('Failed to submit task:\\n' + (data.error || 'Server error'));
+                                    alert('Failed to submit task:\n' + (data.error || 'Server error') + '\n\nYour inputs have been preserved.');
                                 }
                             } catch (e) {
-                                alert('Submission error: ' + e);
+                                alert('Submission error: ' + e + '\n\nYour inputs have been preserved.');
                             } finally {
                                 btn.disabled = false;
-                                btn.textContent = '🚀 Submit Task';
+                                btn.textContent = 'CREATE AND SUBMIT TASK';
                             }
                         }
 
@@ -6416,6 +6729,57 @@ public class TrystHttpServer implements TrystHttpService {
                 os.write(content);
             }
         }
+    }
+
+    private static List<eu.kalafatic.tryst.domain.intake.TaskIntakeService.TaskAttachment> extractJsonAttachments(String json) {
+        if (json == null) return List.of();
+        String arrayPattern = "\"attachments\"\\s*:\\s*\\[([^\\]]*)\\]";
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile(arrayPattern, java.util.regex.Pattern.DOTALL).matcher(json);
+        if (!m.find()) {
+            return List.of();
+        }
+        String inner = m.group(1).trim();
+        if (inner.isEmpty()) {
+            return List.of();
+        }
+        List<eu.kalafatic.tryst.domain.intake.TaskIntakeService.TaskAttachment> list = new ArrayList<>();
+        java.util.regex.Matcher objMatcher = java.util.regex.Pattern.compile("\\{([^\\}]+)\\}").matcher(inner);
+        while (objMatcher.find()) {
+            String objBlock = objMatcher.group(1);
+            String name = extractJsonField(objBlock, "name");
+            String type = extractJsonField(objBlock, "type");
+            String sizeStr = extractJsonField(objBlock, "size");
+            String content = extractJsonField(objBlock, "content");
+            long size = 0;
+            if (sizeStr != null) {
+                try { size = Long.parseLong(sizeStr); } catch (Exception ignored) {}
+            }
+            if (content == null) content = "";
+            if (size == 0 && !content.isEmpty()) {
+                size = content.getBytes(StandardCharsets.UTF_8).length;
+            }
+            list.add(new eu.kalafatic.tryst.domain.intake.TaskIntakeService.TaskAttachment(name != null ? name : "attachment.txt", type != null ? type : "text/plain", size, content));
+        }
+        return list;
+    }
+
+    private static eu.kalafatic.tryst.domain.intake.TaskIntakeService.ExecutionOptions extractJsonExecutionOptions(String json) {
+        if (json == null) return eu.kalafatic.tryst.domain.intake.TaskIntakeService.ExecutionOptions.defaults();
+        String objPattern = "\"executionOptions\"\\s*:\\s*\\{([^\\}]+)\\}";
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile(objPattern, java.util.regex.Pattern.DOTALL).matcher(json);
+        if (!m.find()) {
+            return eu.kalafatic.tryst.domain.intake.TaskIntakeService.ExecutionOptions.defaults();
+        }
+        String block = m.group(1);
+        boolean np = !"false".equalsIgnoreCase(extractJsonField(block, "notifyProgress"));
+        boolean nc = !"false".equalsIgnoreCase(extractJsonField(block, "notifyCompletion"));
+        boolean ni = !"false".equalsIgnoreCase(extractJsonField(block, "notifyIntervention"));
+        boolean cr = !"false".equalsIgnoreCase(extractJsonField(block, "generateCodeReview"));
+        boolean ra = !"false".equalsIgnoreCase(extractJsonField(block, "requireApproval"));
+        boolean ae = !"false".equalsIgnoreCase(extractJsonField(block, "autoExecute"));
+        boolean ac = "true".equalsIgnoreCase(extractJsonField(block, "autoCommit"));
+        boolean ap = "true".equalsIgnoreCase(extractJsonField(block, "autoPush"));
+        return new eu.kalafatic.tryst.domain.intake.TaskIntakeService.ExecutionOptions(np, nc, ni, cr, ra, ae, ac, ap);
     }
 
     private static List<String> extractJsonStringArray(String json, String field) {

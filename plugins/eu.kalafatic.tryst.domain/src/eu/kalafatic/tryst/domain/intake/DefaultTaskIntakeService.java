@@ -305,6 +305,25 @@ public class DefaultTaskIntakeService implements TaskIntakeService {
             }
         }
 
+        // Attachments
+        if (request.attachments() != null) {
+            for (TaskAttachment att : request.attachments()) {
+                if (att != null && att.content() != null && !att.content().isBlank()) {
+                    String formatted = "Attachment: " + att.name() + " (" + att.size() + " bytes)\n" + att.content();
+                    TaskInstruction inst = new TaskInstruction(
+                            task.getId(),
+                            TaskInstruction.InstructionType.ATTACHMENT,
+                            formatted,
+                            effectiveUser
+                    );
+                    instructions.add(inst);
+                    if (taskInstructionRepository != null) {
+                        taskInstructionRepository.save(inst);
+                    }
+                }
+            }
+        }
+
         TrystLog.info(DefaultTaskIntakeService.class, "Task intake submitted successfully: " + task.getId() + " (" + finalTitle + ") with " + instructions.size() + " persisted instructions");
         return new TaskIntakeResult(task, analysis, instructions);
     }

@@ -293,4 +293,90 @@ class TaskIntakeAndVoiceWorkflowTest {
         assertEquals(201, addInstRes.statusCode());
         assertTrue(addInstRes.body().contains("forged HMAC payload"));
     }
+
+    @Test
+    void testValidateRepoEndpointAndAttachmentsSubmission() throws Exception {
+        // 1. Test validate-repo endpoint
+        String validateJson = """
+            {
+                "repositoryUrl": "https://github.com/kalafatic/tryst.git",
+                "branch": "feature/evolve-ui"
+            }
+        """;
+        HttpRequest valReq = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/api/tasks/intake/validate-repo"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(validateJson))
+                .build();
+
+        HttpResponse<String> valRes = httpClient.send(valReq, HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, valRes.statusCode());
+        assertTrue(valRes.body().contains("\"valid\": true"));
+        assertTrue(valRes.body().contains("Repository validation and connected"));
+        assertTrue(valRes.body().contains("feature/evolve-ui"));
+
+        // 2. Test task submission with attachments and execution options
+        String submitJson = """
+            {
+                "repositoryUrl": "https://github.com/kalafatic/tryst.git",
+                "branch": "main",
+                "title": "Task with Attachments and Execution Options",
+                "description": "Implement feature as defined in the attached architecture specification",
+                "priority": "HIGH",
+                "attachments": [
+                    {
+                        "name": "architecture.md",
+                        "type": "text/markdown",
+                        "size": 128,
+                        "content": "# System Architecture\\nDetailed component diagram and flow."
+                    },
+                    {
+                        "name": "requirements.txt",
+                        "type": "text/plain",
+                        "size": 64,
+                        "content": "Requirement 1: Zero regression\\nRequirement 2: High throughput"
+                    }
+                ],
+                "executionOptions": {
+                    "notifyProgress": true,
+                    "notifyCompletion": true,
+                    "notifyIntervention": false,
+                    "generateCodeReview": true,
+                    "requireApproval": true,
+                    "autoExecute": true,
+                    "autoCommit": false,
+                    "autoPush": false
+                }
+            }
+        """;
+
+        HttpRequest submitReq = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/api/tasks/intake/submit"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(submitJson))
+                .build();
+
+        HttpResponse<String> submitRes = httpClient.send(submitReq, HttpResponse.BodyHandlers.ofString());
+        assertEquals(201, submitRes.statusCode());
+        assertTrue(submitRes.body().contains("\"taskId\""));
+        // 1 original instruction + 2 attachment instructions = 3 persisted instructions
+        assertTrue(submitRes.body().contains("\"persistedInstructionsCount\": 3"));
+
+        String taskId = submitRes.body().split("\"taskId\":\\s*\"")[1].split("\"")[0];
+
+        List<TaskInstruction> instructions = instructionRepository.findByTaskId(taskId);
+        assertEquals(3, instructions.size());
+        assertTrue(instructions.stream().anyMatch(i -> i.getInstructionType() == TaskInstruction.InstructionType.ORIGINAL_REQUEST));
+        long attachmentCount = instructions.stream()
+                .filter(i -> i.getInstructionType() == TaskInstruction.InstructionType.ATTACHMENT)
+                .count();
+        assertEquals(2, attachmentCount);
+
+        TaskInstruction mdAtt = instructions.stream()
+                .filter(i -> i.getInstructionType() == TaskInstruction.InstructionType.ATTACHMENT && i.getContent().contains("architecture.md"))
+                .findFirst()
+                .orElse(null);
+        assertNotNull(mdAtt);
+        assertTrue(mdAtt.getContent().contains("System Architecture"));
+    }
 }
