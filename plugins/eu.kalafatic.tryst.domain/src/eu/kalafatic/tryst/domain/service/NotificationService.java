@@ -26,7 +26,7 @@ public class NotificationService {
         this(notificationRepository, null, eventBus, null);
     }
 
-    private eu.kalafatic.tryst.domain.repository.UserRepository userRepository;
+    //private eu.kalafatic.tryst.domain.repository.UserRepository userRepository;
 
     public NotificationService(NotificationRepository notificationRepository,
                                NotificationPreferenceRepository preferenceRepository,

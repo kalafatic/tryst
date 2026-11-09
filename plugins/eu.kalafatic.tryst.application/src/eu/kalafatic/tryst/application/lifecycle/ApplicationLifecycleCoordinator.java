@@ -442,7 +442,7 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
                 this.eventBus,
                 this.userRepository
         );
-                this.notificationRepository, this.notificationPreferenceRepository, this.eventBus, this.userRepository);
+               // this.notificationRepository, this.notificationPreferenceRepository, this.eventBus, this.userRepository);
         this.logDiagnosticService = new eu.kalafatic.tryst.domain.service.LogDiagnosticService();
         eu.kalafatic.tryst.domain.service.ManagedServiceController serviceController =
                 new eu.kalafatic.tryst.domain.service.ManagedServiceController(this.telemetryService, this.dataRetentionService, this.taskOrchestrator);
