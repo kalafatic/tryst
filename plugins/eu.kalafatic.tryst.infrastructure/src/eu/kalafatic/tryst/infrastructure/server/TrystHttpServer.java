@@ -559,6 +559,10 @@ public class TrystHttpServer implements TrystHttpService {
         return (uid != null && !uid.isBlank()) ? uid.trim() : Project.DEFAULT_OWNER_ID;
     }
 
+    private boolean isAuthenticationRequiredAndMissing(Optional<SecurityContext> ctx) {
+        return authenticationService != null && authenticationService.hasAdministrator() && ctx.isEmpty();
+    }
+
     private String getClientIp(HttpExchange exchange) {
         String xff = exchange.getRequestHeaders().getFirst("X-Forwarded-For");
         if (xff != null && !xff.isBlank()) {
@@ -813,6 +817,10 @@ public class TrystHttpServer implements TrystHttpService {
                 return;
             }
             Optional<SecurityContext> ctx = resolveSecurityContext(exchange);
+            if (isAuthenticationRequiredAndMissing(ctx)) {
+                sendJsonResponse(exchange, 401, "{\"error\": \"Authentication required\"}");
+                return;
+            }
             String userId = ctx.map(SecurityContext::getUserId).orElseGet(() -> getUserId(exchange));
             boolean isAdmin = ctx.map(SecurityContext::isAdmin).orElse(false);
 
@@ -886,6 +894,10 @@ public class TrystHttpServer implements TrystHttpService {
             }
 
             Optional<SecurityContext> ctx = resolveSecurityContext(exchange);
+            if (isAuthenticationRequiredAndMissing(ctx)) {
+                sendJsonResponse(exchange, 401, "{\"error\": \"Authentication required\"}");
+                return;
+            }
             String userId = ctx.map(SecurityContext::getUserId).orElseGet(() -> getUserId(exchange));
             String path = exchange.getRequestURI().getPath();
 
@@ -1184,6 +1196,10 @@ public class TrystHttpServer implements TrystHttpService {
             try {
                 String path = exchange.getRequestURI().getPath();
                 Optional<SecurityContext> ctx = resolveSecurityContext(exchange);
+                if (isAuthenticationRequiredAndMissing(ctx)) {
+                    sendJsonResponse(exchange, 401, "{\"error\": \"Authentication required\"}");
+                    return;
+                }
                 String userId = ctx.map(SecurityContext::getUserId).orElseGet(() -> getUserId(exchange));
 
                 if (codeReviewRepository == null) {
@@ -1425,7 +1441,7 @@ public class TrystHttpServer implements TrystHttpService {
                             }
 
                             // Verify working tree matches review content fingerprint
-                            Path repoDir = resolveProjectWorkspacePath(review.getProjectId());
+                            Path repoDir = resolveReviewWorkspacePath(review);
                             GitService.GitCommandResult currentDiffRes = gitService.getDiff(repoDir);
                             String currentFingerprint = CodeReview.calculateFingerprint(currentDiffRes.output());
                             if (!currentFingerprint.equals(review.getContentFingerprint())) {
@@ -1456,7 +1472,7 @@ public class TrystHttpServer implements TrystHttpService {
                     }
                     case "commit-summary" -> {
                         if ("GET".equalsIgnoreCase(exchange.getRequestMethod())) {
-                            Path repoDir = resolveProjectWorkspacePath(review.getProjectId());
+                            Path repoDir = resolveReviewWorkspacePath(review);
                             GitService.GitCommandResult statusRes = gitService.getStatus(repoDir);
                             GitService.GitCommandResult diffRes = gitService.getDiff(repoDir);
                             String currentDiff = diffRes.output();
@@ -1562,7 +1578,7 @@ public class TrystHttpServer implements TrystHttpService {
                             String msg = extractJsonField(body, "message");
                             String commitMsg = (msg != null && !msg.isBlank()) ? msg : "Approved review " + review.getId();
 
-                            Path repoDir = resolveProjectWorkspacePath(review.getProjectId());
+                            Path repoDir = resolveReviewWorkspacePath(review);
 
                             // Support failure recovery: transition Task to COMMITTING
                             Optional<Task> optTask = (taskRepository != null && review.getTaskId() != null)
@@ -3149,8 +3165,18 @@ public class TrystHttpServer implements TrystHttpService {
         }
     }
 
+    private Path resolveReviewWorkspacePath(CodeReview review) {
+        if (review != null && review.getTaskId() != null && workspaceService != null) {
+            Workspace taskWs = workspaceService.getWorkspaceForTask(review.getTaskId());
+            if (taskWs != null && taskWs.getRootPath() != null && Files.exists(taskWs.getRootPath())) {
+                return taskWs.getRootPath();
+            }
+        }
+        return resolveProjectWorkspacePath(review != null ? review.getProjectId() : null);
+    }
+
     private Path resolveProjectWorkspacePath(String projectId) {
-        if (projectRepository != null) {
+        if (projectRepository != null && projectId != null) {
             Optional<Project> optProj = projectRepository.findById(projectId);
             if (optProj.isPresent()) {
                 return optProj.get().getLocation();
@@ -3159,7 +3185,7 @@ public class TrystHttpServer implements TrystHttpService {
         if (workspaceService != null && workspaceService.getCurrentWorkspace() != null) {
             return workspaceService.getCurrentWorkspace().getRootPath();
         }
-        return Path.of(System.getProperty("user.home"), ".tryst", "projects", projectId);
+        return Path.of(System.getProperty("user.home"), ".tryst", "projects", projectId != null ? projectId : "default");
     }
 
     private static Map<String, String> parseQueryParams(String query) {

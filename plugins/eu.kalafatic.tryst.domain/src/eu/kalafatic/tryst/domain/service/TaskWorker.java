@@ -324,7 +324,10 @@ public class TaskWorker implements Callable<ExecutionResult> {
                     line -> logBuilder.append("[build/test] ").append(line).append("\n")
             );
 
-            if (!validation.buildSuccess()) {
+            boolean buildPassed = validation.buildSuccess() ||
+                    (validation.qualityReport() != null && validation.qualityReport().buildStatus() == eu.kalafatic.tryst.domain.build.BuildExecutionStatus.NOT_EXECUTED);
+
+            if (!buildPassed) {
                 failureClass = (validation.failureClassification() != null && validation.failureClassification() != AiFailureClassification.NONE)
                         ? validation.failureClassification()
                         : AiFailureClassification.BUILD_FAILURE;
@@ -349,7 +352,10 @@ public class TaskWorker implements Callable<ExecutionResult> {
             recordRecoveryCheckpoint(task, TaskStatus.TESTING, "{\"stage\":\"TESTING\"}");
             logBuilder.append("[Worker ").append(context.getWorkerId()).append("] Stage: TESTING\n");
 
-            if (!validation.testSuccess()) {
+            boolean testPassed = validation.testSuccess() ||
+                    (validation.qualityReport() != null && validation.qualityReport().testStatus() == eu.kalafatic.tryst.domain.build.BuildExecutionStatus.NOT_EXECUTED);
+
+            if (!testPassed) {
                 failureClass = (validation.failureClassification() != null && validation.failureClassification() != AiFailureClassification.NONE)
                         ? validation.failureClassification()
                         : AiFailureClassification.TEST_FAILURE;
