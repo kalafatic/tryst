@@ -25,6 +25,37 @@ public interface TaskIntakeService {
         GENERAL
     }
 
+    record TaskAttachment(
+            String name,
+            String type,
+            long size,
+            String content
+    ) {
+        public TaskAttachment {
+            if (name == null || name.isBlank()) {
+                name = "attachment.txt";
+            }
+            if (content == null) {
+                content = "";
+            }
+        }
+    }
+
+    record ExecutionOptions(
+            boolean notifyProgress,
+            boolean notifyCompletion,
+            boolean notifyIntervention,
+            boolean generateCodeReview,
+            boolean requireApproval,
+            boolean autoExecute,
+            boolean autoCommit,
+            boolean autoPush
+    ) {
+        public static ExecutionOptions defaults() {
+            return new ExecutionOptions(true, true, true, true, true, true, false, false);
+        }
+    }
+
     record TaskIntakeRequest(
             String projectId,
             String repositoryUrl,
@@ -35,8 +66,27 @@ public interface TaskIntakeService {
             String expectedOutcome,
             List<String> acceptanceCriteria,
             List<String> constraints,
-            List<String> supplementaryInstructions
-    ) {}
+            List<String> supplementaryInstructions,
+            List<TaskAttachment> attachments,
+            ExecutionOptions executionOptions
+    ) {
+        public TaskIntakeRequest(
+                String projectId,
+                String repositoryUrl,
+                String branch,
+                String title,
+                String description,
+                TaskPriority priority,
+                String expectedOutcome,
+                List<String> acceptanceCriteria,
+                List<String> constraints,
+                List<String> supplementaryInstructions
+        ) {
+            this(projectId, repositoryUrl, branch, title, description, priority,
+                    expectedOutcome, acceptanceCriteria, constraints, supplementaryInstructions,
+                    List.of(), ExecutionOptions.defaults());
+        }
+    }
 
     record TaskIntakeAnalysis(
             boolean valid,

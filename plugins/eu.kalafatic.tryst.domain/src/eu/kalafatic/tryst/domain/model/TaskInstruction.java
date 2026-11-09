@@ -19,7 +19,8 @@ public class TaskInstruction {
         ACCEPTANCE_CRITERIA,
         CONSTRAINT,
         EXPECTED_OUTCOME,
-        CONTEXT
+        CONTEXT,
+        ATTACHMENT
     }
 
     private final String id;
