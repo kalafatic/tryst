@@ -80,6 +80,7 @@ public class TrystHttpServer implements TrystHttpService {
     private eu.kalafatic.tryst.domain.repository.GitCommitRepository gitCommitRepository;
     private eu.kalafatic.tryst.domain.service.ManagedServiceController managedServiceController;
     private eu.kalafatic.tryst.domain.intake.TaskIntakeService taskIntakeService;
+    private eu.kalafatic.tryst.infrastructure.vcs.RepositoryPoolManager repositoryPoolManager;
     private eu.kalafatic.tryst.domain.workflow.WorkflowDefinitionRepository workflowDefinitionRepository;
     private eu.kalafatic.tryst.domain.workflow.WorkflowExecutionRepository workflowExecutionRepository;
     private eu.kalafatic.tryst.domain.service.WorkflowEngine workflowEngine;
@@ -199,6 +200,10 @@ public class TrystHttpServer implements TrystHttpService {
 
     public void setTaskIntakeService(eu.kalafatic.tryst.domain.intake.TaskIntakeService taskIntakeService) {
         this.taskIntakeService = taskIntakeService;
+    }
+
+    public void setRepositoryPoolManager(eu.kalafatic.tryst.infrastructure.vcs.RepositoryPoolManager repositoryPoolManager) {
+        this.repositoryPoolManager = repositoryPoolManager;
     }
 
     public void setWorkflowDependencies(
@@ -338,6 +343,7 @@ public class TrystHttpServer implements TrystHttpService {
         AdminHandler adminH = new AdminHandler();
         WorkflowHandler workflowH = new WorkflowHandler();
         ScheduleHandler scheduleH = new ScheduleHandler();
+        PoolsHandler poolsH = new PoolsHandler();
         StaticAssetHandler staticH = new StaticAssetHandler(ctxPath);
 
         // Register default root /api/... routes
@@ -353,6 +359,7 @@ public class TrystHttpServer implements TrystHttpService {
         server.createContext("/api/admin", adminH);
         server.createContext("/api/workflows", workflowH);
         server.createContext("/api/schedules", scheduleH);
+        server.createContext("/api/pools", poolsH);
 
         // Register context-path specific routes if not root
         if (!ctxPath.isEmpty() && !"/".equals(ctxPath)) {
@@ -368,6 +375,7 @@ public class TrystHttpServer implements TrystHttpService {
             server.createContext(ctxPath + "/api/admin", adminH);
             server.createContext(ctxPath + "/api/workflows", workflowH);
             server.createContext(ctxPath + "/api/schedules", scheduleH);
+            server.createContext(ctxPath + "/api/pools", poolsH);
 
             server.createContext(ctxPath, staticH);
         }
@@ -974,6 +982,34 @@ public class TrystHttpServer implements TrystHttpService {
                                 projectId, repoUrl, branch, title, description, priority,
                                 expectedOutcome, criteria, constraints, supplementary
                         );
+
+                String execMode = extractJsonField(body, "executionMode");
+                String scheduledTimeStr = extractJsonField(body, "scheduledTime");
+                String cron = extractJsonField(body, "cronExpression");
+
+                if ("SCHEDULED".equalsIgnoreCase(execMode) && taskScheduleRepository != null) {
+                    Instant schedTime = Instant.now().plusSeconds(60);
+                    if (scheduledTimeStr != null && !scheduledTimeStr.isBlank()) {
+                        try { schedTime = Instant.parse(scheduledTimeStr); } catch (Exception ignored) {}
+                    }
+                    eu.kalafatic.tryst.domain.schedule.TaskSchedule sched = new eu.kalafatic.tryst.domain.schedule.TaskSchedule(
+                            title != null ? title : "Scheduled Intake Task",
+                            projectId, userId,
+                            (cron != null && !cron.isBlank()) ? eu.kalafatic.tryst.domain.schedule.ScheduleType.CRON : eu.kalafatic.tryst.domain.schedule.ScheduleType.ONCE,
+                            cron, schedTime, body
+                    );
+                    taskScheduleRepository.save(sched);
+                    StringBuilder sb = new StringBuilder("{");
+                    sb.append("\"taskId\": \"").append(sched.getId()).append("\",");
+                    sb.append("\"title\": \"").append(escapeJson(sched.getName())).append("\",");
+                    sb.append("\"status\": \"SCHEDULED\",");
+                    sb.append("\"priority\": \"").append(priority != null ? priority.name() : "NORMAL").append("\",");
+                    sb.append("\"scheduledTime\": \"").append(schedTime.toString()).append("\",");
+                    sb.append("\"classification\": \"SCHEDULED\"");
+                    sb.append("}");
+                    sendJsonResponse(exchange, 201, sb.toString());
+                    return;
+                }
 
                 try {
                     eu.kalafatic.tryst.domain.intake.TaskIntakeService.TaskIntakeResult res =
@@ -3532,6 +3568,53 @@ public class TrystHttpServer implements TrystHttpService {
         }
     }
 
+    private class PoolsHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendJsonResponse(exchange, 204, "");
+                return;
+            }
+            if (!validateCsrfIfCookieAuth(exchange)) {
+                sendJsonResponse(exchange, 403, "{\"error\": \"Invalid or missing CSRF token\"}");
+                return;
+            }
+
+            int activeTasks = (taskOrchestrator != null) ? taskOrchestrator.getActiveTaskCount() : 0;
+            int queueDepth = (taskOrchestrator != null) ? taskOrchestrator.getQueueDepth() : 0;
+            int concurrency = (taskOrchestrator != null) ? taskOrchestrator.getConcurrency() : 1;
+            int activeWorkspaces = (workspaceService != null) ? workspaceService.getAllWorkspaces().size() : 0;
+            int activeProcesses = (processExecutionManager != null) ? processExecutionManager.getManagedProcesses().size() : 0;
+
+            List<String> mirrors = (repositoryPoolManager != null) ? repositoryPoolManager.listMirrors() : List.of();
+            StringBuilder mb = new StringBuilder("[");
+            for (int i = 0; i < mirrors.size(); i++) {
+                if (i > 0) mb.append(",");
+                mb.append("\"").append(escapeJson(mirrors.get(i))).append("\"");
+            }
+            mb.append("]");
+
+            String json = String.format("""
+                    {
+                      "workers": {
+                        "active": %d,
+                        "concurrency": %d,
+                        "queueDepth": %d
+                      },
+                      "workspaces": {
+                        "allocated": %d
+                      },
+                      "processes": {
+                        "active": %d
+                      },
+                      "repositoryMirrors": %s,
+                      "mirrorCount": %d
+                    }
+                    """, activeTasks, concurrency, queueDepth, activeWorkspaces, activeProcesses, mb.toString(), mirrors.size());
+            sendJsonResponse(exchange, 200, json);
+        }
+    }
+
     private static class StaticAssetHandler implements HttpHandler {
         private final String contextPath;
 
@@ -3551,103 +3634,125 @@ public class TrystHttpServer implements TrystHttpService {
                     <title>TRYST – Production Platform Administration & Code Review Center</title>
                     <style>
                         :root {
-                            --bg: #0f172a; --panel: #1e293b; --border: #334155;
-                            --text: #f8fafc; --muted: #94a3b8; --primary: #38bdf8;
-                            --green: #22c55e; --red: #ef4444; --yellow: #eab308;
+                            --bg: #f8fafc; --panel: #ffffff; --sidebar-bg: #f1f5f9;
+                            --border: #cbd5e1; --border-subtle: #e2e8f0;
+                            --text: #0f172a; --muted: #475569; --primary: #0284c7;
+                            --primary-dark: #0369a1; --primary-light: #e0f2fe;
+                            --green: #16a34a; --red: #dc2626; --yellow: #d97706;
                         }
                         * { box-sizing: border-box; }
-                        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
-                        header { background: #090d16; padding: 12px 24px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
-                        h1 { margin: 0; font-size: 18px; color: var(--primary); display: flex; align-items: center; gap: 8px; }
-                        .top-nav { display: flex; gap: 16px; align-items: center; }
-                        .nav-btn { background: transparent; border: 1px solid var(--border); color: var(--text); padding: 6px 12px; border-radius: 4px; cursor: pointer; }
-                        .nav-btn.active { background: var(--primary); color: #000; font-weight: bold; }
-                        .container { display: flex; height: calc(100vh - 54px); }
-                        .sidebar { width: 300px; border-right: 1px solid var(--border); background: #131d2e; display: flex; flex-direction: column; overflow-y: auto; }
-                        .main-content { flex: 1; display: flex; flex-direction: column; overflow-y: auto; padding: 24px; }
-                        .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 20px; }
-                        .section-title { font-size: 14px; font-weight: bold; text-transform: uppercase; color: var(--muted); margin-bottom: 12px; }
-                        .list-item { padding: 10px 14px; border-radius: 6px; cursor: pointer; border: 1px solid transparent; margin-bottom: 6px; }
-                        .list-item:hover { background: rgba(56, 189, 248, 0.1); border-color: rgba(56, 189, 248, 0.3); }
-                        .list-item.active { background: #1e3a5f; border-color: var(--primary); }
-                        .badge { padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; text-transform: uppercase; }
-                        .badge-success { background: rgba(34, 197, 94, 0.2); color: var(--green); border: 1px solid var(--green); }
-                        .badge-warning { background: rgba(234, 179, 8, 0.2); color: var(--yellow); border: 1px solid var(--yellow); }
-                        .badge-error { background: rgba(239, 68, 68, 0.2); color: var(--red); border: 1px solid var(--red); }
-                        .badge-info { background: rgba(56, 189, 248, 0.2); color: var(--primary); border: 1px solid var(--primary); }
-                        .btn { padding: 8px 16px; border-radius: 6px; font-weight: 600; cursor: pointer; border: none; font-size: 13px; }
-                        .btn-primary { background: #0284c7; color: white; }
-                        .btn-success { background: #16a34a; color: white; }
-                        .btn-danger { background: #dc2626; color: white; }
-                        .btn-warning { background: #d97706; color: white; }
-                        .btn-sm { padding: 4px 8px; font-size: 11px; border-radius: 4px; }
-                        .btn:hover { opacity: 0.9; }
-                        pre.diff-view { background: #0b1120; border: 1px solid var(--border); border-radius: 6px; padding: 12px; font-family: monospace; font-size: 13px; overflow-x: auto; line-height: 1.5; margin: 0; }
+                        body { font-family: "Segoe UI", Arial, -apple-system, BlinkMacSystemFont, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); font-size: 13px; line-height: 1.4; }
+                        header { background: #ffffff; padding: 10px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+                        h1 { margin: 0; font-size: 16px; color: var(--text); font-weight: 600; display: flex; align-items: center; gap: 8px; }
+                        h2, h3, h4 { color: var(--text); font-weight: 600; margin: 0 0 8px 0; }
+                        .top-nav { display: flex; gap: 10px; align-items: center; }
+                        .nav-btn { background: #ffffff; border: 1px solid var(--border); color: var(--muted); padding: 5px 12px; border-radius: 3px; cursor: pointer; font-size: 12px; font-weight: 500; }
+                        .nav-btn:hover { background: #f8fafc; color: var(--text); border-color: #94a3b8; }
+                        .nav-btn.active { background: var(--primary); color: #ffffff; border-color: var(--primary-dark); font-weight: 600; }
+                        .container { display: flex; height: calc(100vh - 50px); }
+                        .sidebar { width: 280px; min-width: 250px; border-right: 1px solid var(--border); background: var(--sidebar-bg); display: flex; flex-direction: column; overflow-y: auto; }
+                        .main-content { flex: 1; display: flex; flex-direction: column; overflow-y: auto; padding: 20px; background: var(--bg); }
+                        .card { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+                        .section-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); margin-bottom: 10px; }
+                        .list-item { padding: 8px 12px; border-radius: 3px; cursor: pointer; border: 1px solid transparent; margin-bottom: 4px; color: var(--text); font-size: 12px; }
+                        .list-item:hover { background: #e2e8f0; border-color: #334155; }
+                        .list-item.active { background: #e0f2fe; border-color: #0284c7; color: #0369a1; font-weight: 600; }
+                        .badge { padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600; text-transform: uppercase; }
+                        .badge-success { background: #dcfce7; color: var(--green); border: 1px solid #86efac; }
+                        .badge-warning { background: #fef9c3; color: var(--yellow); border: 1px solid #fde047; }
+                        .badge-error { background: #fee2e2; color: var(--red); border: 1px solid #fca5a5; }
+                        .badge-info { background: #e0f2fe; color: var(--primary); border: 1px solid #7dd3fc; }
+                        .btn { padding: 6px 14px; border-radius: 3px; font-weight: 600; cursor: pointer; border: 1px solid transparent; font-size: 12px; font-family: inherit; }
+                        .btn-primary { background: #0284c7; color: white; border-color: #0369a1; }
+                        .btn-primary:hover { background: #0369a1; }
+                        .btn-success { background: #16a34a; color: white; border-color: #15803d; }
+                        .btn-success:hover { background: #15803d; }
+                        .btn-danger { background: #dc2626; color: white; border-color: #b91c1c; }
+                        .btn-danger:hover { background: #b91c1c; }
+                        .btn-warning { background: #d97706; color: white; border-color: #b45309; }
+                        .btn-warning:hover { background: #b45309; }
+                        .btn-default { background: #ffffff; color: var(--text); border-color: var(--border); }
+                        .btn-default:hover { background: #f1f5f9; }
+                        .btn-sm { padding: 3px 8px; font-size: 11px; border-radius: 3px; }
+                        pre.diff-view { background: #ffffff; border: 1px solid var(--border); border-radius: 3px; padding: 12px; font-family: Consolas, "Courier New", monospace; font-size: 12px; overflow-x: auto; line-height: 1.5; margin: 0; }
                         .diff-line { display: flex; cursor: pointer; user-select: none; }
-                        .diff-line:hover { background: rgba(56, 189, 248, 0.15); }
-                        .diff-line.selected { background: rgba(234, 179, 8, 0.25) !important; border-left: 3px solid var(--yellow); }
-                        .diff-line-num { width: 50px; text-align: right; padding-right: 12px; color: var(--muted); border-right: 1px solid var(--border); user-select: none; font-size: 12px; }
-                        .diff-line-code { padding-left: 12px; flex: 1; white-space: pre-wrap; font-family: monospace; }
-                        .diff-add { color: #4ade80; background: rgba(34, 197, 94, 0.12); }
-                        .diff-del { color: #f87171; background: rgba(239, 68, 68, 0.12); }
-                        .diff-hdr { color: #94a3b8; font-weight: bold; background: #131d2e; }
-                        textarea.code-editor { width: 100%; height: 140px; background: #090d16; border: 1px solid var(--border); color: #e2e8f0; font-family: monospace; font-size: 13px; padding: 12px; border-radius: 6px; resize: vertical; }
-                        table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
-                        th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); }
-                        th { color: var(--muted); }
-                        .grid-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 20px; }
-                        .stat-card { background: #182234; border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
-                        .stat-val { font-size: 24px; font-weight: bold; color: var(--primary); margin-top: 4px; }
-                        .flex-row { display: flex; gap: 12px; align-items: center; }
-                        .comment-box { background: #131d2e; border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-top: 8px; }
-                        .comment-box.resolved { opacity: 0.6; border-color: var(--green); }
-                        select.input-ctrl, input.input-ctrl { background: #0b1120; border: 1px solid var(--border); color: #fff; padding: 6px 10px; border-radius: 4px; }
+                        .diff-line:hover { background: #f1f5f9; }
+                        .diff-line.selected { background: #fef08a !important; border-left: 3px solid var(--yellow); }
+                        .diff-line-num { width: 50px; text-align: right; padding-right: 12px; color: var(--muted); border-right: 1px solid var(--border); user-select: none; font-size: 11px; }
+                        .diff-line-code { padding-left: 12px; flex: 1; white-space: pre-wrap; font-family: Consolas, "Courier New", monospace; }
+                        .diff-add { color: #15803d; background: #ecfdf5; }
+                        .diff-del { color: #b91c1c; background: #fef2f2; }
+                        .diff-hdr { color: #475569; font-weight: bold; background: #f1f5f9; }
+                        textarea.code-editor { width: 100%; height: 130px; background: #ffffff; border: 1px solid var(--border); color: var(--text); font-family: Consolas, "Courier New", monospace; font-size: 12px; padding: 10px; border-radius: 3px; resize: vertical; }
+                        textarea.code-editor:focus, select.input-ctrl:focus, input.input-ctrl:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
+                        table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12px; }
+                        th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border-subtle); }
+                        th { color: var(--muted); font-weight: 600; background: #f8fafc; border-bottom: 1px solid var(--border); }
+                        tr:hover td { background: #f8fafc; }
+                        .grid-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px; }
+                        .stat-card { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 14px; box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
+                        .stat-val { font-size: 22px; font-weight: 700; color: var(--primary); margin-top: 4px; }
+                        .flex-row { display: flex; gap: 8px; align-items: center; }
+                        .comment-box { background: #f8fafc; border: 1px solid var(--border); border-radius: 4px; padding: 12px; margin-top: 8px; }
+                        .comment-box.resolved { opacity: 0.7; border-color: var(--green); background: #f0fdf4; }
+                        select.input-ctrl, input.input-ctrl { background: #ffffff; border: 1px solid var(--border); color: var(--text); padding: 5px 8px; border-radius: 3px; font-size: 12px; font-family: inherit; }
 
                         /* Visual Workflow Designer Styles */
-                        .wf-container { display: flex; height: calc(100vh - 54px); width: 100%; overflow: hidden; }
-                        .wf-palette { width: 280px; min-width: 250px; background: #131d2e; border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto; padding: 16px; }
-                        .wf-canvas-area { flex: 1; display: flex; flex-direction: column; position: relative; background: #0b101b; overflow: hidden; }
-                        .wf-toolbar { height: 48px; background: #162032; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; padding: 0 16px; gap: 8px; z-index: 10; }
-                        .wf-canvas-viewport { flex: 1; position: relative; overflow: hidden; background: radial-gradient(circle, #1e293b 1px, transparent 1px); background-size: 20px 20px; cursor: grab; }
+                        .wf-container { display: flex; height: calc(100vh - 50px); width: 100%; overflow: hidden; }
+                        .wf-palette { width: 260px; min-width: 240px; background: var(--sidebar-bg); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto; padding: 14px; }
+                        .wf-canvas-area { flex: 1; display: flex; flex-direction: column; position: relative; background: #f8fafc; overflow: hidden; }
+                        .wf-toolbar { height: 42px; background: #ffffff; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; padding: 0 14px; gap: 8px; z-index: 10; }
+                        .wf-canvas-viewport { flex: 1; position: relative; overflow: hidden; background: radial-gradient(circle, #cbd5e1 1px, transparent 1px); background-size: 20px 20px; cursor: grab; }
                         .wf-canvas-viewport.grabbing { cursor: grabbing; }
-                        .wf-props-panel { width: 340px; min-width: 300px; background: #131d2e; border-left: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto; padding: 16px; }
-                        .wf-palette-item { background: #1e293b; border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; margin-bottom: 8px; cursor: grab; user-select: none; display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; transition: border-color 0.15s, background 0.15s; }
-                        .wf-palette-item:hover { border-color: var(--primary); background: #24344d; }
-                        .wf-node { position: absolute; min-width: 170px; background: #1e293b; border: 2px solid var(--border); border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,0.4); user-select: none; cursor: move; z-index: 5; }
-                        .wf-node.selected { border-color: var(--primary); box-shadow: 0 0 12px rgba(56, 189, 248, 0.5); }
-                        .wf-node.node-running { border-color: var(--yellow); animation: pulse 1.5s infinite; }
+                        .wf-props-panel { width: 320px; min-width: 280px; background: #ffffff; border-left: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto; padding: 14px; }
+                        .wf-palette-item { background: #ffffff; border: 1px solid var(--border); border-radius: 3px; padding: 8px 10px; margin-bottom: 6px; cursor: grab; user-select: none; display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; }
+                        .wf-palette-item:hover { border-color: var(--primary); background: #f0f9ff; }
+                        .wf-node { position: absolute; min-width: 170px; background: #ffffff; border: 1px solid var(--border); border-radius: 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.06); user-select: none; cursor: move; z-index: 5; }
+                        .wf-node.selected { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(2, 132, 199, 0.4); }
+                        .wf-node.node-running { border-color: var(--yellow); }
                         .wf-node.node-completed { border-color: var(--green); }
                         .wf-node.node-failed { border-color: var(--red); }
-                        @keyframes pulse { 0% { box-shadow: 0 0 4px rgba(234, 179, 8, 0.4); } 50% { box-shadow: 0 0 14px rgba(234, 179, 8, 0.9); } 100% { box-shadow: 0 0 4px rgba(234, 179, 8, 0.4); } }
-                        .wf-node-header { padding: 8px 12px; font-size: 12px; font-weight: bold; border-bottom: 1px solid var(--border); background: #162032; border-top-left-radius: 6px; border-top-right-radius: 6px; display: flex; align-items: center; justify-content: space-between; }
-                        .wf-node-body { padding: 10px 12px; font-size: 11px; color: var(--muted); }
-                        .wf-port { width: 12px; height: 12px; border-radius: 50%; background: #38bdf8; border: 2px solid #0f172a; position: absolute; cursor: crosshair; }
-                        .wf-port-in { left: -6px; top: calc(50% - 6px); background: #38bdf8; }
-                        .wf-port-out { right: -6px; top: calc(50% - 6px); background: #22c55e; }
-                        .wf-port-fail { right: -6px; top: calc(80% - 6px); background: #ef4444; }
+                        .wf-node-header { padding: 6px 10px; font-size: 11px; font-weight: 700; border-bottom: 1px solid var(--border-subtle); background: #f8fafc; border-top-left-radius: 3px; border-top-right-radius: 3px; display: flex; align-items: center; justify-content: space-between; }
+                        .wf-node-body { padding: 8px 10px; font-size: 11px; color: var(--muted); }
+                        .wf-port { width: 10px; height: 10px; border-radius: 50%; background: #0284c7; border: 2px solid #ffffff; position: absolute; cursor: crosshair; }
+                        .wf-port-in { left: -5px; top: calc(50% - 5px); background: #0284c7; }
+                        .wf-port-out { right: -5px; top: calc(50% - 5px); background: #16a34a; }
+                        .wf-port-fail { right: -5px; top: calc(80% - 5px); background: #dc2626; }
                         svg.wf-connections-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; }
-                        svg.wf-connections-layer path { pointer-events: stroke; cursor: pointer; fill: none; stroke: #64748b; stroke-width: 2.5; }
-                        svg.wf-connections-layer path:hover { stroke: var(--primary); stroke-width: 3.5; }
+                        svg.wf-connections-layer path { pointer-events: stroke; cursor: pointer; fill: none; stroke: #94a3b8; stroke-width: 2; }
+                        svg.wf-connections-layer path:hover { stroke: var(--primary); stroke-width: 3; }
                     </style>
                 </head>
                 <body>
                     <header>
-                        <h1>⚡ TRYST Production Platform</h1>
+                        <div style="display: flex; align-items: center; gap: 16px;">
+                            <h1>TRYST Production Platform – Development Workspace</h1>
+                            <div style="display: flex; align-items: center; gap: 6px;">
+                                <label style="font-size: 11px; color: var(--muted); font-weight: 600;">PROJECT:</label>
+                                <select id="globalProjectSelector" class="input-ctrl" style="font-weight: 600;" onchange="onGlobalProjectChanged()">
+                                    <option value="">-- All Projects --</option>
+                                </select>
+                            </div>
+                        </div>
                         <div class="top-nav">
                             <button id="btnNewTask" class="btn btn-primary" onclick="openNewTaskModal()">+ New Task</button>
-                            <button id="navWorkflows" class="nav-btn" onclick="switchTab('workflows')">⚡ Workflow Designer</button>
-                            <button id="navReviews" class="nav-btn active" onclick="switchTab('reviews')">Code Review Center</button>
-                            <button id="navEvo" class="nav-btn" onclick="switchTab('evo')">AI Integration Center</button>
-                            <button id="navAdmin" class="nav-btn" onclick="switchTab('admin')">Administration & Observability</button>
+                            <button id="navDashboard" class="nav-btn" onclick="switchNavSection('dashboard')">Dashboard</button>
+                            <button id="navProjects" class="nav-btn" onclick="switchNavSection('projects')">Projects & Repos</button>
+                            <button id="navQueue" class="nav-btn" onclick="switchNavSection('queue')">Queue & Scheduler</button>
+                            <button id="navReviews" class="nav-btn active" onclick="switchNavSection('reviews')">Code Reviews</button>
+                            <button id="navWorkspaces" class="nav-btn" onclick="switchNavSection('workspaces')">Workspaces</button>
+                            <button id="navPools" class="nav-btn" onclick="switchNavSection('pools')">Resource Pools</button>
+                            <button id="navWorkflows" class="nav-btn" onclick="switchNavSection('workflows')">Workflows</button>
+                            <button id="navAdmin" class="nav-btn" onclick="switchNavSection('admin')">Administration</button>
                             <div style="position: relative; display: inline-block;">
                                 <button id="btnNotifBell" class="nav-btn" onclick="toggleNotificationDropdown()" title="Notifications">
-                                    🔔 <span id="notifBadge" class="badge badge-warning" style="display:none; font-size:10px; padding:2px 5px;">0</span>
+                                    Alerts <span id="notifBadge" class="badge badge-warning" style="display:none; font-size:10px; padding:2px 5px;">0</span>
                                 </button>
-                                <div id="notifDropdown" style="display:none; position: absolute; right: 0; top: 38px; width: 360px; max-height: 420px; overflow-y: auto; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); z-index: 1000; padding: 12px;">
+                                <div id="notifDropdown" style="display:none; position: absolute; right: 0; top: 38px; width: 360px; max-height: 420px; overflow-y: auto; background: var(--panel); border: 1px solid var(--border); border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.12); z-index: 1000; padding: 12px;">
                                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 8px; border-bottom: 1px solid var(--border); padding-bottom: 6px;">
-                                        <b style="font-size:13px;">Notifications</b>
+                                        <b style="font-size:12px;">System Notifications</b>
                                         <div>
-                                            <button class="btn btn-sm btn-primary" onclick="requestBrowserNotificationPermission()">Enable Push</button>
+                                            <button class="btn btn-sm btn-primary" onclick="requestBrowserNotificationPermission()">Push Alerts</button>
                                             <button class="btn btn-sm btn-warning" onclick="markAllNotificationsRead()">Mark Read</button>
                                         </div>
                                     </div>
@@ -3656,9 +3761,113 @@ public class TrystHttpServer implements TrystHttpService {
                                     </div>
                                 </div>
                             </div>
-                            <span id="userStatus" style="font-size: 13px; color: var(--muted);">User: Local</span>
+                            <div style="display: flex; align-items: center; gap: 8px; border-left: 1px solid var(--border); padding-left: 10px;">
+                                <span id="userStatus" style="font-size: 12px; font-weight: 500; color: var(--text);">User: Local</span>
+                                <button id="btnAuthAction" class="btn btn-sm btn-default" onclick="toggleAuthModal()">Login</button>
+                            </div>
                         </div>
                     </header>
+
+                    <!-- Dashboard Tab -->
+                    <div id="dashboardTab" class="container" style="display: none;">
+                        <div class="main-content" style="padding: 24px;">
+                            <div class="grid-stats">
+                                <div class="stat-card"><div>Active Tasks</div><div id="dashActiveTasks" class="stat-val">0</div></div>
+                                <div class="stat-card"><div>Queue Depth</div><div id="dashQueueDepth" class="stat-val">0</div></div>
+                                <div class="stat-card"><div>Isolated Workspaces</div><div id="dashWorkspaces" class="stat-val">0</div></div>
+                                <div class="stat-card"><div>Mirror Cache Pools</div><div id="dashMirrors" class="stat-val">0</div></div>
+                                <div class="stat-card"><div>Code Reviews Pending</div><div id="dashReviews" class="stat-val">0</div></div>
+                            </div>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                                <div class="card">
+                                    <div class="section-title">Recent Task Executions</div>
+                                    <div id="dashRecentTasks" style="font-size: 12px;">Loading tasks...</div>
+                                </div>
+                                <div class="card">
+                                    <div class="section-title">Active Workspaces & Sandboxes</div>
+                                    <div id="dashActiveWorkspaces" style="font-size: 12px;">Loading workspaces...</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Projects & Repositories Control Plane Tab -->
+                    <div id="projectsTab" class="container" style="display: none;">
+                        <div class="sidebar">
+                            <div style="padding: 16px; border-bottom: 1px solid var(--border);">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                    <div class="section-title" style="margin: 0;">Projects</div>
+                                    <button class="btn btn-sm btn-primary" onclick="openCreateProjectModal()">+ Add</button>
+                                </div>
+                                <div id="projectsSideList" style="font-size: 12px;">Loading projects...</div>
+                            </div>
+                        </div>
+                        <div class="main-content">
+                            <div class="card">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                                    <div>
+                                        <h2 id="projDetailName" style="margin: 0; font-size: 16px;">Select a Project</h2>
+                                        <div id="projDetailMeta" style="color: var(--muted); font-size: 12px; margin-top: 4px;">Choose a project from the left sidebar to view repositories and configured tasks.</div>
+                                    </div>
+                                    <button class="btn btn-primary" onclick="openNewTaskModal()">Create Task for Project</button>
+                                </div>
+                                <div class="section-title" style="margin-top: 16px;">Associated Source Repositories & VCS Providers</div>
+                                <div id="projReposContainer" style="font-size: 12px;">No project selected.</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Task Queue & Scheduler Tab -->
+                    <div id="queueTab" class="container" style="display: none;">
+                        <div class="main-content">
+                            <div class="card">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                                    <div>
+                                        <h2 style="margin: 0; font-size: 16px;">Task Execution Queue & Scheduler</h2>
+                                        <div style="color: var(--muted); font-size: 12px; margin-top: 4px;">Monitor queued tasks, schedule executions, and inspect task execution dependencies.</div>
+                                    </div>
+                                    <button class="btn btn-primary" onclick="refreshQueueAndSchedules()">Refresh Queue</button>
+                                </div>
+                                <div class="section-title">Active & Queued Tasks</div>
+                                <div id="queueTasksList">Loading queued tasks...</div>
+                                <div class="section-title" style="margin-top: 24px;">Scheduled Tasks & Timers</div>
+                                <div id="schedulesList">Loading scheduled tasks...</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Workspaces & Sandboxes Inspection Tab -->
+                    <div id="workspacesTab" class="container" style="display: none;">
+                        <div class="main-content">
+                            <div class="card">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                                    <div>
+                                        <h2 style="margin: 0; font-size: 16px;">Isolated Workspaces & Sandboxes</h2>
+                                        <div style="color: var(--muted); font-size: 12px; margin-top: 4px;">Inspect active task sandboxes, isolated git worktrees, and working copy states.</div>
+                                    </div>
+                                    <button class="btn btn-primary" onclick="loadWorkspacesView()">Refresh Workspaces</button>
+                                </div>
+                                <div id="workspacesTableContainer">Loading workspaces...</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Resource Pools Management Tab -->
+                    <div id="poolsTab" class="container" style="display: none;">
+                        <div class="main-content">
+                            <div class="grid-stats">
+                                <div class="stat-card"><div>Active Workers</div><div id="poolActiveWorkers" class="stat-val">0</div></div>
+                                <div class="stat-card"><div>Concurrency Limit</div><div id="poolConcurrency" class="stat-val">1</div></div>
+                                <div class="stat-card"><div>Bare Mirror Pools</div><div id="poolMirrorsCount" class="stat-val">0</div></div>
+                                <div class="stat-card"><div>Allocated Workspaces</div><div id="poolAllocWorkspaces" class="stat-val">0</div></div>
+                                <div class="stat-card"><div>Managed OS Processes</div><div id="poolActiveProcs" class="stat-val">0</div></div>
+                            </div>
+                            <div class="card">
+                                <div class="section-title">Cached Bare Repository Mirrors (Object Sharing Pool)</div>
+                                <div id="poolMirrorsList" style="font-size: 12px;">Loading mirrors...</div>
+                            </div>
+                        </div>
+                    </div>
 
                     <!-- Visual Workflow Designer Tab -->
                     <div id="workflowsTab" class="wf-container" style="display: none;">
@@ -3776,7 +3985,7 @@ public class TrystHttpServer implements TrystHttpService {
 
                             <!-- Validation & Simulation Feedback -->
                             <div class="section-title" style="margin-top: 16px; border-top: 1px solid var(--border); padding-top: 12px;">Validation & Simulation</div>
-                            <div id="wfValidationOutput" style="font-size: 11px; color: var(--muted); background: #0b1120; border: 1px solid var(--border); border-radius: 6px; padding: 10px; min-height: 80px;">
+                            <div id="wfValidationOutput" style="font-size: 11px; color: var(--muted); background: #ffffff; border: 1px solid var(--border); border-radius: 6px; padding: 10px; min-height: 80px;">
                                 Ready to validate workflow.
                             </div>
                         </div>
@@ -3830,7 +4039,7 @@ public class TrystHttpServer implements TrystHttpService {
                                 <!-- AI Explanation Drawer / Card -->
                                 <div class="card" id="aiExplanationCard" style="display: none;">
                                     <div class="section-title">AI Change Explanation & Architectural Reasoning</div>
-                                    <div id="aiExplanationText" style="font-size: 13px; line-height: 1.5; color: #cbd5e1; white-space: pre-wrap;"></div>
+                                    <div id="aiExplanationText" style="font-size: 13px; line-height: 1.5; color: #334155; white-space: pre-wrap;"></div>
                                 </div>
 
                                 <!-- Interactive Diff Viewer -->
@@ -3851,7 +4060,7 @@ public class TrystHttpServer implements TrystHttpService {
                                     <div class="section-title">Feedback & Rework Instructions Composer</div>
                                     <div id="selectedCodeSnippetContainer" style="display: none; margin-bottom: 10px;">
                                         <label style="font-size: 12px; color: var(--muted);">Selected Code Context:</label>
-                                        <pre id="selectedCodeSnippet" style="background: #090d16; border: 1px solid var(--border); padding: 8px; font-size: 12px; border-radius: 4px; margin-top: 4px; max-height: 120px; overflow-y: auto;"></pre>
+                                        <pre id="selectedCodeSnippet" style="background: #f8fafc; border: 1px solid var(--border); padding: 8px; font-size: 12px; border-radius: 4px; margin-top: 4px; max-height: 120px; overflow-y: auto;"></pre>
                                     </div>
                                     <div class="flex-row" style="margin-bottom: 8px; flex-wrap: wrap;">
                                         <input id="commentFilePath" class="input-ctrl" type="text" placeholder="File path (optional for global instructions)..." style="flex: 2; min-width: 200px;" />
@@ -3880,7 +4089,7 @@ public class TrystHttpServer implements TrystHttpService {
 
                                 <div class="card">
                                     <div class="section-title">Manual Edit Proposed Changes (Alternative)</div>
-                                    <input id="editFilePath" type="text" placeholder="Relative file path..." style="width: 100%; padding: 8px; background: #0b1120; border: 1px solid var(--border); color: #fff; margin-bottom: 8px; border-radius: 4px;" />
+                                    <input id="editFilePath" type="text" placeholder="Relative file path..." style="width: 100%; padding: 8px; background: #ffffff; border: 1px solid var(--border); color: #0f172a; margin-bottom: 8px; border-radius: 4px;" />
                                     <textarea id="fileEditor" class="code-editor" placeholder="Adjust proposed content..."></textarea>
                                     <div style="margin-top: 8px; text-align: right;">
                                         <button class="btn btn-primary" onclick="saveFileEdit()">Save Changes & Invalidate Approval</button>
@@ -3988,88 +4197,187 @@ public class TrystHttpServer implements TrystHttpService {
                         </div>
                     </div>
 
+                    <!-- Authentication & Session Modal -->
+                    <div id="authModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(15, 23, 42, 0.45); z-index: 2000; align-items: center; justify-content: center;">
+                        <div style="background: var(--panel); border: 1px solid var(--border); border-radius: 4px; width: 400px; max-width: 90vw; padding: 20px; box-shadow: 0 4px 16px rgba(0,0,0,0.15);">
+                            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 14px;">
+                                <h3 style="margin: 0; font-size: 15px;">User Authentication & Session</h3>
+                                <button class="btn btn-sm btn-default" onclick="toggleAuthModal()">✕</button>
+                            </div>
+                            <div id="authNotice" style="margin-bottom: 12px; font-size: 12px; color: var(--muted);">Authenticate to access user-specific projects, repositories, and authorized task executions.</div>
+                            <div style="margin-bottom: 10px;">
+                                <label style="font-size: 11px; font-weight: 600; color: var(--muted);">Username:</label>
+                                <input id="authUsernameInput" class="input-ctrl" type="text" style="width: 100%; margin-top: 4px;" placeholder="admin or username" />
+                            </div>
+                            <div style="margin-bottom: 14px;">
+                                <label style="font-size: 11px; font-weight: 600; color: var(--muted);">Password:</label>
+                                <input id="authPasswordInput" class="input-ctrl" type="password" style="width: 100%; margin-top: 4px;" placeholder="••••••••" />
+                            </div>
+                            <div style="display: flex; justify-content: flex-end; gap: 8px;">
+                                <button class="btn btn-default" onclick="performLogout()">Logout</button>
+                                <button class="btn btn-primary" onclick="performLogin()">Login</button>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- Intelligent Task Intake Modal -->
-                    <div id="newTaskModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.7); z-index: 2000; align-items: center; justify-content: center;">
-                        <div style="background: var(--panel); border: 1px solid var(--border); border-radius: 8px; width: 720px; max-width: 95vw; max-height: 90vh; overflow-y: auto; padding: 24px; box-shadow: 0 8px 32px rgba(0,0,0,0.6); position: relative;">
-                            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 16px;">
-                                <h2 style="margin: 0; font-size: 18px; color: var(--primary);">🚀 Intelligent Task Intake</h2>
-                                <button class="btn btn-sm btn-danger" onclick="closeNewTaskModal()">✕</button>
+                    <div id="newTaskModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(15, 23, 42, 0.45); z-index: 2000; align-items: center; justify-content: center;">
+                        <div style="background: var(--panel); border: 1px solid var(--border); border-radius: 4px; width: 780px; max-width: 95vw; max-height: 90vh; overflow-y: auto; padding: 20px; box-shadow: 0 4px 16px rgba(0,0,0,0.15); position: relative;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 10px; margin-bottom: 14px;">
+                                <div>
+                                    <h3 style="margin: 0; font-size: 16px; font-weight: 600;">Configure & Submit Development Task</h3>
+                                    <div style="font-size: 11px; color: var(--muted); margin-top: 2px;">The RCP backend autonomously resolves repository mirrors, worktrees, and isolated sandboxes.</div>
+                                </div>
+                                <button class="btn btn-sm btn-default" onclick="closeNewTaskModal()">✕</button>
                             </div>
 
-                            <!-- 1. Repository Selection -->
-                            <div style="margin-bottom: 14px;">
-                                <label style="font-size: 12px; color: var(--muted); font-weight: bold;">1. GitHub Repository & Branch:</label>
-                                <div class="flex-row" style="margin-top: 6px;">
-                                    <select id="intakeRepoSelect" class="input-ctrl" style="flex: 2;" onchange="onIntakeRepoSelected()">
-                                        <option value="">-- Select GitHub Repository or Local Project --</option>
-                                    </select>
-                                    <input id="intakeBranchInput" class="input-ctrl" type="text" placeholder="Branch (default: main)" style="flex: 1;" />
-                                    <button class="btn btn-sm btn-primary" onclick="refreshIntakeRepos()">↻ Refresh</button>
-                                </div>
-                                <div style="margin-top: 4px;">
-                                    <input id="intakeCustomRepoUrl" class="input-ctrl" type="text" placeholder="Or enter custom repository URL (https://github.com/...)..." style="width: 100%; font-size: 12px; margin-top: 4px;" />
-                                </div>
+                            <!-- Tabs for Basic / Advanced Configuration -->
+                            <div class="flex-row" style="margin-bottom: 14px; border-bottom: 1px solid var(--border-subtle); padding-bottom: 6px;">
+                                <button id="btnIntakeTabBasic" class="btn btn-sm btn-primary" onclick="switchIntakeTab('basic')">Basic Configuration</button>
+                                <button id="btnIntakeTabAdvanced" class="btn btn-sm btn-default" onclick="switchIntakeTab('advanced')">Advanced Execution & Orchestration</button>
                             </div>
 
-                            <!-- 2. Request Description & Voice Dictation -->
-                            <div style="margin-bottom: 14px;">
-                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                                    <label style="font-size: 12px; color: var(--muted); font-weight: bold;">2. Request Description & Dictation:</label>
-                                    <div class="flex-row">
-                                        <button id="btnVoiceDictate" class="btn btn-sm btn-warning" onclick="toggleVoiceDictation()">🎙️ Start Dictation</button>
-                                        <span id="voiceStatus" style="font-size: 11px; color: var(--yellow); display: none;">● Listening...</span>
+                            <!-- BASIC CONFIGURATION SECTION -->
+                            <div id="intakeSectionBasic">
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+                                    <div>
+                                        <label style="font-size: 11px; font-weight: 600; color: var(--muted);">Target Project & Repository:</label>
+                                        <select id="intakeRepoSelect" class="input-ctrl" style="width: 100%; margin-top: 4px;" onchange="onIntakeRepoSelected()">
+                                            <option value="">-- Select Project or Repository --</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label style="font-size: 11px; font-weight: 600; color: var(--muted);">VCS Provider & Branch:</label>
+                                        <div class="flex-row" style="margin-top: 4px;">
+                                            <select id="intakeVcsProvider" class="input-ctrl" style="width: 100px;">
+                                                <option value="GIT">Git</option>
+                                                <option value="LOCAL">Local FS</option>
+                                            </select>
+                                            <input id="intakeBranchInput" class="input-ctrl" type="text" placeholder="main" style="flex: 1;" />
+                                            <button class="btn btn-sm btn-default" onclick="refreshIntakeRepos()">↻</button>
+                                        </div>
                                     </div>
                                 </div>
-                                <textarea id="intakeDescription" class="code-editor" style="height: 120px;" placeholder="Describe the desired change (e.g., 'Add user avatar upload endpoint and validate image size. Update unit tests.'). Click 'Start Dictation' to dictate directly in browser or type here..."></textarea>
-                                <div id="voiceNotice" style="font-size: 11px; color: var(--muted); margin-top: 2px;">Voice speech recognition supported in Chrome/Edge/Safari. Recognized text can be freely edited before submission.</div>
+                                <div style="margin-bottom: 12px;">
+                                    <input id="intakeCustomRepoUrl" class="input-ctrl" type="text" placeholder="Custom Git URL (e.g., https://github.com/org/repo.git or local path)..." style="width: 100%; font-size: 12px;" />
+                                </div>
+
+                                <div style="margin-bottom: 12px;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                                        <label style="font-size: 11px; font-weight: 600; color: var(--muted);">Task Description & Instructions:</label>
+                                        <div class="flex-row">
+                                            <button id="btnVoiceDictate" class="btn btn-sm btn-default" onclick="toggleVoiceDictation()">Dictate</button>
+                                            <span id="voiceStatus" style="font-size: 11px; color: var(--yellow); display: none;">Listening...</span>
+                                        </div>
+                                    </div>
+                                    <textarea id="intakeDescription" class="code-editor" style="height: 110px;" placeholder="Describe desired changes, requirements, bugs to fix, or features to implement..."></textarea>
+                                </div>
+
+                                <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 12px; margin-bottom: 12px;">
+                                    <div>
+                                        <label style="font-size: 11px; font-weight: 600; color: var(--muted);">Task Title:</label>
+                                        <div class="flex-row" style="margin-top: 4px;">
+                                            <input id="intakeTitle" class="input-ctrl" type="text" placeholder="Auto-generated if left blank..." style="flex: 1;" />
+                                            <button class="btn btn-sm btn-default" onclick="autoSuggestTitle()">Suggest</button>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label style="font-size: 11px; font-weight: 600; color: var(--muted);">Priority:</label>
+                                        <select id="intakePriority" class="input-ctrl" style="width: 100%; margin-top: 4px;">
+                                            <option value="NORMAL" selected>Normal</option>
+                                            <option value="LOW">Low</option>
+                                            <option value="HIGH">High</option>
+                                            <option value="URGENT">Urgent</option>
+                                        </select>
+                                    </div>
+                                </div>
                             </div>
 
-                            <!-- 3. Supplementary Context & Criteria (Accordion/Expanded) -->
-                            <div style="margin-bottom: 14px; background: #131d2e; border: 1px solid var(--border); border-radius: 6px; padding: 12px;">
-                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                                    <label style="font-size: 12px; color: var(--muted); font-weight: bold;">3. Context, Expected Outcome & Criteria (Optional):</label>
-                                    <button class="btn btn-sm btn-primary" onclick="autoSuggestTitle()">Suggest Title</button>
+                            <!-- ADVANCED CONFIGURATION SECTION -->
+                            <div id="intakeSectionAdvanced" style="display: none;">
+                                <div style="background: var(--bg); border: 1px solid var(--border-subtle); border-radius: 4px; padding: 12px; margin-bottom: 12px;">
+                                    <div class="section-title">Execution Mode & Scheduling</div>
+                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 8px;">
+                                        <div>
+                                            <label style="font-size: 11px; color: var(--muted);">Execution Mode:</label>
+                                            <select id="intakeExecMode" class="input-ctrl" style="width: 100%; margin-top: 4px;" onchange="onIntakeExecModeChanged()">
+                                                <option value="IMMEDIATE" selected>Immediate Execution (Dispatch loop)</option>
+                                                <option value="QUEUED">Queued (Await next available worker)</option>
+                                                <option value="SCHEDULED">Scheduled / Recurring</option>
+                                                <option value="INTERACTIVE">Interactive (Step approval)</option>
+                                            </select>
+                                        </div>
+                                        <div id="intakeScheduleTimeContainer" style="display: none;">
+                                            <label style="font-size: 11px; color: var(--muted);">Scheduled Time (ISO-8601):</label>
+                                            <input id="intakeScheduledTime" class="input-ctrl" type="text" placeholder="2026-11-09T12:00:00Z" style="width: 100%; margin-top: 4px;" />
+                                        </div>
+                                    </div>
+                                    <div id="intakeCronContainer" style="display: none; margin-bottom: 8px;">
+                                        <label style="font-size: 11px; color: var(--muted);">Cron Expression (for recurring tasks):</label>
+                                        <input id="intakeCron" class="input-ctrl" type="text" placeholder="0 0 * * * (daily midnight)" style="width: 100%; margin-top: 4px;" />
+                                    </div>
                                 </div>
-                                <div class="flex-row" style="margin-bottom: 8px;">
-                                    <input id="intakeTitle" class="input-ctrl" type="text" placeholder="Task Title (auto-generated if empty)..." style="flex: 2;" />
-                                    <select id="intakePriority" class="input-ctrl" style="width: 130px;">
-                                        <option value="NORMAL">Priority: Normal</option>
-                                        <option value="LOW">Priority: Low</option>
-                                        <option value="HIGH">Priority: High</option>
-                                        <option value="URGENT">Priority: Urgent</option>
-                                    </select>
+
+                                <div style="background: var(--bg); border: 1px solid var(--border-subtle); border-radius: 4px; padding: 12px; margin-bottom: 12px;">
+                                    <div class="section-title">AI Provider & Resource Limits</div>
+                                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px;">
+                                        <div>
+                                            <label style="font-size: 11px; color: var(--muted);">AI Execution Model:</label>
+                                            <select id="intakeModelSelect" class="input-ctrl" style="width: 100%; margin-top: 4px;">
+                                                <option value="">Default (Autonomous Resolver)</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label style="font-size: 11px; color: var(--muted);">Execution Timeout (min):</label>
+                                            <input id="intakeTimeout" class="input-ctrl" type="number" value="10" style="width: 100%; margin-top: 4px;" />
+                                        </div>
+                                        <div>
+                                            <label style="font-size: 11px; color: var(--muted);">Build/Test Strategy:</label>
+                                            <select id="intakeBuildStrategy" class="input-ctrl" style="width: 100%; margin-top: 4px;">
+                                                <option value="AUTO" selected>Auto-detect project type</option>
+                                                <option value="MAVEN">Maven</option>
+                                                <option value="GRADLE">Gradle</option>
+                                                <option value="NPM">Node / NPM</option>
+                                                <option value="CARGO">Rust / Cargo</option>
+                                                <option value="PYTHON">Python pytest</option>
+                                            </select>
+                                        </div>
+                                    </div>
                                 </div>
-                                <div style="margin-bottom: 8px;">
-                                    <input id="intakeExpectedOutcome" class="input-ctrl" type="text" placeholder="Expected outcome / summary of behavior after change..." style="width: 100%;" />
-                                </div>
-                                <div style="margin-bottom: 8px;">
-                                    <textarea id="intakeAcceptanceCriteria" class="input-ctrl" style="width: 100%; height: 50px; resize: vertical;" placeholder="Acceptance criteria (one per line)..."></textarea>
-                                </div>
-                                <div>
-                                    <input id="intakeConstraints" class="input-ctrl" type="text" placeholder="Execution constraints (comma separated, e.g. 'Preserve public API, 5m timeout')..." style="width: 100%;" />
+
+                                <div style="background: var(--bg); border: 1px solid var(--border-subtle); border-radius: 4px; padding: 12px; margin-bottom: 12px;">
+                                    <div class="section-title">Acceptance Criteria & Supplementary Constraints</div>
+                                    <div style="margin-bottom: 8px;">
+                                        <input id="intakeExpectedOutcome" class="input-ctrl" type="text" placeholder="Expected outcome / post-condition..." style="width: 100%;" />
+                                    </div>
+                                    <div style="margin-bottom: 8px;">
+                                        <textarea id="intakeAcceptanceCriteria" class="input-ctrl" style="width: 100%; height: 45px; resize: vertical;" placeholder="Acceptance criteria (one per line)..."></textarea>
+                                    </div>
+                                    <div>
+                                        <input id="intakeConstraints" class="input-ctrl" type="text" placeholder="Execution constraints (e.g. 'Preserve public API, 0 warnings')..." style="width: 100%;" />
+                                    </div>
                                 </div>
                             </div>
 
-                            <!-- 4. Preliminary Analysis & Validation Feedback Banner -->
-                            <div id="intakeAnalysisCard" style="display: none; margin-bottom: 14px; padding: 12px; border-radius: 6px; border: 1px solid var(--border); font-size: 12px;">
-                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                                    <b id="intakeAnalysisHeading">Preliminary AI Intake Analysis</b>
+                            <!-- Preliminary Analysis & Validation Feedback Banner -->
+                            <div id="intakeAnalysisCard" style="display: none; margin-bottom: 12px; padding: 12px; border-radius: 4px; border: 1px solid var(--border); font-size: 12px; background: #f8fafc;">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                                    <b id="intakeAnalysisHeading">Intake Pre-check & Architecture Analysis</b>
                                     <span id="intakeClassificationBadge" class="badge badge-info">FEATURE</span>
                                 </div>
-                                <div id="intakeAnalysisSummary" style="color: #cbd5e1; margin-bottom: 6px;"></div>
+                                <div id="intakeAnalysisSummary" style="color: var(--muted); margin-bottom: 4px;"></div>
                                 <div id="intakeWarnings" style="color: var(--yellow);"></div>
                                 <div id="intakeErrors" style="color: var(--red);"></div>
                             </div>
 
                             <!-- Actions -->
-                            <div class="flex-row" style="justify-content: flex-end; gap: 10px; border-top: 1px solid var(--border); padding-top: 12px;">
-                                <button class="btn btn-warning" onclick="validateAndAnalyzeIntake()">🔍 Validate & Analyze Request</button>
-                                <button id="btnSubmitIntakeTask" class="btn btn-success" onclick="submitIntakeTask()">🚀 Submit Task</button>
+                            <div class="flex-row" style="justify-content: flex-end; gap: 8px; border-top: 1px solid var(--border); padding-top: 12px;">
+                                <button class="btn btn-default" onclick="validateAndAnalyzeIntake()">Validate & Analyze</button>
+                                <button id="btnSubmitIntakeTask" class="btn btn-primary" onclick="submitIntakeTask()">Submit Task</button>
                             </div>
                         </div>
                     </div>
-
-                    <script>
+<script>
                         let activeReview = null;
                         let authToken = localStorage.getItem('tryst_auth_token') || '';
 
@@ -4119,25 +4427,223 @@ public class TrystHttpServer implements TrystHttpService {
                             }
                         }
 
-                        function switchTab(tab) {
-                            document.getElementById('workflowsTab').style.display = (tab === 'workflows') ? 'flex' : 'none';
-                            document.getElementById('reviewsTab').style.display = (tab === 'reviews') ? 'flex' : 'none';
-                            document.getElementById('evoTab').style.display = (tab === 'evo') ? 'flex' : 'none';
-                            document.getElementById('adminTab').style.display = (tab === 'admin') ? 'flex' : 'none';
+                        let currentNavSection = 'reviews';
 
-                            document.getElementById('navWorkflows').classList.toggle('active', tab === 'workflows');
-                            document.getElementById('navReviews').classList.toggle('active', tab === 'reviews');
-                            document.getElementById('navEvo').classList.toggle('active', tab === 'evo');
-                            document.getElementById('navAdmin').classList.toggle('active', tab === 'admin');
+                        function switchNavSection(section) {
+                            currentNavSection = section;
+                            const tabIds = ['dashboardTab', 'projectsTab', 'queueTab', 'reviewsTab', 'workspacesTab', 'poolsTab', 'workflowsTab', 'adminTab'];
+                            tabIds.forEach(id => {
+                                const el = document.getElementById(id);
+                                if (el) el.style.display = 'none';
+                            });
 
-                            if (tab === 'workflows') {
+                            const targetTab = document.getElementById(section + 'Tab');
+                            if (targetTab) targetTab.style.display = 'flex';
+
+                            const navButtons = ['navDashboard', 'navProjects', 'navQueue', 'navReviews', 'navWorkspaces', 'navPools', 'navWorkflows', 'navAdmin'];
+                            navButtons.forEach(btnId => {
+                                const btn = document.getElementById(btnId);
+                                if (btn) btn.classList.remove('active');
+                            });
+
+                            const activeBtn = document.getElementById('nav' + section.charAt(0).toUpperCase() + section.slice(1));
+                            if (activeBtn) activeBtn.classList.add('active');
+
+                            if (section === 'dashboard') {
+                                loadDashboardData();
+                            } else if (section === 'projects') {
+                                loadProjectsControlPlane();
+                            } else if (section === 'queue') {
+                                refreshQueueAndSchedules();
+                            } else if (section === 'reviews') {
+                                loadReviews();
+                            } else if (section === 'workspaces') {
+                                loadWorkspacesView();
+                            } else if (section === 'pools') {
+                                loadPoolsData();
+                            } else if (section === 'workflows') {
                                 loadSavedWorkflows();
-                            } else if (tab === 'evo') {
-                                loadEvoConfig();
-                                refreshEvoExecutions();
-                            } else if (tab === 'admin') {
+                            } else if (section === 'admin') {
                                 loadAdminOverview();
                             }
+                        }
+
+                        function switchTab(tab) {
+                            switchNavSection(tab);
+                        }
+
+                        async function loadDashboardData() {
+                            try {
+                                const [tasksRes, wsRes, poolsRes, revsRes] = await Promise.all([
+                                    fetch(apiUrl('/api/tasks'), { headers: getAuthHeaders() }),
+                                    fetch(apiUrl('/api/admin/workspaces'), { headers: getAuthHeaders() }),
+                                    fetch(apiUrl('/api/pools'), { headers: getAuthHeaders() }),
+                                    fetch(apiUrl('/api/reviews'), { headers: getAuthHeaders() })
+                                ]);
+
+                                if (poolsRes.ok) {
+                                    const poolData = await poolsRes.json();
+                                    document.getElementById('dashActiveTasks').textContent = poolData.workers.active;
+                                    document.getElementById('dashQueueDepth').textContent = poolData.workers.queueDepth;
+                                    document.getElementById('dashWorkspaces').textContent = poolData.workspaces.allocated;
+                                    document.getElementById('dashMirrors').textContent = poolData.mirrorCount;
+                                }
+
+                                if (revsRes.ok) {
+                                    const revData = await revsRes.json();
+                                    document.getElementById('dashReviews').textContent = revData.reviews ? revData.reviews.length : 0;
+                                }
+
+                                if (tasksRes.ok) {
+                                    const taskData = await tasksRes.json();
+                                    const tasks = taskData.tasks || [];
+                                    const container = document.getElementById('dashRecentTasks');
+                                    if (tasks.length === 0) {
+                                        container.innerHTML = '<span style="color:var(--muted);">No tasks recorded yet.</span>';
+                                    } else {
+                                        container.innerHTML = '<table><tr><th>ID</th><th>Title</th><th>Status</th><th>Priority</th></tr>' +
+                                            tasks.slice(0, 8).map(t => `<tr><td>${t.id.substring(0,8)}</td><td><b>${escapeHtml(t.title)}</b></td><td><span class="badge badge-info">${t.status}</span></td><td>${t.priority}</td></tr>`).join('') + '</table>';
+                                    }
+                                }
+
+                                if (wsRes.ok) {
+                                    const wsData = await wsRes.json();
+                                    const list = wsData.workspaces || [];
+                                    const container = document.getElementById('dashActiveWorkspaces');
+                                    if (list.length === 0) {
+                                        container.innerHTML = '<span style="color:var(--muted);">No active sandboxes.</span>';
+                                    } else {
+                                        container.innerHTML = '<table><tr><th>Workspace ID</th><th>Project</th><th>Status</th></tr>' +
+                                            list.slice(0, 8).map(w => `<tr><td>${w.id.substring(0,8)}</td><td>${w.projectId||'-'}</td><td><span class="badge badge-success">${w.state}</span></td></tr>`).join('') + '</table>';
+                                    }
+                                }
+                            } catch (e) {
+                                console.warn('Failed to load dashboard:', e);
+                            }
+                        }
+
+                        async function loadProjectsControlPlane() {
+                            try {
+                                const res = await fetch(apiUrl('/api/projects'), { headers: getAuthHeaders() });
+                                const data = await res.json();
+                                const list = data.projects || [];
+                                const sideList = document.getElementById('projectsSideList');
+                                const globalSel = document.getElementById('globalProjectSelector');
+
+                                globalSel.innerHTML = '<option value="">-- All Projects --</option>' +
+                                    list.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
+
+                                if (list.length === 0) {
+                                    sideList.innerHTML = '<div style="color:var(--muted);">No projects available.</div>';
+                                    return;
+                                }
+
+                                sideList.innerHTML = list.map(p => `
+                                    <div class="list-item" onclick="selectProjectDetail('${p.id}', '${escapeHtml(p.name)}', '${escapeHtml(p.location)}')">
+                                        <b>${escapeHtml(p.name)}</b>
+                                        <div style="font-size: 11px; color: var(--muted);">${p.id.substring(0,8)}</div>
+                                    </div>
+                                `).join('');
+
+                                if (list.length > 0) {
+                                    selectProjectDetail(list[0].id, list[0].name, list[0].location);
+                                }
+                            } catch (e) {
+                                console.warn('Failed to load projects:', e);
+                            }
+                        }
+
+                        function selectProjectDetail(id, name, location) {
+                            document.getElementById('projDetailName').textContent = name;
+                            document.getElementById('projDetailMeta').textContent = `Project ID: ${id} | Location: ${location}`;
+                            const container = document.getElementById('projReposContainer');
+                            container.innerHTML = `
+                                <table>
+                                    <tr><th>VCS Provider</th><th>Branch / Ref</th><th>Path / URL</th><th>Isolation Mode</th></tr>
+                                    <tr><td><b>Git</b> (Local / Remote)</td><td><code>main</code></td><td>${location}</td><td><span class="badge badge-success">Bare Mirror & Worktree Sandbox</span></td></tr>
+                                </table>
+                            `;
+                        }
+
+                        async function refreshQueueAndSchedules() {
+                            try {
+                                const [tasksRes, schedRes] = await Promise.all([
+                                    fetch(apiUrl('/api/tasks'), { headers: getAuthHeaders() }),
+                                    fetch(apiUrl('/api/schedules'), { headers: getAuthHeaders() })
+                                ]);
+
+                                const qList = document.getElementById('queueTasksList');
+                                if (tasksRes.ok) {
+                                    const data = await tasksRes.json();
+                                    const tasks = data.tasks || [];
+                                    if (tasks.length === 0) {
+                                        qList.innerHTML = '<span style="color:var(--muted);">No tasks in queue.</span>';
+                                    } else {
+                                        qList.innerHTML = '<table><tr><th>ID</th><th>Title</th><th>Status</th><th>Priority</th><th>Action</th></tr>' +
+                                            tasks.map(t => `<tr><td>${t.id.substring(0,8)}</td><td><b>${escapeHtml(t.title)}</b></td><td><span class="badge badge-info">${t.status}</span></td><td>${t.priority}</td><td><button class="btn btn-sm btn-danger" onclick="cancelAdminTask('${t.id}')">Cancel</button></td></tr>`).join('') + '</table>';
+                                    }
+                                }
+
+                                const sList = document.getElementById('schedulesList');
+                                if (schedRes.ok) {
+                                    const data = await schedRes.json();
+                                    const schedules = data.schedules || [];
+                                    if (schedules.length === 0) {
+                                        sList.innerHTML = '<span style="color:var(--muted); font-size:12px;">No automated schedules configured.</span>';
+                                    } else {
+                                        sList.innerHTML = '<table><tr><th>ID</th><th>Schedule Name</th><th>Type</th><th>Next Execution</th><th>Status</th></tr>' +
+                                            schedules.map(s => `<tr><td>${s.id.substring(0,8)}</td><td>${escapeHtml(s.name)}</td><td>${s.type}</td><td>${s.nextExecutionAt||s.scheduledTime||'-'}</td><td><span class="badge badge-success">${s.status}</span></td></tr>`).join('') + '</table>';
+                                    }
+                                }
+                            } catch (e) {
+                                console.warn('Queue refresh error:', e);
+                            }
+                        }
+
+                        async function loadWorkspacesView() {
+                            try {
+                                const res = await fetch(apiUrl('/api/admin/workspaces'), { headers: getAuthHeaders() });
+                                const data = await res.json();
+                                const list = data.workspaces || [];
+                                const container = document.getElementById('workspacesTableContainer');
+                                if (list.length === 0) {
+                                    container.innerHTML = '<span style="color:var(--muted);">No active workspaces.</span>';
+                                    return;
+                                }
+                                container.innerHTML = '<table><tr><th>ID</th><th>Associated Project</th><th>Associated Task</th><th>State</th><th>Sandbox Root Path</th></tr>' +
+                                    list.map(w => `<tr><td><code>${w.id.substring(0,8)}</code></td><td>${w.projectId||'-'}</td><td>${w.taskId ? `<code>${w.taskId.substring(0,8)}</code>` : '-'}</td><td><span class="badge badge-success">${w.state}</span></td><td><code>${escapeHtml(w.path)}</code></td></tr>`).join('') + '</table>';
+                            } catch (e) {
+                                document.getElementById('workspacesTableContainer').textContent = 'Error loading workspaces: ' + e;
+                            }
+                        }
+
+                        async function loadPoolsData() {
+                            try {
+                                const res = await fetch(apiUrl('/api/pools'), { headers: getAuthHeaders() });
+                                const data = await res.json();
+                                document.getElementById('poolActiveWorkers').textContent = data.workers.active;
+                                document.getElementById('poolConcurrency').textContent = data.workers.concurrency;
+                                document.getElementById('poolMirrorsCount').textContent = data.mirrorCount;
+                                document.getElementById('poolAllocWorkspaces').textContent = data.workspaces.allocated;
+                                document.getElementById('poolActiveProcs').textContent = data.processes.active;
+
+                                const container = document.getElementById('poolMirrorsList');
+                                const mirrors = data.repositoryMirrors || [];
+                                if (mirrors.length === 0) {
+                                    container.innerHTML = '<span style="color:var(--muted);">No bare repository mirrors cached yet. Mirrors are created automatically when remote repositories are referenced in tasks.</span>';
+                                } else {
+                                    container.innerHTML = '<table><tr><th>Mirror Directory Name</th><th>Shared Objects Cache</th></tr>' +
+                                        mirrors.map(m => `<tr><td><code>${escapeHtml(m)}</code></td><td><span class="badge badge-success">Ready for Worktree Clones</span></td></tr>`).join('') + '</table>';
+                                }
+                            } catch (e) {
+                                document.getElementById('poolMirrorsList').textContent = 'Error loading resource pools: ' + e;
+                            }
+                        }
+
+                        function onGlobalProjectChanged() {
+                            const sel = document.getElementById('globalProjectSelector');
+                            const projId = sel.value;
+                            loadReviews();
                         }
 
                         // --- Visual Workflow Designer Canvas & Interaction Engine ---
@@ -4810,7 +5316,7 @@ public class TrystHttpServer implements TrystHttpService {
                                         <div>
                                             <h3>Connect GitHub Account</h3>
                                             <p>Enter a GitHub Personal Access Token (classic or fine-grained) with <code>repo</code> permissions to enable cloning private and public repositories and authorized pushes.</p>
-                                            <input id="ghTokenInput" type="password" placeholder="ghp_..." style="width: 320px; padding: 8px; background: #0b1120; border: 1px solid var(--border); color: #fff; margin-bottom: 8px; border-radius: 4px;" /><br>
+                                            <input id="ghTokenInput" type="password" placeholder="ghp_..." style="width: 320px; padding: 8px; background: #ffffff; border: 1px solid var(--border); color: #0f172a; margin-bottom: 8px; border-radius: 4px;" /><br>
                                             <button class="btn btn-primary" onclick="connectGitHub()">Connect GitHub Account</button>
                                         </div>
                                     `;
@@ -5126,7 +5632,7 @@ public class TrystHttpServer implements TrystHttpService {
                                             </div>
                                         </div>
                                         ${c.codeContext ? `<pre style="background:#090d16; border:1px solid var(--border); padding:6px; font-size:11px; border-radius:4px; margin:4px 0;">${escapeHtml(c.codeContext)}</pre>` : ''}
-                                        <div style="font-size: 13px; color: #f1f5f9; margin-top: 6px; white-space: pre-wrap;">${escapeHtml(c.content)}</div>
+                                        <div style="font-size: 13px; color: #0f172a; margin-top: 6px; white-space: pre-wrap;">${escapeHtml(c.content)}</div>
                                         <div style="font-size: 11px; color: var(--muted); margin-top: 4px;">Rev: ${c.revisionNumber} | Author: ${escapeHtml(c.authorId)} | ${c.createdAt}</div>
                                     </div>
                                 `;
@@ -5367,7 +5873,7 @@ public class TrystHttpServer implements TrystHttpService {
                                         <span class="badge badge-info" style="font-size:10px;">${escapeHtml(n.type)}</span>
                                         <span style="font-size:11px; color:var(--muted);">${time}</span>
                                     </div>
-                                    <div style="margin-top: 4px; color: #fff;">${escapeHtml(n.title)}</div>
+                                    <div style="margin-top: 4px; color: #0f172a;">${escapeHtml(n.title)}</div>
                                     <div style="color:var(--muted); font-size:11px; margin-top:2px;">${escapeHtml(n.message)}</div>
                                 </div>`;
                             }).join('');
@@ -5586,6 +6092,67 @@ public class TrystHttpServer implements TrystHttpService {
                             document.getElementById('intakeTitle').value = title;
                         }
 
+                                                function toggleAuthModal() {
+                            const modal = document.getElementById('authModal');
+                            modal.style.display = (modal.style.display === 'flex') ? 'none' : 'flex';
+                        }
+
+                        async function performLogin() {
+                            const u = document.getElementById('authUsernameInput').value;
+                            const p = document.getElementById('authPasswordInput').value;
+                            if (!u) { alert('Username required'); return; }
+
+                            try {
+                                const res = await fetch(apiUrl('/api/auth/login'), {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ username: u, password: p })
+                                });
+                                const data = await res.json();
+                                if (data.success) {
+                                    localStorage.setItem('tryst_token', data.token);
+                                    localStorage.setItem('tryst_csrf', data.csrfToken);
+                                    document.getElementById('userStatus').textContent = `User: ${data.user.username} (${data.user.role})`;
+                                    document.getElementById('btnAuthAction').textContent = 'Logout';
+                                    toggleAuthModal();
+                                    loadReviews();
+                                    loadProjectsControlPlane();
+                                } else {
+                                    alert('Login failed: ' + (data.error || 'Invalid credentials'));
+                                }
+                            } catch (e) {
+                                alert('Login request failed: ' + e);
+                            }
+                        }
+
+                        async function performLogout() {
+                            try {
+                                await fetch(apiUrl('/api/auth/logout'), {
+                                    method: 'POST',
+                                    headers: getAuthHeaders()
+                                });
+                            } catch (e) {}
+                            localStorage.removeItem('tryst_token');
+                            localStorage.removeItem('tryst_csrf');
+                            document.getElementById('userStatus').textContent = 'User: Anonymous';
+                            document.getElementById('btnAuthAction').textContent = 'Login';
+                            toggleAuthModal();
+                        }
+
+                        function switchIntakeTab(tab) {
+                            document.getElementById('intakeSectionBasic').style.display = (tab === 'basic') ? 'block' : 'none';
+                            document.getElementById('intakeSectionAdvanced').style.display = (tab === 'advanced') ? 'block' : 'none';
+                            document.getElementById('btnIntakeTabBasic').className = (tab === 'basic') ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-default';
+                            document.getElementById('btnIntakeTabAdvanced').className = (tab === 'advanced') ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-default';
+                        }
+
+                        function onIntakeExecModeChanged() {
+                            const mode = document.getElementById('intakeExecMode').value;
+                            const isSched = (mode === 'SCHEDULED');
+                            document.getElementById('intakeScheduleTimeContainer').style.display = isSched ? 'block' : 'none';
+                            document.getElementById('intakeCronContainer').style.display = isSched ? 'block' : 'none';
+                        }
+
                         function collectIntakePayload() {
                             const sel = document.getElementById('intakeRepoSelect');
                             const selVal = sel.value || '';
@@ -5610,6 +6177,13 @@ public class TrystHttpServer implements TrystHttpService {
                             const constraintsRaw = document.getElementById('intakeConstraints').value;
                             const constraints = constraintsRaw.split(',').map(s => s.trim()).filter(s => s.length > 0);
 
+                            const execMode = document.getElementById('intakeExecMode') ? document.getElementById('intakeExecMode').value : 'IMMEDIATE';
+                            const scheduledTime = document.getElementById('intakeScheduledTime') ? document.getElementById('intakeScheduledTime').value.trim() : null;
+                            const cron = document.getElementById('intakeCron') ? document.getElementById('intakeCron').value.trim() : null;
+                            const model = document.getElementById('intakeModelSelect') ? document.getElementById('intakeModelSelect').value : null;
+                            const timeout = document.getElementById('intakeTimeout') ? parseInt(document.getElementById('intakeTimeout').value) : 10;
+                            const buildStrategy = document.getElementById('intakeBuildStrategy') ? document.getElementById('intakeBuildStrategy').value : 'AUTO';
+
                             return {
                                 projectId,
                                 repositoryUrl: repoUrl,
@@ -5619,7 +6193,13 @@ public class TrystHttpServer implements TrystHttpService {
                                 priority,
                                 expectedOutcome,
                                 acceptanceCriteria,
-                                constraints
+                                constraints,
+                                executionMode: execMode,
+                                scheduledTime: scheduledTime,
+                                cronExpression: cron,
+                                model: model,
+                                timeoutMinutes: timeout,
+                                buildStrategy: buildStrategy
                             };
                         }
 

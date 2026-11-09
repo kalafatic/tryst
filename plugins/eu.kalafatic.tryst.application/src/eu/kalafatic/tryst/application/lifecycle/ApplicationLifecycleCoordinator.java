@@ -117,6 +117,7 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
     private TrystHttpService httpService;
 
     // GitHub Integration Services & Repositories
+    private eu.kalafatic.tryst.infrastructure.vcs.RepositoryPoolManager repositoryPoolManager;
     private eu.kalafatic.tryst.domain.github.GitHubCredentialRepository gitHubCredentialRepository;
     private eu.kalafatic.tryst.domain.github.GitHubCredentialEncryptionService gitHubCredentialEncryptionService;
     private eu.kalafatic.tryst.domain.github.GitHubService gitHubService;
@@ -322,6 +323,8 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
             }
         }
         this.gitService = new GitService();
+        Path mirrorsDir = configuration.defaultWorkspaceDirectory().resolve("mirrors");
+        this.repositoryPoolManager = new eu.kalafatic.tryst.infrastructure.vcs.RepositoryPoolManager(mirrorsDir, this.gitService);
         this.buildAndTestService = new BuildAndTestService();
         if (this.processExecutionManager != null) {
             this.buildAndTestService.setProcessExecutionManager(this.processExecutionManager);
@@ -334,7 +337,8 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
         this.gitHubService = new eu.kalafatic.tryst.infrastructure.github.DefaultGitHubService(
                 this.gitHubCredentialRepository,
                 this.gitHubCredentialEncryptionService,
-                this.gitService
+                this.gitService,
+                this.repositoryPoolManager
         );
 
         this.sessionTaskOrchestrator = new SessionTaskOrchestrator(
@@ -508,6 +512,7 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
             server.setGitCommitRepository(this.gitCommitRepository);
             server.setManagedServiceController(serviceController);
             server.setTaskIntakeService(this.taskIntakeService);
+            server.setRepositoryPoolManager(this.repositoryPoolManager);
             server.setPortRegistry(portRegistry);
 
             // Wire workflow and scheduling services
