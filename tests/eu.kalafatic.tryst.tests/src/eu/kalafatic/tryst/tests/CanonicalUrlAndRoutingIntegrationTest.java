@@ -329,12 +329,17 @@ public class CanonicalUrlAndRoutingIntegrationTest {
 
         int port = httpServer.getPort();
 
+        // Obtain real authentication token from bootstrapped administrator
+        AuthenticationService.AuthResult authRes = authenticationService.login("admin", "AdminPass123!", "127.0.0.1", "TestClient");
+        assertTrue(authRes.success());
+        String adminToken = authRes.token();
+
         // Create task via POST /tryst/api/tasks
         String taskPayload = "{\"title\": \"Context Path Validation Task\", \"description\": \"Verify routing under /tryst\"}";
         HttpRequest postTaskReq = HttpRequest.newBuilder()
                 .uri(URI.create("http://127.0.0.1:" + port + "/tryst/api/tasks"))
                 .header("Content-Type", "application/json")
-                .header("X-User-Id", "admin")
+                .header("Authorization", "Bearer " + adminToken)
                 .POST(HttpRequest.BodyPublishers.ofString(taskPayload))
                 .build();
         HttpResponse<String> postRes = httpClient.send(postTaskReq, HttpResponse.BodyHandlers.ofString());
@@ -344,6 +349,7 @@ public class CanonicalUrlAndRoutingIntegrationTest {
         // List tasks via GET /tryst/api/tasks
         HttpRequest getTasksReq = HttpRequest.newBuilder()
                 .uri(URI.create("http://127.0.0.1:" + port + "/tryst/api/tasks"))
+                .header("Authorization", "Bearer " + adminToken)
                 .GET().build();
         HttpResponse<String> getRes = httpClient.send(getTasksReq, HttpResponse.BodyHandlers.ofString());
         assertEquals(200, getRes.statusCode(), "Listing tasks under /tryst/api/tasks must return 200 OK");

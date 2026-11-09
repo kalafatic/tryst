@@ -19,19 +19,32 @@ public class NotificationService {
     private final NotificationRepository notificationRepository;
     private final NotificationPreferenceRepository preferenceRepository;
     private final EventBus eventBus;
+    private eu.kalafatic.tryst.domain.repository.UserRepository userRepository;
     private final List<Consumer<Notification>> realTimeListeners = new CopyOnWriteArrayList<>();
 
     public NotificationService(NotificationRepository notificationRepository, EventBus eventBus) {
-        this(notificationRepository, null, eventBus);
+        this(notificationRepository, null, eventBus, null);
     }
 
     public NotificationService(NotificationRepository notificationRepository,
                                NotificationPreferenceRepository preferenceRepository,
                                EventBus eventBus) {
+        this(notificationRepository, preferenceRepository, eventBus, null);
+    }
+
+    public NotificationService(NotificationRepository notificationRepository,
+                               NotificationPreferenceRepository preferenceRepository,
+                               EventBus eventBus,
+                               eu.kalafatic.tryst.domain.repository.UserRepository userRepository) {
         this.notificationRepository = Objects.requireNonNull(notificationRepository, "notificationRepository must not be null");
         this.preferenceRepository = preferenceRepository;
         this.eventBus = eventBus;
+        this.userRepository = userRepository;
         subscribeToEvents();
+    }
+
+    public void setUserRepository(eu.kalafatic.tryst.domain.repository.UserRepository userRepository) {
+        this.userRepository = userRepository;
     }
 
     private void subscribeToEvents() {
@@ -43,6 +56,12 @@ public class NotificationService {
     public Optional<Notification> notifyUser(String userId, String typeStr, String title, String message,
                                              String refType, String refId, String dedupKey) {
         if (userId == null || userId.isBlank()) {
+            return Optional.empty();
+        }
+
+        if (userRepository != null && userRepository.findById(userId).isEmpty()) {
+            eu.kalafatic.tryst.core.log.TrystLog.warn(NotificationService.class,
+                    "Recipient user " + userId + " does not exist in repository; skipping notification.");
             return Optional.empty();
         }
 
