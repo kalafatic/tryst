@@ -563,11 +563,6 @@ public class TaskWorker implements Callable<ExecutionResult> {
             ImplementationPlanner.ExecutionPlan plan,
             StringBuilder log
     ) throws Exception {
-        if (aiProvider == null) {
-            log.append("No AI provider configured; skipping simulated prompt loop.\n");
-            return;
-        }
-
         List<ConversationMessage> history = (messageRepository != null && task.getSessionId() != null)
                 ? messageRepository.findBySessionId(task.getSessionId())
                 : List.of();

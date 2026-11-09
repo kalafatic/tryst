@@ -6439,11 +6439,11 @@ public class TrystHttpServer implements TrystHttpService {
 
     private static String extractJsonField(String json, String field) {
         if (json == null) return null;
-        // Match string: "field": "value"
-        String strPattern = "\"" + field + "\"\\s*:\\s*\"([^\"]*)\"";
+        // Match string value: "field": "value..." handling escaped quotes
+        String strPattern = "\"" + field + "\"\\s*:\\s*\"((?:\\\\\"|[^\"])*)\"";
         java.util.regex.Matcher m = java.util.regex.Pattern.compile(strPattern).matcher(json);
         if (m.find()) {
-            return m.group(1).replace("\\\"", "\"").replace("\\\\", "\\");
+            return unescapeJsonString(m.group(1));
         }
         // Match number, boolean or literal: "field": 123 or "field": true
         String literalPattern = "\"" + field + "\"\\s*:\\s*([0-9a-zA-Z_\\.\\-]+)";
@@ -6452,6 +6452,15 @@ public class TrystHttpServer implements TrystHttpService {
             return m2.group(1).trim();
         }
         return null;
+    }
+
+    private static String unescapeJsonString(String s) {
+        if (s == null) return null;
+        return s.replace("\\\"", "\"")
+                .replace("\\\\", "\\")
+                .replace("\\n", "\n")
+                .replace("\\r", "\r")
+                .replace("\\t", "\t");
     }
 
     private static String escapeJson(String s) {

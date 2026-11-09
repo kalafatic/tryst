@@ -8,6 +8,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -78,14 +79,27 @@ public class RepositoryPoolManager {
         String effectiveBranch = (branch != null && !branch.isBlank()) ? branch : "main";
         try {
             Files.createDirectories(targetWorkspaceDir.getParent());
+            List<String> cloneArgs = new ArrayList<>();
+            cloneArgs.add("clone");
+            cloneArgs.add("--branch");
+            cloneArgs.add(effectiveBranch);
+            cloneArgs.add("--reference");
+            cloneArgs.add(mirrorDir.toString());
+            cloneArgs.add(mirrorDir.toString());
+            cloneArgs.add(targetWorkspaceDir.getFileName().toString());
+
             // Clone from local mirror referencing shared objects
-            GitService.GitCommandResult res = gitService.runGit(targetWorkspaceDir.getParent(),
-                    List.of("clone", "--reference", mirrorDir.toString(), mirrorDir.toString(), targetWorkspaceDir.getFileName().toString()));
+            GitService.GitCommandResult res = gitService.runGit(targetWorkspaceDir.getParent(), cloneArgs);
             if (!res.isSuccess()) {
-                TrystLog.error(RepositoryPoolManager.class, "Failed to clone from mirror: " + res.error());
-                return false;
+                // If branch checkout in clone failed, attempt without explicit branch
+                res = gitService.runGit(targetWorkspaceDir.getParent(),
+                        List.of("clone", "--reference", mirrorDir.toString(), mirrorDir.toString(), targetWorkspaceDir.getFileName().toString()));
+                if (!res.isSuccess()) {
+                    TrystLog.error(RepositoryPoolManager.class, "Failed to clone from mirror: " + res.error());
+                    return false;
+                }
             }
-            // Checkout requested branch
+            // Ensure checkout of requested branch
             gitService.runGit(targetWorkspaceDir, List.of("checkout", effectiveBranch));
             return true;
         } catch (Exception e) {
