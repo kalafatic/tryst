@@ -379,4 +379,72 @@ class TaskIntakeAndVoiceWorkflowTest {
         assertNotNull(mdAtt);
         assertTrue(mdAtt.getContent().contains("System Architecture"));
     }
+
+    @Test
+    void testNewTaskSubmissionWithNullProjectIdAndNewGitRepository() throws Exception {
+        // Reproduce the scenario from the UI where projectId is null / serialized as null
+        // and a new Git repository URL is provided.
+        String jsonPayloadWithNullProjectId = """
+            {
+                "projectId": null,
+                "repositoryUrl": "https://github.com/kalafatic/genome",
+                "branch": "main",
+                "title": "",
+                "description": "create file x.txt",
+                "priority": "NORMAL",
+                "executionOptions": {
+                    "notifyProgress": true,
+                    "notifyCompletion": true,
+                    "notifyIntervention": true,
+                    "generateCodeReview": true,
+                    "requireApproval": true,
+                    "autoExecute": true,
+                    "autoCommit": false,
+                    "autoPush": false,
+                    "forceCleanClone": false,
+                    "pullBeforeExecution": false
+                }
+            }
+        """;
+
+        // 1. Pre-validation check
+        String valReqJson = "{\"projectId\": null, \"repositoryUrl\": \"https://github.com/kalafatic/genome\", \"branch\": \"main\"}";
+        HttpRequest valReq = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/api/tasks/intake/validate-repo"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(valReqJson))
+                .build();
+        HttpResponse<String> valRes = httpClient.send(valReq, HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, valRes.statusCode());
+        assertTrue(valRes.body().contains("\"valid\": true"));
+
+        // 2. Submit task with "projectId": null
+        HttpRequest submitReq = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/api/tasks/intake/submit"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(jsonPayloadWithNullProjectId))
+                .build();
+
+        HttpResponse<String> submitRes = httpClient.send(submitReq, HttpResponse.BodyHandlers.ofString());
+        assertEquals(201, submitRes.statusCode(), "Expected HTTP 201 Created but got: " + submitRes.body());
+        assertTrue(submitRes.body().contains("\"taskId\""));
+        assertFalse(submitRes.body().contains("Referenced project ID does not exist: null"));
+
+        String taskId = submitRes.body().split("\"taskId\":\\s*\"")[1].split("\"")[0];
+        Task createdTask = taskRepository.findTaskById(taskId).orElse(null);
+        assertNotNull(createdTask);
+        assertNotNull(createdTask.getProjectId(), "A project should be auto-provisioned and assigned");
+
+        // Verify project was created in ProjectRepository
+        Project project = projectRepository.findById(createdTask.getProjectId()).orElse(null);
+        assertNotNull(project);
+        assertEquals("genome", project.getName());
+        assertTrue(project.getDescription().contains("https://github.com/kalafatic/genome"));
+
+        // Verify workspace was allocated with the repository URL and branch
+        Workspace workspace = workspaceService.getWorkspaceForTask(taskId);
+        assertNotNull(workspace);
+        assertEquals("https://github.com/kalafatic/genome", workspace.getRepositoryUrl());
+        assertEquals("main", workspace.getBranch());
+    }
 }

@@ -6292,10 +6292,12 @@ public class TrystHttpServer implements TrystHttpService {
                             }
 
                             try {
+                                const payload = { repositoryUrl: repoUrl, branch };
+                                if (projectId) payload.projectId = projectId;
                                 const res = await fetch(apiUrl('/api/tasks/intake/validate-repo'), {
                                     method: 'POST',
                                     headers: getAuthHeaders(),
-                                    body: JSON.stringify({ projectId, repositoryUrl: repoUrl, branch })
+                                    body: JSON.stringify(payload)
                                 });
                                 if (res.ok) {
                                     const data = await res.json();
@@ -6747,8 +6749,7 @@ public class TrystHttpServer implements TrystHttpService {
                                 content: att.content
                             }));
 
-                            return {
-                                projectId,
+                            const p = {
                                 repositoryUrl: repoUrl,
                                 branch,
                                 title,
@@ -6766,6 +6767,10 @@ public class TrystHttpServer implements TrystHttpService {
                                 executionOptions: executionOptions,
                                 attachments: attachments
                             };
+                            if (projectId) {
+                                p.projectId = projectId;
+                            }
+                            return p;
                         }
 
                         async function validateAndAnalyzeIntake() {
@@ -6832,6 +6837,8 @@ public class TrystHttpServer implements TrystHttpService {
                                     taskAttachments = [];
                                     renderAttachments();
                                     closeNewTaskModal();
+                                    loadDashboardData();
+                                    refreshQueueAndSchedules();
                                     loadReviews();
                                     switchTab('reviews');
                                 } else {
@@ -7026,11 +7033,15 @@ public class TrystHttpServer implements TrystHttpService {
         if (m.find()) {
             return unescapeJsonString(m.group(1));
         }
-        // Match number, boolean or literal: "field": 123 or "field": true
+        // Match number, boolean or literal: "field": 123 or "field": true or "field": null
         String literalPattern = "\"" + field + "\"\\s*:\\s*([0-9a-zA-Z_\\.\\-]+)";
         java.util.regex.Matcher m2 = java.util.regex.Pattern.compile(literalPattern).matcher(json);
         if (m2.find()) {
-            return m2.group(1).trim();
+            String val = m2.group(1).trim();
+            if ("null".equalsIgnoreCase(val)) {
+                return null;
+            }
+            return val;
         }
         return null;
     }
