@@ -66,14 +66,18 @@ public class DefaultTaskIntakeService implements TaskIntakeService {
     @Override
     public TaskIntakeAnalysis analyzeAndValidate(TaskIntakeRequest request, String userId, SecurityContext context) {
         Objects.requireNonNull(request, "request must not be null");
-        String effectiveUser = (userId != null && !userId.isBlank()) ? userId : "default-user";
+        String effectiveUser = (userId != null && !userId.isBlank())
+                ? userId
+                : (eu.kalafatic.tryst.core.config.ApplicationConfiguration.isDevelopmentMode() ? SecurityContext.DEV.getUserId() : "default-user");
 
         List<String> errors = new ArrayList<>();
         List<String> missingInfo = new ArrayList<>();
 
         // 1. Authorization check
-        if (context != null && !context.user().hasPermission(Permission.EXECUTE_TASKS)) {
-            errors.add("User lacks EXECUTE_TASKS permission to submit development tasks.");
+        if (!eu.kalafatic.tryst.core.config.ApplicationConfiguration.isDevelopmentMode()) {
+            if (context != null && !context.user().hasPermission(Permission.EXECUTE_TASKS)) {
+                errors.add("User lacks EXECUTE_TASKS permission to submit development tasks.");
+            }
         }
 
         // 2. Description validation
@@ -159,7 +163,12 @@ public class DefaultTaskIntakeService implements TaskIntakeService {
 
     @Override
     public TaskIntakeResult submitIntake(TaskIntakeRequest request, String userId, SecurityContext context) {
-        String effectiveUser = (userId != null && !userId.isBlank()) ? userId : "default-user";
+        String effectiveUser = (userId != null && !userId.isBlank())
+                ? userId
+                : (eu.kalafatic.tryst.core.config.ApplicationConfiguration.isDevelopmentMode() ? SecurityContext.DEV.getUserId() : "default-user");
+        SecurityContext effectiveContext = (context != null)
+                ? context
+                : (eu.kalafatic.tryst.core.config.ApplicationConfiguration.isDevelopmentMode() ? SecurityContext.DEV : null);
 
         // Non-destructive validation first
         TaskIntakeAnalysis analysis = analyzeAndValidate(request, effectiveUser, context);
@@ -217,7 +226,7 @@ public class DefaultTaskIntakeService implements TaskIntakeService {
                 finalPriority,
                 effectiveUser,
                 null,
-                context
+                effectiveContext
         );
 
         // 3. Allocate isolated workspace with repository URL and branch if available

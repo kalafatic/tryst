@@ -63,10 +63,10 @@ class StartupModeAndReadinessTest {
         }
     }
 
-    private static class DummyApplicationContext implements IApplicationContext {
+    public static class DummyApplicationContext implements IApplicationContext {
         private final Map<String, Object> arguments;
 
-        DummyApplicationContext(String[] appArgs) {
+        public DummyApplicationContext(String[] appArgs) {
             this.arguments = Map.of(IApplicationContext.APPLICATION_ARGS, appArgs != null ? appArgs : new String[0]);
         }
 

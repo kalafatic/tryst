@@ -5,6 +5,7 @@ import eu.kalafatic.tryst.core.log.TrystLog;
 
 import java.io.File;
 import java.io.IOException;
+import java.sql.Connection;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -128,8 +129,11 @@ public class RepositoryPoolManager {
                     return false;
                 }
             }
-            // Ensure checkout of requested branch
-            gitService.runGit(targetWorkspaceDir, List.of("checkout", effectiveBranch));
+            // Ensure checkout of requested branch if available, otherwise stay on default branch
+            GitService.GitCommandResult chkRes = gitService.runGit(targetWorkspaceDir, List.of("checkout", effectiveBranch));
+            if (!chkRes.isSuccess()) {
+                TrystLog.info(RepositoryPoolManager.class, "Requested branch '" + effectiveBranch + "' not found; remaining on default clone branch.");
+            }
             return true;
         } catch (Exception e) {
             TrystLog.error(RepositoryPoolManager.class, "Failed to create worktree workspace: " + e.getMessage(), e);

@@ -22,6 +22,7 @@ import eu.kalafatic.tryst.domain.service.*;
 import eu.kalafatic.tryst.infrastructure.build.BuildAndTestService;
 import eu.kalafatic.tryst.infrastructure.persistence.SqliteBackupService;
 import eu.kalafatic.tryst.infrastructure.persistence.SqliteDatabaseManager;
+import java.sql.Connection;
 import eu.kalafatic.tryst.infrastructure.vcs.GitService;
 
 import java.io.IOException;
@@ -533,6 +534,10 @@ public class TrystHttpServer implements TrystHttpService {
             }
         }
 
+        if (ApplicationConfiguration.isDevelopmentMode()) {
+            return Optional.of(SecurityContext.DEV);
+        }
+
         return Optional.empty();
     }
 
@@ -560,6 +565,9 @@ public class TrystHttpServer implements TrystHttpService {
         if (ctx.isPresent()) {
             return ctx.get().getUserId();
         }
+        if (ApplicationConfiguration.isDevelopmentMode()) {
+            return SecurityContext.DEV.getUserId();
+        }
         if (authenticationService != null && authenticationService.hasAdministrator()) {
             return "unauthenticated";
         }
@@ -568,6 +576,9 @@ public class TrystHttpServer implements TrystHttpService {
     }
 
     private boolean isAuthenticationRequiredAndMissing(Optional<SecurityContext> ctx) {
+        if (ApplicationConfiguration.isDevelopmentMode()) {
+            return false;
+        }
         return authenticationService != null && authenticationService.hasAdministrator() && ctx.isEmpty();
     }
 
@@ -583,6 +594,9 @@ public class TrystHttpServer implements TrystHttpService {
     }
 
     private boolean validateCsrfIfCookieAuth(HttpExchange exchange) {
+        if (ApplicationConfiguration.isDevelopmentMode()) {
+            return true;
+        }
         String method = exchange.getRequestMethod().toUpperCase();
         if ("GET".equals(method) || "HEAD".equals(method) || "OPTIONS".equals(method)) {
             return true;
