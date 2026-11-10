@@ -34,25 +34,32 @@ public class SqliteDatabaseManager implements UnitOfWork, AutoCloseable {
     public void initialize() {
         synchronized (dbLock) {
             try {
-                if (databasePath.getParent() != null) {
-                    Files.createDirectories(databasePath.getParent());
-                }
-
-                // Explicit driver registration for OSGi dynamic classloading
-                try {
-                    Class.forName("org.sqlite.JDBC");
-                } catch (ClassNotFoundException e) {
-                    throw new TrystInfrastructureException("SQLite JDBC driver not found on classpath", e);
-                }
-
-                this.connection = DriverManager.getConnection(jdbcUrl);
-                configureConnectionPragmas(connection);
+                establishConnection();
                 verifyDatabaseIntegrity(connection);
-
                 TrystLog.info(SqliteDatabaseManager.class, "SQLite database connection established and verified at " + databasePath);
-            } catch (SQLException | IOException e) {
+            } catch (Exception e) {
                 throw new TrystInfrastructureException("Failed to initialize SQLite database at " + databasePath, e);
             }
+        }
+    }
+
+    private void establishConnection() {
+        try {
+            if (databasePath.getParent() != null) {
+                Files.createDirectories(databasePath.getParent());
+            }
+
+            // Explicit driver registration for OSGi dynamic classloading
+            try {
+                Class.forName("org.sqlite.JDBC");
+            } catch (ClassNotFoundException e) {
+                throw new TrystInfrastructureException("SQLite JDBC driver not found on classpath", e);
+            }
+
+            this.connection = DriverManager.getConnection(jdbcUrl);
+            configureConnectionPragmas(connection);
+        } catch (SQLException | IOException e) {
+            throw new TrystInfrastructureException("Failed to establish SQLite database connection at " + databasePath, e);
         }
     }
 
@@ -161,10 +168,11 @@ public class SqliteDatabaseManager implements UnitOfWork, AutoCloseable {
         synchronized (dbLock) {
             try {
                 if (connection == null || connection.isClosed()) {
-                    initialize();
+                    TrystLog.info(SqliteDatabaseManager.class, "SQLite connection is missing or closed. Reconnecting to " + databasePath);
+                    establishConnection();
                 }
             } catch (SQLException e) {
-                initialize();
+                throw new TrystInfrastructureException("Failed to check or restore SQLite connection: " + e.getMessage(), e);
             }
             return connection;
         }

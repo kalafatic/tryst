@@ -1134,13 +1134,15 @@ public class TrystHttpServer implements TrystHttpService {
                     }
                 }
                 if (databaseManager != null) {
-                    Connection conn = databaseManager.getConnection();
                     synchronized (databaseManager.getLock()) {
-                        try (var stmt = conn.prepareStatement("SELECT remote_url FROM repository_mirrors ORDER BY last_synced_at DESC");
-                             var rs = stmt.executeQuery()) {
-                            while (rs.next()) {
-                                String u = rs.getString("remote_url");
-                                if (u != null && !u.isBlank()) repos.add(u.trim());
+                        try {
+                            var conn = databaseManager.getConnection();
+                            try (var stmt = conn.prepareStatement("SELECT repository_url FROM repository_mirrors ORDER BY last_sync_at DESC");
+                                 var rs = stmt.executeQuery()) {
+                                while (rs.next()) {
+                                    String u = rs.getString("repository_url");
+                                    if (u != null && !u.isBlank()) repos.add(u.trim());
+                                }
                             }
                         } catch (Exception ignored) {}
                     }
