@@ -52,7 +52,14 @@ public interface GitHubService {
     /**
      * Clones or fetches a GitHub repository into the task-assigned isolated sandbox.
      */
-    void cloneOrFetchRepository(String userId, String cloneUrl, String branch, Path targetDir);
+    default void cloneOrFetchRepository(String userId, String cloneUrl, String branch, Path targetDir) {
+        cloneOrFetchRepository(userId, cloneUrl, branch, targetDir, false, false);
+    }
+
+    /**
+     * Clones or fetches a GitHub repository with options for forcing clean clone or pulling before execution.
+     */
+    void cloneOrFetchRepository(String userId, String cloneUrl, String branch, Path targetDir, boolean forceCleanClone, boolean pullBeforeExecution);
 
     /**
      * Performs an explicit user-authorized Git push to remote.

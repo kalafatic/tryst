@@ -1100,6 +1100,46 @@ public class TrystHttpServer implements TrystHttpService {
                 return;
             }
 
+            // Repository list: GET /api/tasks/intake/repositories
+            if (path.endsWith("/intake/repositories") && "GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                java.util.Set<String> repos = new java.util.LinkedHashSet<>();
+                if (projectRepository != null) {
+                    for (Project p : projectRepository.findAll()) {
+                        if (p.getDescription() != null && p.getDescription().startsWith("Repository: ")) {
+                            repos.add(p.getDescription().substring("Repository: ".length()).trim());
+                        } else if (p.getLocation() != null) {
+                            repos.add(p.getLocation().toString());
+                        }
+                    }
+                }
+                if (workspaceService != null) {
+                    for (Workspace w : workspaceService.getAllWorkspaces()) {
+                        if (w.getRepositoryUrl() != null && !w.getRepositoryUrl().isBlank()) {
+                            repos.add(w.getRepositoryUrl().trim());
+                        }
+                    }
+                }
+                if (databaseManager != null) {
+                    try (var conn = databaseManager.getConnection();
+                         var stmt = conn.prepareStatement("SELECT repository_url FROM repository_mirrors ORDER BY last_sync_at DESC");
+                         var rs = stmt.executeQuery()) {
+                        while (rs.next()) {
+                            String u = rs.getString("repository_url");
+                            if (u != null && !u.isBlank()) repos.add(u.trim());
+                        }
+                    } catch (Exception ignored) {}
+                }
+                StringBuilder sb = new StringBuilder("[");
+                int count = 0;
+                for (String r : repos) {
+                    if (count++ > 0) sb.append(",");
+                    sb.append("\"").append(escapeJson(r)).append("\"");
+                }
+                sb.append("]");
+                sendJsonResponse(exchange, 200, sb.toString());
+                return;
+            }
+
             // Task instructions: GET /api/tasks/{id}/instructions
             if (path.contains("/instructions") && "GET".equalsIgnoreCase(exchange.getRequestMethod())) {
                 String sub = path.substring(path.indexOf("/api/tasks/") + "/api/tasks/".length());
@@ -4303,7 +4343,7 @@ public class TrystHttpServer implements TrystHttpService {
 
                     <!-- Intelligent Task Intake Modal -->
                     <div id="newTaskModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(15, 23, 42, 0.45); z-index: 2000; align-items: center; justify-content: center; backdrop-filter: blur(1px);">
-                        <div style="background: var(--panel); border: 1px solid var(--border); border-radius: 6px; width: 880px; max-width: 95vw; max-height: 94vh; display: flex; flex-direction: column; box-shadow: 0 8px 30px rgba(0,0,0,0.2); position: relative; overflow: hidden;">
+                        <div id="newTaskModalPanel" style="background: var(--panel); border: 1px solid var(--border); border-radius: 6px; width: 880px; max-width: 95vw; max-height: 94vh; min-width: 520px; min-height: 440px; resize: both; overflow: auto; display: flex; flex-direction: column; box-shadow: 0 8px 30px rgba(0,0,0,0.2); position: relative;">
                             <!-- Header -->
                             <div style="display: flex; justify-content: space-between; align-items: flex-start; padding: 16px 20px 12px 20px; border-bottom: 1px solid var(--border); background: #fafbfc;">
                                 <div>
@@ -4321,11 +4361,12 @@ public class TrystHttpServer implements TrystHttpService {
                                     <div style="font-size: 11px; font-weight: 700; color: #475569; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 8px;">REPOSITORY</div>
                                     <div style="display: grid; grid-template-columns: 2fr 1.5fr 1fr; gap: 8px; align-items: center;">
                                         <div>
-                                            <input id="intakeCustomRepoUrl" class="input-ctrl" type="text" placeholder="https://git repository URL or local server path" style="width: 100%; font-size: 12px;" oninput="onRepoInputChanged()" />
+                                            <input id="intakeCustomRepoUrl" list="repoHistoryDatalist" class="input-ctrl" type="text" placeholder="https://git repository URL or local server path" style="width: 100%; font-size: 12px;" oninput="onRepoInputChanged()" autocomplete="off" />
+                                            <datalist id="repoHistoryDatalist"></datalist>
                                         </div>
                                         <div>
                                             <select id="intakeRepoSelect" class="input-ctrl" style="width: 100%; font-size: 12px;" onchange="onIntakeRepoSelected()">
-                                                <option value="">Select existing TRYST project</option>
+                                                <option value="">Select existing TRYST repository</option>
                                             </select>
                                         </div>
                                         <div style="position: relative; display: flex; align-items: center;">
@@ -4444,7 +4485,7 @@ public class TrystHttpServer implements TrystHttpService {
 
                                         <!-- Column 3: Automation -->
                                         <div style="background: #f8fafc; border: 1px solid var(--border-subtle); border-radius: 4px; padding: 10px;">
-                                            <div style="font-weight: 600; margin-bottom: 8px; color: #334155; font-size: 11px; text-transform: uppercase;">Automation</div>
+                                            <div style="font-weight: 600; margin-bottom: 8px; color: #334155; font-size: 11px; text-transform: uppercase;">Automation & Git Operations</div>
                                             <div style="display: flex; flex-direction: column; gap: 6px;">
                                                 <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
                                                     <input type="checkbox" id="optAutoExecute" checked /> Auto execute
@@ -4454,6 +4495,12 @@ public class TrystHttpServer implements TrystHttpService {
                                                 </label>
                                                 <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
                                                     <input type="checkbox" id="optAutoPush" onchange="onAutoPushToggled(this)" /> Auto push
+                                                </label>
+                                                <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; color: var(--text-heading); font-weight: 500;">
+                                                    <input type="checkbox" id="optForceCleanClone" /> Force Clean Clone
+                                                </label>
+                                                <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; color: var(--text-heading); font-weight: 500;">
+                                                    <input type="checkbox" id="optPullBeforeExecution" /> Pull Before Execution
                                                 </label>
                                             </div>
                                         </div>
@@ -6351,22 +6398,38 @@ public class TrystHttpServer implements TrystHttpService {
 
                         async function refreshIntakeRepos() {
                             const sel = document.getElementById('intakeRepoSelect');
+                            const datalist = document.getElementById('repoHistoryDatalist');
                             if (!sel) return;
                             sel.innerHTML = '<option value="">Loading repositories...</option>';
                             try {
-                                const [ghRes, projRes] = await Promise.all([
+                                const [ghRes, projRes, histRes] = await Promise.all([
                                     fetch(apiUrl('/api/github/repos'), { headers: getAuthHeaders() }),
-                                    fetch(apiUrl('/api/projects'), { headers: getAuthHeaders() })
+                                    fetch(apiUrl('/api/projects'), { headers: getAuthHeaders() }),
+                                    fetch(apiUrl('/api/tasks/intake/repositories'), { headers: getAuthHeaders() })
                                 ]);
 
-                                let options = '<option value="">Select existing TRYST project</option>';
+                                let options = '<option value="">Select existing TRYST repository</option>';
+                                const allKnownRepos = new Set();
+
+                                if (histRes.ok) {
+                                    const histData = await histRes.json();
+                                    if (Array.isArray(histData) && histData.length > 0) {
+                                        options += '<optgroup label="Persisted & Prior Repositories">';
+                                        for (const repoUrl of histData) {
+                                            allKnownRepos.add(repoUrl);
+                                            options += `<option value="repo:${escapeHtml(repoUrl)}">${escapeHtml(repoUrl)}</option>`;
+                                        }
+                                        options += '</optgroup>';
+                                    }
+                                }
 
                                 if (ghRes.ok) {
                                     const ghData = await ghRes.json();
                                     if (ghData.repositories && ghData.repositories.length > 0) {
                                         options += '<optgroup label="GitHub Repositories">';
                                         for (const r of ghData.repositories) {
-                                            options += `<option value="gh:${r.cloneUrl}" data-branch="${r.defaultBranch || 'main'}">${r.fullName} (${r.defaultBranch || 'main'})${r.isPrivate ? ' 🔒' : ''}</option>`;
+                                            allKnownRepos.add(r.cloneUrl);
+                                            options += `<option value="gh:${escapeHtml(r.cloneUrl)}" data-branch="${escapeHtml(r.defaultBranch || 'main')}">${escapeHtml(r.fullName)} (${escapeHtml(r.defaultBranch || 'main')})${r.isPrivate ? ' 🔒' : ''}</option>`;
                                         }
                                         options += '</optgroup>';
                                     }
@@ -6377,13 +6440,18 @@ public class TrystHttpServer implements TrystHttpService {
                                     if (projData.projects && projData.projects.length > 0) {
                                         options += '<optgroup label="Local Projects">';
                                         for (const p of projData.projects) {
-                                            options += `<option value="local:${p.id}">${p.name} (${p.location})</option>`;
+                                            if (p.location) allKnownRepos.add(p.location);
+                                            options += `<option value="local:${escapeHtml(p.id)}">${escapeHtml(p.name)} (${escapeHtml(p.location)})</option>`;
                                         }
                                         options += '</optgroup>';
                                     }
                                 }
 
                                 sel.innerHTML = options;
+
+                                if (datalist) {
+                                    datalist.innerHTML = Array.from(allKnownRepos).map(r => `<option value="${escapeHtml(r)}">`).join('');
+                                }
                             } catch (e) {
                                 sel.innerHTML = '<option value="">-- Failed to load repositories --</option>';
                             }
@@ -6399,6 +6467,9 @@ public class TrystHttpServer implements TrystHttpService {
                                 if (opt.value.startsWith('gh:')) {
                                     customUrlInput.value = opt.value.substring(3);
                                     branchInput.value = opt.getAttribute('data-branch') || 'main';
+                                } else if (opt.value.startsWith('repo:')) {
+                                    customUrlInput.value = opt.value.substring(5);
+                                    branchInput.value = 'main';
                                 } else if (opt.value.startsWith('local:')) {
                                     customUrlInput.value = '';
                                     branchInput.value = 'main';
@@ -6646,7 +6717,9 @@ public class TrystHttpServer implements TrystHttpService {
                                 requireApproval: document.getElementById('optRequireApproval') ? document.getElementById('optRequireApproval').checked : true,
                                 autoExecute: document.getElementById('optAutoExecute') ? document.getElementById('optAutoExecute').checked : true,
                                 autoCommit: document.getElementById('optAutoCommit') ? document.getElementById('optAutoCommit').checked : false,
-                                autoPush: document.getElementById('optAutoPush') ? document.getElementById('optAutoPush').checked : false
+                                autoPush: document.getElementById('optAutoPush') ? document.getElementById('optAutoPush').checked : false,
+                                forceCleanClone: document.getElementById('optForceCleanClone') ? document.getElementById('optForceCleanClone').checked : false,
+                                pullBeforeExecution: document.getElementById('optPullBeforeExecution') ? document.getElementById('optPullBeforeExecution').checked : false
                             };
 
                             const attachments = (taskAttachments || []).map(att => ({
@@ -6903,7 +6976,9 @@ public class TrystHttpServer implements TrystHttpService {
         boolean ae = !"false".equalsIgnoreCase(extractJsonField(block, "autoExecute"));
         boolean ac = "true".equalsIgnoreCase(extractJsonField(block, "autoCommit"));
         boolean ap = "true".equalsIgnoreCase(extractJsonField(block, "autoPush"));
-        return new eu.kalafatic.tryst.domain.intake.TaskIntakeService.ExecutionOptions(np, nc, ni, cr, ra, ae, ac, ap);
+        boolean fc = "true".equalsIgnoreCase(extractJsonField(block, "forceCleanClone"));
+        boolean pb = "true".equalsIgnoreCase(extractJsonField(block, "pullBeforeExecution"));
+        return new eu.kalafatic.tryst.domain.intake.TaskIntakeService.ExecutionOptions(np, nc, ni, cr, ra, ae, ac, ap, fc, pb);
     }
 
     private static List<String> extractJsonStringArray(String json, String field) {

@@ -49,10 +49,26 @@ public interface TaskIntakeService {
             boolean requireApproval,
             boolean autoExecute,
             boolean autoCommit,
-            boolean autoPush
+            boolean autoPush,
+            boolean forceCleanClone,
+            boolean pullBeforeExecution
     ) {
+        public ExecutionOptions(
+                boolean notifyProgress,
+                boolean notifyCompletion,
+                boolean notifyIntervention,
+                boolean generateCodeReview,
+                boolean requireApproval,
+                boolean autoExecute,
+                boolean autoCommit,
+                boolean autoPush
+        ) {
+            this(notifyProgress, notifyCompletion, notifyIntervention, generateCodeReview,
+                 requireApproval, autoExecute, autoCommit, autoPush, false, false);
+        }
+
         public static ExecutionOptions defaults() {
-            return new ExecutionOptions(true, true, true, true, true, true, false, false);
+            return new ExecutionOptions(true, true, true, true, true, true, false, false, false, false);
         }
     }
 

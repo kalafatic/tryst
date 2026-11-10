@@ -75,6 +75,22 @@ public class GitService {
         return runGit(repoDir, List.of("checkout", branchName));
     }
 
+    public GitCommandResult pull(Path repoDir, String remote, String branch, String token) {
+        Objects.requireNonNull(repoDir, "repoDir must not be null");
+        String effectiveRemote = (remote != null && !remote.isBlank()) ? remote : "origin";
+        String effectiveBranch = (branch != null && !branch.isBlank()) ? branch : "main";
+        if (token != null && !token.isBlank()) {
+            GitCommandResult remoteUrlRes = runGit(repoDir, List.of("remote", "get-url", effectiveRemote));
+            if (remoteUrlRes.isSuccess()) {
+                String existingUrl = remoteUrlRes.output().trim();
+                String authUrl = buildAuthenticatedUrl(existingUrl, token);
+                runGit(repoDir, List.of("remote", "set-url", effectiveRemote, authUrl));
+            }
+        }
+        GitCommandResult pullRes = runGit(repoDir, List.of("pull", effectiveRemote, effectiveBranch));
+        return new GitCommandResult(pullRes.exitCode(), maskOutput(pullRes.output(), token), maskOutput(pullRes.error(), token));
+    }
+
     public GitCommandResult cloneOrFetch(Path targetDir, String cloneUrl, String branch, String token) {
         Objects.requireNonNull(targetDir, "targetDir must not be null");
         Objects.requireNonNull(cloneUrl, "cloneUrl must not be null");

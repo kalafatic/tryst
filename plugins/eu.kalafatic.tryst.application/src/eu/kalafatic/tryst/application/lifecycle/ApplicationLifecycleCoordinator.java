@@ -340,6 +340,9 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
                         this.gitHubCredentialEncryptionService,
                         this.gitService
                 );
+        if (this.repositoryPoolManager != null && this.databaseManager != null) {
+            this.repositoryPoolManager.setDatabaseManager(this.databaseManager);
+        }
         ghService.setRepositoryPoolManager(this.repositoryPoolManager);
         this.gitHubService = ghService;
 
