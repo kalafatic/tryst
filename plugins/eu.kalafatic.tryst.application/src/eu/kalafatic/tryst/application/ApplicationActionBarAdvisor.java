@@ -1,6 +1,8 @@
 package eu.kalafatic.tryst.application;
 
+import eu.kalafatic.tryst.application.lifecycle.ApplicationLifecycleCoordinator;
 import eu.kalafatic.tryst.core.log.TrystLog;
+import eu.kalafatic.tryst.infrastructure.persistence.SqliteDatabaseManager;
 import org.eclipse.jface.action.Action;
 import org.eclipse.jface.action.GroupMarker;
 import org.eclipse.jface.action.IMenuManager;
@@ -14,12 +16,20 @@ import org.eclipse.ui.actions.ActionFactory;
 import org.eclipse.ui.actions.ActionFactory.IWorkbenchAction;
 import org.eclipse.ui.application.ActionBarAdvisor;
 import org.eclipse.ui.application.IActionBarConfigurer;
+import org.osgi.framework.Bundle;
+import org.osgi.framework.BundleContext;
+import org.osgi.framework.FrameworkUtil;
+import org.osgi.framework.ServiceReference;
+
+import java.sql.Connection;
 
 /**
  * Workbench action bar configuration defining standard TRYST top menus:
  * File, Edit, Project, Database, Web, Observability, Window, Help.
  */
 public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
+
+    private final ApplicationLifecycleCoordinator coordinator;
 
     private IWorkbenchAction exitAction;
     private IWorkbenchAction aboutAction;
@@ -36,7 +46,42 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
     private Action refreshAllAction;
 
     public ApplicationActionBarAdvisor(IActionBarConfigurer configurer) {
+        this(configurer, null);
+    }
+
+    public ApplicationActionBarAdvisor(IActionBarConfigurer configurer, ApplicationLifecycleCoordinator coordinator) {
         super(configurer);
+        this.coordinator = coordinator;
+    }
+
+    private ApplicationLifecycleCoordinator resolveCoordinator() {
+        if (this.coordinator != null) {
+            return this.coordinator;
+        }
+        return ApplicationWorkbenchAdvisor.resolveCoordinator();
+    }
+
+    private SqliteDatabaseManager resolveDatabaseManager() {
+        ApplicationLifecycleCoordinator coord = resolveCoordinator();
+        if (coord != null && coord.getDatabaseManager() != null) {
+            return coord.getDatabaseManager();
+        }
+        // Fallback to OSGi service registry if coordinator reference was not directly injected
+        try {
+            Bundle bundle = FrameworkUtil.getBundle(getClass());
+            if (bundle != null) {
+                BundleContext context = bundle.getBundleContext();
+                if (context != null) {
+                    ServiceReference<SqliteDatabaseManager> ref = context.getServiceReference(SqliteDatabaseManager.class);
+                    if (ref != null) {
+                        return context.getService(ref);
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            TrystLog.warn(ApplicationActionBarAdvisor.class, "Failed to resolve SqliteDatabaseManager from OSGi: " + t.getMessage());
+        }
+        return null;
     }
 
     @Override
@@ -102,18 +147,28 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
         dbIntegrityAction = new Action("Run Database PRAGMA Integrity Check") {
             @Override
             public void run() {
+                SqliteDatabaseManager dbManager = resolveDatabaseManager();
+                if (dbManager == null) {
+                    MessageDialog.openWarning(window.getShell(), "Database Check",
+                            "Database is not available: SqliteDatabaseManager could not be resolved from coordinator or OSGi registry.");
+                    return;
+                }
                 try {
-                    var coord = TrystApplicationPlugin.getDefault() != null ? TrystApplicationPlugin.getDefault().getLifecycleCoordinator() : null;
-                    if (coord != null && coord.getDatabaseManager() != null) {
-                        try (var conn = coord.getDatabaseManager().getConnection();
-                             var stmt = conn.createStatement();
-                             var rs = stmt.executeQuery("PRAGMA integrity_check;")) {
-                            if (rs.next()) {
-                                MessageDialog.openInformation(window.getShell(), "Database Check", "PRAGMA integrity_check: " + rs.getString(1));
-                            }
+                    Connection conn = dbManager.getConnection();
+                    if (conn == null || conn.isClosed()) {
+                        MessageDialog.openWarning(window.getShell(), "Database Check",
+                                "Database connection is closed or uninitialized at: " + dbManager.getDatabasePath());
+                        return;
+                    }
+                    try (var stmt = conn.createStatement();
+                         var rs = stmt.executeQuery("PRAGMA integrity_check;")) {
+                        if (rs.next()) {
+                            String result = rs.getString(1);
+                            MessageDialog.openInformation(window.getShell(), "Database Check",
+                                    "Database Path: " + dbManager.getDatabasePath() + "\nPRAGMA integrity_check: " + result);
+                        } else {
+                            MessageDialog.openWarning(window.getShell(), "Database Check", "PRAGMA integrity_check returned no results.");
                         }
-                    } else {
-                        MessageDialog.openWarning(window.getShell(), "Database Check", "Database is not available.");
                     }
                 } catch (Exception e) {
                     MessageDialog.openError(window.getShell(), "Database Error", "Integrity check failed: " + e.getMessage());
@@ -126,16 +181,23 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
         dbVacuumAction = new Action("Compact Database (VACUUM)") {
             @Override
             public void run() {
+                SqliteDatabaseManager dbManager = resolveDatabaseManager();
+                if (dbManager == null) {
+                    MessageDialog.openWarning(window.getShell(), "Database Compact",
+                            "Database is not available: SqliteDatabaseManager could not be resolved from coordinator or OSGi registry.");
+                    return;
+                }
                 try {
-                    var coord = TrystApplicationPlugin.getDefault() != null ? TrystApplicationPlugin.getDefault().getLifecycleCoordinator() : null;
-                    if (coord != null && coord.getDatabaseManager() != null) {
-                        try (var conn = coord.getDatabaseManager().getConnection();
-                             var stmt = conn.createStatement()) {
-                            stmt.execute("VACUUM;");
-                            MessageDialog.openInformation(window.getShell(), "Database Compact", "VACUUM completed successfully.");
-                        }
-                    } else {
-                        MessageDialog.openWarning(window.getShell(), "Database Compact", "Database is not available.");
+                    Connection conn = dbManager.getConnection();
+                    if (conn == null || conn.isClosed()) {
+                        MessageDialog.openWarning(window.getShell(), "Database Compact",
+                                "Database connection is closed or uninitialized at: " + dbManager.getDatabasePath());
+                        return;
+                    }
+                    try (var stmt = conn.createStatement()) {
+                        stmt.execute("VACUUM;");
+                        MessageDialog.openInformation(window.getShell(), "Database Compact",
+                                "VACUUM completed successfully on: " + dbManager.getDatabasePath());
                     }
                 } catch (Exception e) {
                     MessageDialog.openError(window.getShell(), "Database Error", "VACUUM failed: " + e.getMessage());
@@ -148,11 +210,14 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
         refreshAllAction = new Action("Refresh System Status") {
             @Override
             public void run() {
-                var coord = TrystApplicationPlugin.getDefault() != null ? TrystApplicationPlugin.getDefault().getLifecycleCoordinator() : null;
+                var coord = resolveCoordinator();
                 if (coord != null && coord.getServerReadinessService() != null) {
                     var rep = coord.getServerReadinessService().evaluateReadiness(coord.getCurrentStage());
                     MessageDialog.openInformation(window.getShell(), "TRYST Server Readiness",
                             "Stage: " + coord.getCurrentStage() + "\nReady: " + rep.ready() + "\nDegraded: " + rep.degraded());
+                } else {
+                    MessageDialog.openWarning(window.getShell(), "TRYST Server Readiness",
+                            "Lifecycle coordinator or ServerReadinessService is currently unavailable.");
                 }
             }
         };
@@ -161,7 +226,7 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
     }
 
     private String resolveWebUrl() {
-        var coord = TrystApplicationPlugin.getDefault() != null ? TrystApplicationPlugin.getDefault().getLifecycleCoordinator() : null;
+        var coord = resolveCoordinator();
         if (coord != null && coord.getConfigurationService() != null) {
             var reg = coord.getConfigurationService().getEndpointRegistry();
             if (reg != null && reg.getCurrentEndpoint() != null) {
