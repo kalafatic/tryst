@@ -5,6 +5,7 @@ import eu.kalafatic.tryst.core.log.TrystLog;
 
 import java.io.File;
 import java.io.IOException;
+import java.sql.Connection;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -78,19 +79,22 @@ public class RepositoryPoolManager {
 
     private void recordMirrorPersistence(String repoUrl, Path mirrorDir) {
         if (databaseManager == null) return;
-        try (var conn = databaseManager.getConnection();
-             var stmt = conn.prepareStatement(
-                     "INSERT INTO repository_mirrors (id, repository_url, mirror_path, last_sync_at, status) " +
-                     "VALUES (?, ?, ?, ?, ?) " +
-                     "ON CONFLICT(repository_url) DO UPDATE SET mirror_path = excluded.mirror_path, last_sync_at = excluded.last_sync_at, status = excluded.status")) {
-            stmt.setString(1, java.util.UUID.randomUUID().toString());
-            stmt.setString(2, repoUrl);
-            stmt.setString(3, mirrorDir.toAbsolutePath().toString());
-            stmt.setString(4, java.time.Instant.now().toString());
-            stmt.setString(5, "READY");
-            stmt.executeUpdate();
-        } catch (Exception e) {
-            TrystLog.warn(RepositoryPoolManager.class, "Failed to persist repository mirror metadata: " + e.getMessage());
+        Connection conn = databaseManager.getConnection();
+        synchronized (databaseManager.getLock()) {
+            try (var stmt = conn.prepareStatement(
+                    "INSERT INTO repository_mirrors (id, remote_url, mirror_path, default_branch, last_synced_at, mirror_fingerprint) " +
+                    "VALUES (?, ?, ?, ?, ?, ?) " +
+                    "ON CONFLICT(remote_url) DO UPDATE SET mirror_path = excluded.mirror_path, last_synced_at = excluded.last_synced_at")) {
+                stmt.setString(1, java.util.UUID.randomUUID().toString());
+                stmt.setString(2, repoUrl);
+                stmt.setString(3, mirrorDir.toAbsolutePath().toString());
+                stmt.setString(4, "main");
+                stmt.setString(5, java.time.Instant.now().toString());
+                stmt.setString(6, "ready");
+                stmt.executeUpdate();
+            } catch (Exception e) {
+                TrystLog.warn(RepositoryPoolManager.class, "Failed to persist repository mirror metadata: " + e.getMessage());
+            }
         }
     }
 
@@ -124,8 +128,11 @@ public class RepositoryPoolManager {
                     return false;
                 }
             }
-            // Ensure checkout of requested branch
-            gitService.runGit(targetWorkspaceDir, List.of("checkout", effectiveBranch));
+            // Ensure checkout of requested branch if available, otherwise stay on default branch
+            GitService.GitCommandResult chkRes = gitService.runGit(targetWorkspaceDir, List.of("checkout", effectiveBranch));
+            if (!chkRes.isSuccess()) {
+                TrystLog.info(RepositoryPoolManager.class, "Requested branch '" + effectiveBranch + "' not found; remaining on default clone branch.");
+            }
             return true;
         } catch (Exception e) {
             TrystLog.error(RepositoryPoolManager.class, "Failed to create worktree workspace: " + e.getMessage(), e);

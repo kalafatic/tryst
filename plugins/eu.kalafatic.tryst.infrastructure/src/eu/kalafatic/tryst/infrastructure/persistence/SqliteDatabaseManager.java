@@ -159,7 +159,11 @@ public class SqliteDatabaseManager implements UnitOfWork, AutoCloseable {
 
     public Connection getConnection() {
         synchronized (dbLock) {
-            if (connection == null) {
+            try {
+                if (connection == null || connection.isClosed()) {
+                    initialize();
+                }
+            } catch (SQLException e) {
                 initialize();
             }
             return connection;

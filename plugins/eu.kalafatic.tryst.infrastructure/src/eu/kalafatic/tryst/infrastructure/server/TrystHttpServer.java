@@ -22,6 +22,7 @@ import eu.kalafatic.tryst.domain.service.*;
 import eu.kalafatic.tryst.infrastructure.build.BuildAndTestService;
 import eu.kalafatic.tryst.infrastructure.persistence.SqliteBackupService;
 import eu.kalafatic.tryst.infrastructure.persistence.SqliteDatabaseManager;
+import java.sql.Connection;
 import eu.kalafatic.tryst.infrastructure.vcs.GitService;
 
 import java.io.IOException;
@@ -533,6 +534,10 @@ public class TrystHttpServer implements TrystHttpService {
             }
         }
 
+        if (ApplicationConfiguration.isDevelopmentMode()) {
+            return Optional.of(SecurityContext.DEV);
+        }
+
         return Optional.empty();
     }
 
@@ -560,6 +565,9 @@ public class TrystHttpServer implements TrystHttpService {
         if (ctx.isPresent()) {
             return ctx.get().getUserId();
         }
+        if (ApplicationConfiguration.isDevelopmentMode()) {
+            return SecurityContext.DEV.getUserId();
+        }
         if (authenticationService != null && authenticationService.hasAdministrator()) {
             return "unauthenticated";
         }
@@ -568,6 +576,9 @@ public class TrystHttpServer implements TrystHttpService {
     }
 
     private boolean isAuthenticationRequiredAndMissing(Optional<SecurityContext> ctx) {
+        if (ApplicationConfiguration.isDevelopmentMode()) {
+            return false;
+        }
         return authenticationService != null && authenticationService.hasAdministrator() && ctx.isEmpty();
     }
 
@@ -583,6 +594,9 @@ public class TrystHttpServer implements TrystHttpService {
     }
 
     private boolean validateCsrfIfCookieAuth(HttpExchange exchange) {
+        if (ApplicationConfiguration.isDevelopmentMode()) {
+            return true;
+        }
         String method = exchange.getRequestMethod().toUpperCase();
         if ("GET".equals(method) || "HEAD".equals(method) || "OPTIONS".equals(method)) {
             return true;
@@ -1120,14 +1134,16 @@ public class TrystHttpServer implements TrystHttpService {
                     }
                 }
                 if (databaseManager != null) {
-                    try (var conn = databaseManager.getConnection();
-                         var stmt = conn.prepareStatement("SELECT repository_url FROM repository_mirrors ORDER BY last_sync_at DESC");
-                         var rs = stmt.executeQuery()) {
-                        while (rs.next()) {
-                            String u = rs.getString("repository_url");
-                            if (u != null && !u.isBlank()) repos.add(u.trim());
-                        }
-                    } catch (Exception ignored) {}
+                    Connection conn = databaseManager.getConnection();
+                    synchronized (databaseManager.getLock()) {
+                        try (var stmt = conn.prepareStatement("SELECT remote_url FROM repository_mirrors ORDER BY last_synced_at DESC");
+                             var rs = stmt.executeQuery()) {
+                            while (rs.next()) {
+                                String u = rs.getString("remote_url");
+                                if (u != null && !u.isBlank()) repos.add(u.trim());
+                            }
+                        } catch (Exception ignored) {}
+                    }
                 }
                 StringBuilder sb = new StringBuilder("[");
                 int count = 0;

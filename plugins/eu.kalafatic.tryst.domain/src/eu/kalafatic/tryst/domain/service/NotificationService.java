@@ -61,10 +61,25 @@ public class NotificationService {
             return Optional.empty();
         }
 
-        if (userRepository != null && userRepository.findById(userId).isEmpty()) {
-            eu.kalafatic.tryst.core.log.TrystLog.warn(NotificationService.class,
-                    "Recipient user " + userId + " does not exist in repository; skipping notification.");
-            return Optional.empty();
+        if (userRepository != null) {
+            try {
+                if (userRepository.findById(userId).isEmpty()) {
+                    if (eu.kalafatic.tryst.core.config.ApplicationConfiguration.isDevelopmentMode()) {
+                        // In dev mode, auto-provision dev-user if absent so notifications persist cleanly
+                        try {
+                            userRepository.save(eu.kalafatic.tryst.domain.security.SecurityContext.DEV.user());
+                        } catch (Exception ignored) {}
+                    } else {
+                        eu.kalafatic.tryst.core.log.TrystLog.warn(NotificationService.class,
+                                "Recipient user " + userId + " does not exist in repository; skipping notification.");
+                        return Optional.empty();
+                    }
+                }
+            } catch (Exception e) {
+                eu.kalafatic.tryst.core.log.TrystLog.warn(NotificationService.class,
+                        "Could not check user existence for notification: " + e.getMessage());
+                return Optional.empty();
+            }
         }
 
         NotificationType type = NotificationType.fromString(typeStr);

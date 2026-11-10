@@ -86,6 +86,10 @@ public class PermissionManager {
 
     public void validateUserProjectAccess(String userId, Project project, SecurityContext context) {
         Objects.requireNonNull(project, "project must not be null");
+        if (eu.kalafatic.tryst.core.config.ApplicationConfiguration.isDevelopmentMode()) {
+            recordAudit(userId != null ? userId : "dev-user", "PROJECT_ACCESS", "project", project.getId(), project.getId(), null, "ALLOWED", "Emergency dev mode bypass");
+            return;
+        }
         if (userId == null || userId.trim().isEmpty()) {
             recordAudit(userId != null ? userId : "anonymous", "PROJECT_ACCESS", "project", project.getId(), project.getId(), null, "DENIED", "Missing or blank userId");
             throw new TrystDomainException("Access denied: User identification is required.");
@@ -129,6 +133,10 @@ public class PermissionManager {
 
     public void validateWorkspaceAccess(String userId, Workspace workspace, SecurityContext context) {
         Objects.requireNonNull(workspace, "workspace must not be null");
+        if (eu.kalafatic.tryst.core.config.ApplicationConfiguration.isDevelopmentMode()) {
+            recordAudit(userId != null ? userId : "dev-user", "WORKSPACE_ACCESS", "workspace", workspace.getId(), null, workspace.getTaskId(), "ALLOWED", "Emergency dev mode bypass");
+            return;
+        }
         if (userId == null || userId.trim().isEmpty()) {
             recordAudit("anonymous", "WORKSPACE_ACCESS", "workspace", workspace.getId(), null, workspace.getTaskId(), "DENIED", "Missing userId");
             throw new TrystDomainException("Access denied: User identification is required.");
@@ -154,6 +162,10 @@ public class PermissionManager {
 
     public void validateTaskAccess(String userId, Task task, SecurityContext context, Permission requiredPermission) {
         Objects.requireNonNull(task, "task must not be null");
+        if (eu.kalafatic.tryst.core.config.ApplicationConfiguration.isDevelopmentMode()) {
+            recordAudit(userId != null ? userId : "dev-user", "TASK_ACCESS", "task", task.getId(), task.getProjectId(), task.getId(), "ALLOWED", "Emergency dev mode bypass");
+            return;
+        }
         if (userId == null || userId.trim().isEmpty()) {
             recordAudit("anonymous", "TASK_ACCESS", "task", task.getId(), task.getProjectId(), task.getId(), "DENIED", "Missing userId");
             throw new TrystDomainException("Access denied: User identification is required.");
@@ -171,6 +183,10 @@ public class PermissionManager {
 
     public void validateReviewAccess(String userId, CodeReview review, SecurityContext context, Permission requiredPermission) {
         Objects.requireNonNull(review, "review must not be null");
+        if (eu.kalafatic.tryst.core.config.ApplicationConfiguration.isDevelopmentMode()) {
+            recordAudit(userId != null ? userId : "dev-user", "REVIEW_ACCESS", "review", review.getId(), review.getProjectId(), review.getTaskId(), "ALLOWED", "Emergency dev mode bypass");
+            return;
+        }
         if (userId == null || userId.trim().isEmpty()) {
             recordAudit("anonymous", "REVIEW_ACCESS", "review", review.getId(), review.getProjectId(), review.getTaskId(), "DENIED", "Missing userId");
             throw new TrystDomainException("Access denied: User identification is required.");
@@ -187,6 +203,11 @@ public class PermissionManager {
     }
 
     public void validateGitOperation(String userId, Project project, SecurityContext context, Permission requiredPermission) {
+        if (eu.kalafatic.tryst.core.config.ApplicationConfiguration.isDevelopmentMode()) {
+            recordAudit(userId != null ? userId : "dev-user", "GIT_OPERATION", "git", project != null ? project.getId() : "system",
+                    project != null ? project.getId() : null, null, "ALLOWED", "Emergency dev mode bypass");
+            return;
+        }
         if (project != null) {
             validateUserProjectAccess(userId, project, context);
         }

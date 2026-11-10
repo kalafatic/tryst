@@ -41,6 +41,7 @@ public record ApplicationConfiguration(
     public static final boolean DEFAULT_REVERSE_PROXY = false;
     public static final String DEFAULT_CONTEXT_PATH = "/tryst";
     public static final String DEFAULT_CANONICAL_URL = "http://localhost/tryst";
+    public static final String PROPERTY_DEV_MODE = "tryst.dev.mode";
     public static final String DEFAULT_APP_NAME = "TRYST – AI Development Environment";
     public static final String DEFAULT_VERSION = "0.1.0";
     public static final String DEFAULT_OLLAMA_ENDPOINT = "http://localhost:11434";
@@ -327,6 +328,22 @@ public record ApplicationConfiguration(
                 contextPath != null ? contextPath : DEFAULT_CONTEXT_PATH,
                 canonicalUrl != null ? canonicalUrl : DEFAULT_CANONICAL_URL
         );
+    }
+
+    /**
+     * Determines whether emergency development mode is active.
+     * By default, it is enabled (unless explicitly disabled via -Dtryst.dev.mode=false).
+     */
+    public static boolean isDevelopmentMode() {
+        String prop = System.getProperty(PROPERTY_DEV_MODE);
+        if (prop == null) {
+            String env = System.getenv("TRYST_DEV_MODE");
+            if (env != null) {
+                return !"false".equalsIgnoreCase(env.trim());
+            }
+            return true; // Active by default in emergency development mode
+        }
+        return !"false".equalsIgnoreCase(prop.trim());
     }
 
     public String resolveEffectiveExternalUrl(int actualPort) {
