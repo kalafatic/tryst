@@ -543,10 +543,13 @@ public class TaskWorker implements Callable<ExecutionResult> {
 
         String repoUrl = ws.getRepositoryUrl();
         if (repoUrl != null && !repoUrl.isBlank() && gitHubService != null) {
+            boolean forceClean = "true".equalsIgnoreCase(ws.getMetadata().get("force_clean_clone"));
+            boolean pullBefore = "true".equalsIgnoreCase(ws.getMetadata().get("pull_before_execution"));
             log.append("[Cloning]: Synchronizing remote repository ").append(repoUrl)
-               .append(" (branch: ").append(ws.getBranch()).append(") into sandbox ").append(ws.getRootPath()).append("\n");
+               .append(" (branch: ").append(ws.getBranch()).append(", forceClean: ").append(forceClean)
+               .append(", pullBefore: ").append(pullBefore).append(") into sandbox ").append(ws.getRootPath()).append("\n");
             try {
-                gitHubService.cloneOrFetchRepository(context.getUserId(), repoUrl, ws.getBranch(), ws.getRootPath());
+                gitHubService.cloneOrFetchRepository(context.getUserId(), repoUrl, ws.getBranch(), ws.getRootPath(), forceClean, pullBefore);
                 log.append("[Cloning]: Sandbox cloned/fetched successfully.\n");
             } catch (Exception e) {
                 log.append("[Cloning Error]: ").append(e.getMessage()).append("\n");

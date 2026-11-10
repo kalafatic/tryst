@@ -245,7 +245,8 @@ public class DefaultGitHubService implements GitHubService {
     }
 
     @Override
-    public void cloneOrFetchRepository(String userId, String cloneUrl, String branch, Path targetDir) {
+    public void cloneOrFetchRepository(String userId, String cloneUrl, String branch, Path targetDir,
+                                       boolean forceCleanClone, boolean pullBeforeExecution) {
         Objects.requireNonNull(userId, "userId must not be null");
         Objects.requireNonNull(cloneUrl, "cloneUrl must not be null");
         Objects.requireNonNull(targetDir, "targetDir must not be null");
@@ -259,22 +260,44 @@ public class DefaultGitHubService implements GitHubService {
             token = encryptionService.decrypt(optCred.get().getEncryptedToken());
         }
 
+        if (forceCleanClone) {
+            TrystLog.info(DefaultGitHubService.class, "Force clean clone requested for " + cloneUrl + " in " + targetDir);
+            gitService.cleanDirectoryContents(targetDir);
+        }
+
         TrystLog.info(DefaultGitHubService.class, "Executing clone or fetch for repository " + cloneUrl + " into sandbox " + targetDir);
-        if (repositoryPoolManager != null && !gitService.isGitRepository(targetDir)) {
+        if (!forceCleanClone && repositoryPoolManager != null && !gitService.isGitRepository(targetDir)) {
             try {
                 Path mirror = repositoryPoolManager.ensureMirror(cloneUrl, token);
                 boolean ok = repositoryPoolManager.createWorktree(mirror, targetDir, effectiveBranch);
                 if (ok) {
                     TrystLog.info(DefaultGitHubService.class, "Successfully allocated isolated workspace from bare mirror for " + cloneUrl);
+                    if (pullBeforeExecution) {
+                        GitService.GitCommandResult pullRes = gitService.pull(targetDir, "origin", effectiveBranch, token);
+                        if (!pullRes.isSuccess()) {
+                            throw new TrystInfrastructureException("Git pull before execution failed: " + pullRes.error());
+                        }
+                    }
                     return;
                 }
+            } catch (TrystInfrastructureException e) {
+                throw e;
             } catch (Exception e) {
                 TrystLog.warn(DefaultGitHubService.class, "Mirror-assisted checkout failed; falling back to direct clone/fetch: " + e.getMessage());
             }
         }
+
         GitService.GitCommandResult result = gitService.cloneOrFetch(targetDir, cloneUrl, effectiveBranch, token);
         if (!result.isSuccess()) {
             throw new TrystInfrastructureException("Git clone/fetch failed: " + result.error());
+        }
+
+        if (pullBeforeExecution) {
+            TrystLog.info(DefaultGitHubService.class, "Pulling latest changes before execution for " + targetDir);
+            GitService.GitCommandResult pullRes = gitService.pull(targetDir, "origin", effectiveBranch, token);
+            if (!pullRes.isSuccess()) {
+                throw new TrystInfrastructureException("Git pull before execution failed: " + pullRes.error());
+            }
         }
     }
 

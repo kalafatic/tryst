@@ -113,15 +113,9 @@ public class DefaultTaskIntakeService implements TaskIntakeService {
                 repoContext = "Local Repository: " + repoUrl + " (" + branch + ")";
             } else {
                 repoContext = "Repository: " + repoUrl + " (" + branch + ")";
-                // Validate repository clone URL format
+                // Validate repository clone URL format - accept HTTP(S), Git, SSH, or let clone determine accessibility
                 if (!repoUrl.startsWith("http://") && !repoUrl.startsWith("https://") && !repoUrl.startsWith("git@") && !repoUrl.startsWith("ssh://")) {
                     errors.add("Repository URL must be a valid HTTP(S), Git, or local repository path: " + repoUrl);
-                }
-                if (gitHubCredentialRepository != null) {
-                    boolean hasCred = gitHubCredentialRepository.findByUserId(effectiveUser).isPresent();
-                    if (!hasCred && (repoUrl.contains("github.com") && !repoUrl.contains("/public/"))) {
-                        missingInfo.add("No connected GitHub credential found for user. Access to private repositories will fail unless public.");
-                    }
                 }
             }
         } else if (workspaceService != null && workspaceService.getCurrentWorkspace() != null) {
@@ -184,20 +178,30 @@ public class DefaultTaskIntakeService implements TaskIntakeService {
         String repoUrl = request.repositoryUrl() != null && !request.repositoryUrl().trim().isEmpty() ? request.repositoryUrl().trim() : null;
         String branch = (request.branch() != null && !request.branch().trim().isEmpty()) ? request.branch().trim() : "main";
 
-        // Auto-provision or register Project if repository URL/path is specified without a local project
+        // Auto-provision or reuse existing Project if repository URL/path is specified without a local project
         if (projectId == null && repoUrl != null && projectRepository != null) {
-            String repoName = extractRepoName(repoUrl);
-            Path projectPath;
-            if (repoUrl.startsWith("/") || (repoUrl.length() > 2 && repoUrl.charAt(1) == ':')) {
-                projectPath = Path.of(repoUrl);
-            } else if (repoUrl.startsWith("file://")) {
-                projectPath = Path.of(URI.create(repoUrl));
+            final String targetRepoUrl = repoUrl;
+            Optional<Project> existing = projectRepository.findAll().stream()
+                    .filter(p -> (p.getDescription() != null && p.getDescription().contains(targetRepoUrl))
+                            || (p.getLocation() != null && targetRepoUrl.equalsIgnoreCase(p.getLocation().toString())))
+                    .findFirst();
+
+            if (existing.isPresent()) {
+                projectId = existing.get().getId();
             } else {
-                projectPath = Path.of(System.getProperty("user.home"), ".tryst", "projects", effectiveUser, repoName);
+                String repoName = extractRepoName(repoUrl);
+                Path projectPath;
+                if (repoUrl.startsWith("/") || (repoUrl.length() > 2 && repoUrl.charAt(1) == ':')) {
+                    projectPath = Path.of(repoUrl);
+                } else if (repoUrl.startsWith("file://")) {
+                    projectPath = Path.of(URI.create(repoUrl));
+                } else {
+                    projectPath = Path.of(System.getProperty("user.home"), ".tryst", "projects", effectiveUser, repoName);
+                }
+                Project project = new Project(UUID.randomUUID().toString(), effectiveUser, repoName, "Repository: " + repoUrl, projectPath, eu.kalafatic.tryst.domain.model.ProjectStatus.ACTIVE, false, java.time.Instant.now(), java.time.Instant.now());
+                projectRepository.save(project);
+                projectId = project.getId();
             }
-            Project project = new Project(UUID.randomUUID().toString(), effectiveUser, repoName, "Repository: " + repoUrl, projectPath, eu.kalafatic.tryst.domain.model.ProjectStatus.ACTIVE, false, java.time.Instant.now(), java.time.Instant.now());
-            projectRepository.save(project);
-            projectId = project.getId();
         }
 
         // 2. Submit task via TaskOrchestrator
@@ -219,6 +223,15 @@ public class DefaultTaskIntakeService implements TaskIntakeService {
         // 3. Allocate isolated workspace with repository URL and branch if available
         if (workspaceService != null && (repoUrl != null || projectId != null)) {
             Workspace ws = workspaceService.allocateTaskWorkspace(effectiveUser, task.getId(), projectId, repoUrl, branch);
+            if (request.executionOptions() != null) {
+                if (request.executionOptions().forceCleanClone()) {
+                    ws.setMetadata("force_clean_clone", "true");
+                }
+                if (request.executionOptions().pullBeforeExecution()) {
+                    ws.setMetadata("pull_before_execution", "true");
+                }
+                workspaceService.saveWorkspace(ws);
+            }
             TrystLog.info(DefaultTaskIntakeService.class, "Allocated workspace for intake task " + task.getId() + " at " + ws.getRootPath());
         }
 
