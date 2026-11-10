@@ -92,6 +92,9 @@ public class DefaultTaskIntakeService implements TaskIntakeService {
         String repoUrl = request.repositoryUrl() != null ? request.repositoryUrl().trim() : "";
         String branch = (request.branch() != null && !request.branch().trim().isEmpty()) ? request.branch().trim() : "main";
         String projectId = request.projectId() != null ? request.projectId().trim() : null;
+        if ("null".equalsIgnoreCase(projectId)) {
+            projectId = null;
+        }
 
         String repoContext = "None";
 
@@ -184,6 +187,9 @@ public class DefaultTaskIntakeService implements TaskIntakeService {
 
         // 1. Resolve or create Project / Workspace context
         String projectId = request.projectId() != null && !request.projectId().trim().isEmpty() ? request.projectId().trim() : null;
+        if ("null".equalsIgnoreCase(projectId)) {
+            projectId = null;
+        }
         String repoUrl = request.repositoryUrl() != null && !request.repositoryUrl().trim().isEmpty() ? request.repositoryUrl().trim() : null;
         String branch = (request.branch() != null && !request.branch().trim().isEmpty()) ? request.branch().trim() : "main";
 
