@@ -166,7 +166,25 @@ public final class TrystUiServices {
     }
 
     public static AiInferenceService getAiInferenceService() {
+        var appCoord = eu.kalafatic.tryst.application.TrystApplication.getCoordinator();
+        if (appCoord != null) {
+            var ai = appCoord.getAiInferenceService();
+            if (ai != null) {
+                return ai;
+            }
+        }
         return getService(AiInferenceService.class);
+    }
+
+    public static eu.kalafatic.tryst.domain.ai.AiModelRegistryService getAiModelRegistryService() {
+        var appCoord = eu.kalafatic.tryst.application.TrystApplication.getCoordinator();
+        if (appCoord != null) {
+            var reg = appCoord.getAiModelRegistryService();
+            if (reg != null) {
+                return reg;
+            }
+        }
+        return getService(eu.kalafatic.tryst.domain.ai.AiModelRegistryService.class);
     }
 
     public static EventBus getEventBus() {

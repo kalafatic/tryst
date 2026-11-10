@@ -128,7 +128,7 @@ public class ConfigurationService {
         }
 
         try {
-            String endpoint = props.getProperty("ollama.endpoint", base.ollamaEndpoint());
+            String endpoint = resolveOllamaEndpoint(props, base.ollamaEndpoint());
             String model = props.getProperty("ollama.model", base.defaultModel());
             int timeout = Integer.parseInt(props.getProperty("execution.timeoutSeconds", String.valueOf(base.requestTimeoutSeconds())));
             int maxIter = Integer.parseInt(props.getProperty("execution.maxIterations", String.valueOf(base.maxIterations())));
@@ -224,6 +224,75 @@ public class ConfigurationService {
             TrystLog.warn(ConfigurationService.class, "Failed to load preferences from " + configFilePath + "; using defaults: " + e.getMessage());
             return base;
         }
+    }
+
+    /**
+     * Resolves the Ollama endpoint dynamically according to priority:
+     * 1. Existing TRYST configuration (if explicitly set in props)
+     * 2. TRYST_OLLAMA_ENDPOINT (system property or environment variable)
+     * 3. OLLAMA_HOST (system property or environment variable)
+     * 4. Existing EVO Ollama endpoint / configuration property
+     * 5. Default http://localhost:11434
+     */
+    public static String resolveOllamaEndpoint(Properties props, String defaultFallback) {
+        if (props != null) {
+            String explicitProp = props.getProperty("ollama.endpoint");
+            if (explicitProp != null && !explicitProp.isBlank()) {
+                return normalizeEndpointUrl(explicitProp.trim());
+            }
+        }
+
+        String envTryst = System.getProperty("tryst.ollama.endpoint");
+        if (envTryst == null || envTryst.isBlank()) {
+            envTryst = System.getenv("TRYST_OLLAMA_ENDPOINT");
+        }
+        if (envTryst != null && !envTryst.isBlank()) {
+            return normalizeEndpointUrl(envTryst.trim());
+        }
+
+        String envOllamaHost = System.getProperty("ollama.host");
+        if (envOllamaHost == null || envOllamaHost.isBlank()) {
+            envOllamaHost = System.getenv("OLLAMA_HOST");
+        }
+        if (envOllamaHost != null && !envOllamaHost.isBlank()) {
+            return normalizeEndpointUrl(envOllamaHost.trim());
+        }
+
+        if (props != null) {
+            String evoOllama = props.getProperty("evo.ollama.endpoint");
+            if (evoOllama == null || evoOllama.isBlank()) {
+                evoOllama = props.getProperty("evo.endpoint");
+            }
+            if (evoOllama != null && !evoOllama.isBlank()) {
+                return normalizeEndpointUrl(evoOllama.trim());
+            }
+        }
+
+        String envEvo = System.getProperty("evo.ollama.endpoint");
+        if (envEvo == null || envEvo.isBlank()) {
+            envEvo = System.getenv("EVO_OLLAMA_ENDPOINT");
+        }
+        if (envEvo != null && !envEvo.isBlank()) {
+            return normalizeEndpointUrl(envEvo.trim());
+        }
+
+        return (defaultFallback != null && !defaultFallback.isBlank())
+                ? normalizeEndpointUrl(defaultFallback.trim())
+                : ApplicationConfiguration.DEFAULT_OLLAMA_ENDPOINT;
+    }
+
+    private static String normalizeEndpointUrl(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return ApplicationConfiguration.DEFAULT_OLLAMA_ENDPOINT;
+        }
+        String clean = raw.trim();
+        if (!clean.startsWith("http://") && !clean.startsWith("https://")) {
+            clean = "http://" + clean;
+        }
+        if (clean.endsWith("/")) {
+            clean = clean.substring(0, clean.length() - 1);
+        }
+        return clean;
     }
 
     private void saveConfiguration(ApplicationConfiguration config) {

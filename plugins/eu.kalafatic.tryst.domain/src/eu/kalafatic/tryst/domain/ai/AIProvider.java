@@ -62,6 +62,10 @@ public interface AIProvider {
 
     String getProviderId();
 
+    default String getEndpoint() {
+        return "http://localhost:11434";
+    }
+
     CompletableFuture<Boolean> checkConnection();
 
     CompletableFuture<List<ProviderModelMetadata>> listAvailableModels();

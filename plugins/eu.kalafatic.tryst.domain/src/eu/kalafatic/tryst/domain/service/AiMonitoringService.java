@@ -59,8 +59,11 @@ public class AiMonitoringService {
         String endpoint = "http://localhost:11434";
 
         if (inferenceService != null) {
+            if (inferenceService instanceof eu.kalafatic.tryst.domain.ai.AIProvider provider) {
+                endpoint = provider.getEndpoint();
+            }
             try {
-                available = Boolean.TRUE.equals(inferenceService.checkConnection().get(1, TimeUnit.SECONDS));
+                available = Boolean.TRUE.equals(inferenceService.checkConnection().get(2, TimeUnit.SECONDS));
             } catch (Exception e) {
                 available = false;
                 this.lastError = e.getMessage();
