@@ -45,7 +45,8 @@ public class TaskOrchestrator {
     private final AIProvider aiProvider;
     private final AiInferenceService aiClient;
     private final AiContextManager aiContextManager;
-    private final ModelSelectionService modelSelectionService;
+    private ModelSelectionService modelSelectionService;
+    private eu.kalafatic.tryst.domain.ai.ModelRegistry modelRegistry;
     private final PromptContextBuilder promptContextBuilder;
     private final TaskAnalyzer taskAnalyzer;
     private final ImplementationPlanner implementationPlanner;
@@ -102,7 +103,9 @@ public class TaskOrchestrator {
             this.aiProvider = null;
         }
         this.aiContextManager = aiContextManager;
-        this.modelSelectionService = new ModelSelectionService(new AiModelRegistryService());
+        AiModelRegistryService defaultReg = new AiModelRegistryService();
+        this.modelRegistry = defaultReg;
+        this.modelSelectionService = new ModelSelectionService(defaultReg);
         this.promptContextBuilder = new PromptContextBuilder(4096);
         this.taskAnalyzer = new TaskAnalyzer(this.permissionManager);
         this.implementationPlanner = new ImplementationPlanner();
@@ -333,6 +336,17 @@ public class TaskOrchestrator {
 
     public void setTaskInstructionRepository(eu.kalafatic.tryst.domain.repository.TaskInstructionRepository taskInstructionRepository) {
         this.taskInstructionRepository = taskInstructionRepository;
+    }
+
+    public void setModelRegistry(eu.kalafatic.tryst.domain.ai.ModelRegistry registry) {
+        if (registry != null) {
+            this.modelRegistry = registry;
+            this.modelSelectionService = new ModelSelectionService(registry);
+        }
+    }
+
+    public eu.kalafatic.tryst.domain.ai.ModelRegistry getModelRegistry() {
+        return this.modelRegistry;
     }
 
     public void setExternalAiDelegator(eu.kalafatic.tryst.domain.ai.ExternalAiDelegator externalAiDelegator) {

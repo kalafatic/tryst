@@ -219,7 +219,19 @@ public class CodeAgent {
             return;
         }
 
-        // Match multi-line or single-line TOOL directives: TOOL:tool_name PARAM:param1=val1 PARAM:param2=val2...
+        // 1. Check for standard markdown code blocks targeting a file (e.g. ```path/to/file.ext\n...\n``` or file: path\n```...\n```)
+        java.util.regex.Pattern fileBlockPattern = java.util.regex.Pattern.compile(
+                "(?:(?:file|create|update|in|modify|path):?\\s*[`\"]?([a-zA-Z0-9_./\\-]+\\.[a-zA-Z0-9]+)[`\"]?[\\s\\S]*?```(?:[a-zA-Z0-9]*)\\n([\\s\\S]*?)```)",
+                java.util.regex.Pattern.CASE_INSENSITIVE
+        );
+        java.util.regex.Matcher m = fileBlockPattern.matcher(response);
+        while (m.find()) {
+            String path = m.group(1).trim();
+            String content = m.group(2);
+            codeChangeExecutor.applyFileChange(workspace, path, content);
+        }
+
+        // 2. Match multi-line or single-line TOOL directives: TOOL:tool_name PARAM:param1=val1 PARAM:param2=val2...
         String[] toolBlocks = response.split("(?=TOOL:)");
         for (String block : toolBlocks) {
             String trimmed = block.trim();

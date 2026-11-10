@@ -102,7 +102,9 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
     private PermissionManager permissionManager;
     private ToolRegistry toolRegistry;
     private AiContextManager aiContextManager;
-    private AiInferenceService aiInferenceService;
+    private volatile AiInferenceService aiInferenceService;
+    private ServiceRegistration<AiInferenceService> aiInferenceServiceRegistration;
+    private volatile boolean aiServiceRunning = false;
     private GitService gitService;
     private BuildAndTestService buildAndTestService;
     private CodeReviewService codeReviewService;
@@ -392,6 +394,7 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
         this.taskOrchestrator.setTaskRecoveryService(this.taskRecoveryService);
         this.taskOrchestrator.setBuildAndQualityService(this.buildAndTestService);
         this.taskOrchestrator.setTaskInstructionRepository(this.taskInstructionRepository);
+        this.taskOrchestrator.setModelRegistry(this.aiModelRegistryService);
         this.taskOrchestrator.start();
 
         // Task Intake Service
@@ -591,7 +594,11 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
             registerService(PermissionManager.class, this.permissionManager);
             registerService(ToolRegistry.class, this.toolRegistry);
             registerService(AiContextManager.class, this.aiContextManager);
-            registerService(AiInferenceService.class, this.aiInferenceService);
+            if (this.aiInferenceService != null) {
+                this.aiInferenceServiceRegistration = bundleContext.registerService(AiInferenceService.class, this.aiInferenceService, null);
+                this.serviceRegistrations.add(this.aiInferenceServiceRegistration);
+                this.aiServiceRunning = true;
+            }
             registerService(eu.kalafatic.tryst.domain.ai.AiModelRegistryService.class, this.aiModelRegistryService);
             registerService(GitService.class, this.gitService);
             registerService(BuildAndTestService.class, this.buildAndTestService);
@@ -910,6 +917,52 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
 
     public AiInferenceService getAiInferenceService() {
         return aiInferenceService;
+    }
+
+    public synchronized boolean isAiServiceRunning() {
+        return aiServiceRunning && aiInferenceService != null;
+    }
+
+    public synchronized void startAiService() {
+        if (configuration == null) {
+            onConfigurationInitialization();
+        }
+        if (this.aiInferenceService == null) {
+            this.aiInferenceService = new OllamaClient(
+                    configuration.ollamaEndpoint(),
+                    Duration.ofSeconds(configuration.requestTimeoutSeconds())
+            );
+        }
+        if (this.aiMonitoringService != null && this.aiInferenceService instanceof OllamaClient client) {
+            this.aiMonitoringService.setActiveModel(configuration.defaultModel());
+        }
+        if (bundleContext != null && aiInferenceServiceRegistration == null && this.aiInferenceService != null) {
+            aiInferenceServiceRegistration = bundleContext.registerService(AiInferenceService.class, this.aiInferenceService, null);
+            serviceRegistrations.add(aiInferenceServiceRegistration);
+        }
+        this.aiServiceRunning = true;
+        if (serverReadinessService != null) {
+            serverReadinessService.markHealthy("AiProvider", java.util.Map.of("endpoint", configuration.ollamaEndpoint()));
+        }
+        TrystLog.info(ApplicationLifecycleCoordinator.class, "TRYST AI Inference Service started.");
+    }
+
+    public synchronized void stopAiService() {
+        if (aiInferenceServiceRegistration != null) {
+            try {
+                aiInferenceServiceRegistration.unregister();
+            } catch (Exception ignored) {
+            }
+            serviceRegistrations.remove(aiInferenceServiceRegistration);
+            aiInferenceServiceRegistration = null;
+        }
+        this.aiServiceRunning = false;
+        if (serverReadinessService != null) {
+            serverReadinessService.updateHealth("AiProvider",
+                    eu.kalafatic.tryst.core.lifecycle.ServerReadinessService.ComponentState.STOPPED,
+                    "AI service stopped by user", java.util.Map.of());
+        }
+        TrystLog.info(ApplicationLifecycleCoordinator.class, "TRYST AI Inference Service stopped.");
     }
 
     public eu.kalafatic.tryst.domain.ai.AiModelRegistryService getAiModelRegistryService() {
