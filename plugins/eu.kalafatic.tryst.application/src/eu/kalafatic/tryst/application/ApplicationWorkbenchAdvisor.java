@@ -26,13 +26,13 @@ public class ApplicationWorkbenchAdvisor extends WorkbenchAdvisor {
         this.coordinator = coordinator;
     }
 
-    private static ApplicationLifecycleCoordinator resolveCoordinator() {
+    public static ApplicationLifecycleCoordinator resolveCoordinator() {
         ApplicationLifecycleCoordinator coord = TrystApplication.getCoordinator();
         if (coord != null) {
             return coord;
         }
         TrystApplicationPlugin plugin = TrystApplicationPlugin.getDefault();
-        if (plugin != null) {
+        if (plugin != null && plugin.getLifecycleCoordinator() != null) {
             return plugin.getLifecycleCoordinator();
         }
         return null;
@@ -40,7 +40,10 @@ public class ApplicationWorkbenchAdvisor extends WorkbenchAdvisor {
 
     @Override
     public WorkbenchWindowAdvisor createWorkbenchWindowAdvisor(IWorkbenchWindowConfigurer configurer) {
-        return new ApplicationWorkbenchWindowAdvisor(configurer);
+        if (coordinator == null) {
+            coordinator = resolveCoordinator();
+        }
+        return new ApplicationWorkbenchWindowAdvisor(configurer, coordinator);
     }
 
     @Override
