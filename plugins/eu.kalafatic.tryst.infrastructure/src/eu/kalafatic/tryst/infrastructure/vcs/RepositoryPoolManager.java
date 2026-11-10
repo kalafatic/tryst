@@ -78,19 +78,23 @@ public class RepositoryPoolManager {
 
     private void recordMirrorPersistence(String repoUrl, Path mirrorDir) {
         if (databaseManager == null) return;
-        try (var conn = databaseManager.getConnection();
-             var stmt = conn.prepareStatement(
-                     "INSERT INTO repository_mirrors (id, repository_url, mirror_path, last_sync_at, status) " +
-                     "VALUES (?, ?, ?, ?, ?) " +
-                     "ON CONFLICT(repository_url) DO UPDATE SET mirror_path = excluded.mirror_path, last_sync_at = excluded.last_sync_at, status = excluded.status")) {
-            stmt.setString(1, java.util.UUID.randomUUID().toString());
-            stmt.setString(2, repoUrl);
-            stmt.setString(3, mirrorDir.toAbsolutePath().toString());
-            stmt.setString(4, java.time.Instant.now().toString());
-            stmt.setString(5, "READY");
-            stmt.executeUpdate();
-        } catch (Exception e) {
-            TrystLog.warn(RepositoryPoolManager.class, "Failed to persist repository mirror metadata: " + e.getMessage());
+        synchronized (databaseManager.getLock()) {
+            try {
+                var conn = databaseManager.getConnection();
+                try (var stmt = conn.prepareStatement(
+                        "INSERT INTO repository_mirrors (id, repository_url, mirror_path, last_sync_at, status) " +
+                        "VALUES (?, ?, ?, ?, ?) " +
+                        "ON CONFLICT(repository_url) DO UPDATE SET mirror_path = excluded.mirror_path, last_sync_at = excluded.last_sync_at, status = excluded.status")) {
+                    stmt.setString(1, java.util.UUID.randomUUID().toString());
+                    stmt.setString(2, repoUrl);
+                    stmt.setString(3, mirrorDir.toAbsolutePath().toString());
+                    stmt.setString(4, java.time.Instant.now().toString());
+                    stmt.setString(5, "READY");
+                    stmt.executeUpdate();
+                }
+            } catch (Exception e) {
+                TrystLog.warn(RepositoryPoolManager.class, "Failed to persist repository mirror metadata: " + e.getMessage());
+            }
         }
     }
 
