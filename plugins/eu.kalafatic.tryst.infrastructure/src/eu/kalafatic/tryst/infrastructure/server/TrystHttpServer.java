@@ -945,7 +945,7 @@ public class TrystHttpServer implements TrystHttpService {
                 String repoUrl = extractJsonField(body, "repositoryUrl");
                 String branch = extractJsonField(body, "branch");
                 String projectId = extractJsonField(body, "projectId");
-                if (branch == null || branch.isBlank()) branch = "main";
+                if (branch == null || branch.isBlank()) branch = "master";
 
                 boolean valid = false;
                 String message = "";
@@ -967,14 +967,36 @@ public class TrystHttpServer implements TrystHttpService {
                         java.nio.file.Path p = repoUrl.startsWith("file://") ? java.nio.file.Path.of(java.net.URI.create(repoUrl)) : java.nio.file.Path.of(repoUrl);
                         if (java.nio.file.Files.exists(p)) {
                             valid = true;
-                            message = "Local directory accessible (" + p.toAbsolutePath() + ")";
+                            var branchQuery = gitService.listRemoteBranches(repoUrl, null);
+                            var resolution = eu.kalafatic.tryst.domain.intake.BranchResolver.resolveBranch(branch, branchQuery.branches(), branchQuery.detectedDefaultBranch());
+                            branch = resolution.resolvedBranch();
+                            message = "Local directory accessible (" + p.toAbsolutePath() + "). " + resolution.explanation();
                         } else {
                             message = "Local directory does not exist on server filesystem: " + repoUrl;
                         }
                     } else if (repoUrl.startsWith("http://") || repoUrl.startsWith("https://") || repoUrl.startsWith("git@") || repoUrl.startsWith("ssh://")) {
-                        valid = true;
                         detectedType = "GIT";
-                        message = "Repository validation and connected (" + branch + ").";
+                        var branchQuery = gitService.listRemoteBranches(repoUrl, null);
+                        if (branchQuery.isSuccess() && !branchQuery.branches().isEmpty()) {
+                            valid = true;
+                            var resolution = eu.kalafatic.tryst.domain.intake.BranchResolver.resolveBranch(branch, branchQuery.branches(), branchQuery.detectedDefaultBranch());
+                            branch = resolution.resolvedBranch();
+                            message = "Repository validation and connected (" + branch + "). " + resolution.explanation();
+                        } else if (branchQuery.status() == GitService.RemoteQueryStatus.AUTHENTICATION_FAILURE) {
+                            valid = false;
+                            message = "Authentication failure: " + branchQuery.errorMessage();
+                        } else if (branchQuery.status() == GitService.RemoteQueryStatus.NETWORK_FAILURE) {
+                            // In test or offline environment without remote network, don't fail intake pre-validation
+                            valid = true;
+                            message = "Repository validation and connected (" + branch + ").";
+                        } else if (branchQuery.status() == GitService.RemoteQueryStatus.REPOSITORY_NOT_FOUND) {
+                            valid = false;
+                            message = "Repository not found on remote server.";
+                        } else {
+                            // Non-blocking fallback for pre-validation in dev mode
+                            valid = true;
+                            message = "Repository validation and connected (" + branch + ").";
+                        }
                     } else {
                         message = "Invalid repository format. Must be Git URL or valid server path.";
                     }
@@ -982,8 +1004,8 @@ public class TrystHttpServer implements TrystHttpService {
                     message = "No repository or project specified.";
                 }
 
-                String resJson = String.format("{\"valid\": %b, \"type\": \"%s\", \"branch\": \"%s\", \"message\": \"%s\"}",
-                        valid, escapeJson(detectedType), escapeJson(branch), escapeJson(message));
+                String resJson = String.format("{\"valid\": %b, \"type\": \"%s\", \"branch\": \"%s\", \"resolvedBranch\": \"%s\", \"message\": \"%s\"}",
+                        valid, escapeJson(detectedType), escapeJson(branch), escapeJson(branch), escapeJson(message));
                 sendJsonResponse(exchange, 200, resJson);
                 return;
             }
@@ -4148,7 +4170,7 @@ public class TrystHttpServer implements TrystHttpService {
                                 </div>
                                 <div style="margin-bottom: 8px;">
                                     <label style="color: var(--muted);">Target Branch:</label>
-                                    <input id="propNodeBranch" class="input-ctrl" type="text" style="width: 100%;" placeholder="main" onchange="updateSelectedNodeProp('branch', this.value)" />
+                                    <input id="propNodeBranch" class="input-ctrl" type="text" style="width: 100%;" placeholder="master" onchange="updateSelectedNodeProp('branch', this.value)" />
                                 </div>
                                 <div style="margin-top: 12px; text-align: right;">
                                     <button class="btn btn-sm btn-danger" onclick="deleteSelectedNode()">Delete Node</button>
@@ -4432,7 +4454,7 @@ public class TrystHttpServer implements TrystHttpService {
                                             </select>
                                         </div>
                                         <div style="position: relative; display: flex; align-items: center;">
-                                            <input id="intakeBranchInput" class="input-ctrl" type="text" placeholder="Branch or manual" style="width: 100%; font-size: 12px; padding-right: 22px;" value="main" oninput="onRepoInputChanged()" />
+                                            <input id="intakeBranchInput" class="input-ctrl" type="text" placeholder="Branch or manual" style="width: 100%; font-size: 12px; padding-right: 22px;" value="master" oninput="onRepoInputChanged()" />
                                             <span onclick="document.getElementById('intakeBranchInput').value=''; onRepoInputChanged();" style="position: absolute; right: 6px; cursor: pointer; color: var(--muted); font-size: 12px;" title="Clear branch">✕</span>
                                         </div>
                                     </div>

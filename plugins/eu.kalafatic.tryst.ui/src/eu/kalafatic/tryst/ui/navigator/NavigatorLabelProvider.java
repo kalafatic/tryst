@@ -28,6 +28,8 @@ public class NavigatorLabelProvider extends LabelProvider {
                 case TASK -> getTaskPrefix(node);
                 case TASK_QUEUE -> "⏳ ";
                 case TASK_RUNNING -> "⚙️ ";
+                case TASK_PAUSED -> "⏸️ ";
+                case TASK_ARCHIVED -> "📦 ";
                 case TASK_COMPLETED -> "✅ ";
                 case TASK_FAILED -> "❌ ";
                 case TASK_CANCELLED -> "⏹️ ";

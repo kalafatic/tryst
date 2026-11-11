@@ -52,7 +52,7 @@ public class Workspace {
                      WorkspaceStatus status,
                      Instant createdAt,
                      Instant updatedAt) {
-        this(id, rootPath, ownerId, taskId, null, "main", status, createdAt, updatedAt, Map.of());
+        this(id, rootPath, ownerId, taskId, null, "master", status, createdAt, updatedAt, Map.of());
     }
 
     public Workspace(String id,
@@ -70,7 +70,7 @@ public class Workspace {
         this.ownerId = ownerId != null && !ownerId.isBlank() ? ownerId : Project.DEFAULT_OWNER_ID;
         this.taskId = taskId;
         this.repositoryUrl = repositoryUrl != null ? repositoryUrl : "";
-        this.branch = branch != null && !branch.isBlank() ? branch : "main";
+        this.branch = branch != null && !branch.isBlank() ? branch : "master";
         this.status = Objects.requireNonNull(status, "status must not be null");
         this.createdAt = Objects.requireNonNull(createdAt, "createdAt must not be null");
         this.updatedAt = Objects.requireNonNull(updatedAt, "updatedAt must not be null");
@@ -109,7 +109,7 @@ public class Workspace {
     }
 
     public void setBranch(String branch) {
-        this.branch = branch != null && !branch.isBlank() ? branch : "main";
+        this.branch = branch != null && !branch.isBlank() ? branch : "master";
         this.updatedAt = Instant.now();
     }
 

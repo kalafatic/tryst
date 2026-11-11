@@ -106,7 +106,7 @@ public class RepositoryPoolManager {
         Objects.requireNonNull(mirrorDir, "mirrorDir must not be null");
         Objects.requireNonNull(targetWorkspaceDir, "targetWorkspaceDir must not be null");
 
-        String effectiveBranch = (branch != null && !branch.isBlank()) ? branch : "main";
+        String effectiveBranch = (branch != null && !branch.isBlank()) ? branch : "master";
         try {
             Files.createDirectories(targetWorkspaceDir.getParent());
             List<String> cloneArgs = new ArrayList<>();

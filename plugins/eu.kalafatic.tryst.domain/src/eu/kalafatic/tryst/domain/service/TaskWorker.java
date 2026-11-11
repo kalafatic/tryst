@@ -413,7 +413,7 @@ public class TaskWorker implements Callable<ExecutionResult> {
                     review = new CodeReview(
                             projectId,
                             task.getId(),
-                            context.getWorkspace() != null ? context.getWorkspace().getBranch() : "main",
+                            context.getWorkspace() != null ? context.getWorkspace().getBranch() : "master",
                             diff,
                             effectiveBuildStatus,
                             effectiveTestSummary
@@ -531,6 +531,12 @@ public class TaskWorker implements Callable<ExecutionResult> {
     private void checkCancelled() throws TaskCancelledException {
         if (context.isCancelled() || Thread.currentThread().isInterrupted()) {
             throw new TaskCancelledException("Task execution cancelled");
+        }
+        if (context.isPaused()) {
+            Task task = context.getTask();
+            lifecycleManager.transition(task, TaskStatus.PAUSED, "Execution safely suspended at stage boundary", null);
+            recordRecoveryCheckpoint(task, TaskStatus.PAUSED, "{\"stage\":\"PAUSED\",\"interruptedAt\":\"" + task.getStatus() + "\"}");
+            throw new TaskCancelledException("Task execution safely paused at stage boundary");
         }
     }
 

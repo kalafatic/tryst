@@ -72,23 +72,41 @@ public class ConfigurationPage extends AbstractTrystEditorPage {
 
         Group portGroup = new Group(parent, SWT.NONE);
         portGroup.setText("Network Endpoints & Port Offsets (+30000 Base)");
-        portGroup.setLayout(new GridLayout(2, false));
+        portGroup.setLayout(new GridLayout(3, false));
         portGroup.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
 
         createRow(portGroup, "Network Mode:");
         lblNetworkMode = createValueLabel(portGroup, "LOOPBACK");
+        new Label(portGroup, SWT.NONE); // spacer
 
         createRow(portGroup, "Effective Bind Address:");
         lblBindAddress = createValueLabel(portGroup, "127.0.0.1");
+        new Label(portGroup, SWT.NONE);
 
         createRow(portGroup, "HTTP Listener Port:");
         lblHttpPort = createValueLabel(portGroup, "38080");
+        new Label(portGroup, SWT.NONE);
 
         createRow(portGroup, "Effective Access URL:");
         lblEffectiveUrl = createValueLabel(portGroup, "-");
+        Button btnCopyUrl = new Button(portGroup, SWT.PUSH);
+        btnCopyUrl.setText("📋 Copy URL");
+        btnCopyUrl.addListener(SWT.Selection, e -> {
+            Clipboard cb = new Clipboard(getControl().getDisplay());
+            try {
+                cb.setContents(new Object[]{lblEffectiveUrl.getText()}, new Transfer[]{TextTransfer.getInstance()});
+            } finally {
+                cb.dispose();
+            }
+        });
+
+        createRow(portGroup, "Detected LAN Address:");
+        Label lblLanAddress = createValueLabel(portGroup, eu.kalafatic.tryst.core.config.NetworkAddressDetector.detectLanIpAddress());
+        new Label(portGroup, SWT.NONE);
 
         createRow(portGroup, "API Listener Port:");
         lblApiPort = createValueLabel(portGroup, "38180");
+        new Label(portGroup, SWT.NONE);
 
         Group dbGroup = new Group(parent, SWT.NONE);
         dbGroup.setText("Database Maintenance & Schema");

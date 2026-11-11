@@ -161,6 +161,14 @@ public final class TrystUiServices {
         return getService(SessionTaskOrchestrator.class);
     }
 
+    public static eu.kalafatic.tryst.domain.service.TaskOrchestrator getTaskOrchestrator() {
+        var coord = eu.kalafatic.tryst.application.TrystApplication.getCoordinator();
+        if (coord != null && coord.getTaskOrchestrator() != null) {
+            return coord.getTaskOrchestrator();
+        }
+        return getService(eu.kalafatic.tryst.domain.service.TaskOrchestrator.class);
+    }
+
     public static AutonomousDevelopmentService getAutonomousDevelopmentService() {
         return getService(AutonomousDevelopmentService.class);
     }

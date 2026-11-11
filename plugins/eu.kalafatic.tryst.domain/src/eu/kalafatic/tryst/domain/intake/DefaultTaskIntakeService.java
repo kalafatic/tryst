@@ -90,7 +90,7 @@ public class DefaultTaskIntakeService implements TaskIntakeService {
 
         // 3. Repository & Branch validation
         String repoUrl = request.repositoryUrl() != null ? request.repositoryUrl().trim() : "";
-        String branch = (request.branch() != null && !request.branch().trim().isEmpty()) ? request.branch().trim() : "main";
+        String branch = (request.branch() != null && !request.branch().trim().isEmpty()) ? request.branch().trim() : "master";
         String projectId = request.projectId() != null ? request.projectId().trim() : null;
         if ("null".equalsIgnoreCase(projectId)) {
             projectId = null;
@@ -191,7 +191,7 @@ public class DefaultTaskIntakeService implements TaskIntakeService {
             projectId = null;
         }
         String repoUrl = request.repositoryUrl() != null && !request.repositoryUrl().trim().isEmpty() ? request.repositoryUrl().trim() : null;
-        String branch = (request.branch() != null && !request.branch().trim().isEmpty()) ? request.branch().trim() : "main";
+        String branch = (request.branch() != null && !request.branch().trim().isEmpty()) ? request.branch().trim() : "master";
 
         // Auto-provision or reuse existing Project if repository URL/path is specified without a local project
         if (projectId == null && repoUrl != null && projectRepository != null) {

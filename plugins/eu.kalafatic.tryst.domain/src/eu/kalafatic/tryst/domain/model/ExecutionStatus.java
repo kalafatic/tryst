@@ -12,6 +12,8 @@ public enum ExecutionStatus {
     APPROVED,
     REJECTED,
     COMMITTING,
+    PAUSED,
+    ARCHIVED,
     COMPLETED,
     FAILED,
     CANCELLED,

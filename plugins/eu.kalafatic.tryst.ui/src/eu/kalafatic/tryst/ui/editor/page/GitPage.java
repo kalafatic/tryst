@@ -110,7 +110,7 @@ public class GitPage extends AbstractTrystEditorPage {
             GitService git = TrystUiServices.getGitService();
             if (git != null) {
                 try {
-                    var res = git.pull(currentProject.getLocation(), "origin", "main", null);
+                    var res = git.pull(currentProject.getLocation(), "origin", "master", null);
                     MessageDialog.openInformation(getControl().getShell(), "Git Pull",
                             res.isSuccess() ? "Pull successful:\n" + res.output() : "Pull failed:\n" + res.error());
                     refresh();
@@ -198,7 +198,7 @@ public class GitPage extends AbstractTrystEditorPage {
                 try {
                     var branchResult = git.listBranches(currentProject.getLocation());
                     List<String> branches = new java.util.ArrayList<>();
-                    String currentBranch = "main";
+                    String currentBranch = "master";
                     if (branchResult != null && branchResult.output() != null) {
                         for (String line : branchResult.output().lines().toList()) {
                             String trimmed = line.trim();

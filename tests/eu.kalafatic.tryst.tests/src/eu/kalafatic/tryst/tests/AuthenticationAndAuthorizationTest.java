@@ -36,8 +36,13 @@ class AuthenticationAndAuthorizationTest {
     private PermissionManager permissionManager;
     private AuthenticationService authService;
 
+    private String savedDevMode;
+
     @BeforeEach
     void setUp() {
+        savedDevMode = System.getProperty("tryst.dev.mode");
+        System.setProperty("tryst.dev.mode", "false");
+
         Path dbPath = tempDir.resolve("auth_test.db");
         databaseManager = new SqliteDatabaseManager(dbPath);
         databaseManager.initialize();
@@ -51,6 +56,11 @@ class AuthenticationAndAuthorizationTest {
 
     @AfterEach
     void tearDown() {
+        if (savedDevMode != null) {
+            System.setProperty("tryst.dev.mode", savedDevMode);
+        } else {
+            System.clearProperty("tryst.dev.mode");
+        }
         if (databaseManager != null) {
             databaseManager.close();
         }

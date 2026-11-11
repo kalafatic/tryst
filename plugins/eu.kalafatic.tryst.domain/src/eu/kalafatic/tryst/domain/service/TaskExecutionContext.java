@@ -22,6 +22,7 @@ public final class TaskExecutionContext {
     private final String workerId;
     private final String modelName;
     private final AtomicBoolean cancelled = new AtomicBoolean(false);
+    private final AtomicBoolean paused = new AtomicBoolean(false);
 
     public TaskExecutionContext(Task task, Project project, Workspace workspace, String userId, String workerId, String modelName) {
         this.task = Objects.requireNonNull(task, "task must not be null");
@@ -74,6 +75,18 @@ public final class TaskExecutionContext {
 
     public boolean isCancelled() {
         return cancelled.get();
+    }
+
+    public void pause() {
+        paused.set(true);
+    }
+
+    public void resume() {
+        paused.set(false);
+    }
+
+    public boolean isPaused() {
+        return paused.get();
     }
 
     @Override

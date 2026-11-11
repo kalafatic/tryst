@@ -28,6 +28,8 @@ public enum TaskStatus {
     APPROVED,
     REJECTED,
     COMMITTING,
+    PAUSED,
+    ARCHIVED,
     COMPLETED,
     FAILED,
     CANCELLED,
@@ -37,7 +39,7 @@ public enum TaskStatus {
      * Checks if this is a terminal state from which no further normal progression can be made.
      */
     public boolean isTerminal() {
-        return this == COMPLETED || this == FAILED || this == CANCELLED;
+        return this == COMPLETED || this == FAILED || this == CANCELLED || this == ARCHIVED;
     }
 
     /**

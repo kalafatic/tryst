@@ -51,7 +51,7 @@ public class GitCommitRecord {
         this.authorId = Objects.requireNonNull(authorId, "authorId must not be null");
         this.commitMessage = Objects.requireNonNull(commitMessage, "commitMessage must not be null");
         this.contentFingerprint = Objects.requireNonNull(contentFingerprint, "contentFingerprint must not be null");
-        this.branch = branch != null && !branch.isBlank() ? branch : "main";
+        this.branch = branch != null && !branch.isBlank() ? branch : "master";
         this.filesChanged = Math.max(0, filesChanged);
         this.status = status != null ? status : CommitStatus.COMMITTED;
         this.committedAt = committedAt != null ? committedAt : Instant.now();

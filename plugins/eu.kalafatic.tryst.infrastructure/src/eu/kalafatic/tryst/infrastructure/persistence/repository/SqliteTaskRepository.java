@@ -436,6 +436,8 @@ public class SqliteTaskRepository implements TaskRepository {
                     case APPROVED -> TaskStatus.APPROVED;
                     case REJECTED -> TaskStatus.REJECTED;
                     case COMMITTING -> TaskStatus.COMMITTING;
+                    case PAUSED -> TaskStatus.PAUSED;
+                    case ARCHIVED -> TaskStatus.ARCHIVED;
                     case COMPLETED -> TaskStatus.COMPLETED;
                     case FAILED -> TaskStatus.FAILED;
                     case CANCELLED -> TaskStatus.CANCELLED;

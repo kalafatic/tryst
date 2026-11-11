@@ -188,13 +188,93 @@ public final class TrystLog {
                 }
             }
 
-            // 4. Dispatch to Eclipse Platform log
+            // 4. Dispatch to Eclipse Platform log and Standard Eclipse Console
             dispatchToEclipseLog(level, caller, bundleId, category, sanitizedMessage, correlationId, taskId, throwable);
+            dispatchToEclipseConsole(entry);
 
         } catch (Throwable t) {
             // Logging itself must never crash application
             fallbackLog(level, resolvePluginId(caller), rawMessage, throwable);
         }
+    }
+
+    private static volatile Object eclipseMessageConsole;
+    private static volatile Object eclipseConsoleOutputStream;
+    private static volatile boolean eclipseConsoleInitAttempted = false;
+
+    private static void dispatchToEclipseConsole(LogEntry entry) {
+        try {
+            if (!eclipseConsoleInitAttempted) {
+                initEclipseConsole();
+            }
+            if (eclipseConsoleOutputStream != null) {
+                String line = formatConsoleLine(entry);
+                eclipseConsoleOutputStream.getClass().getMethod("println", String.class).invoke(eclipseConsoleOutputStream, line);
+            }
+        } catch (Throwable ignored) {
+            // Console plugin not loaded or in headless/test environment
+        }
+    }
+
+    private static synchronized void initEclipseConsole() {
+        if (eclipseConsoleInitAttempted) return;
+        eclipseConsoleInitAttempted = true;
+        try {
+            Class<?> pluginClass = Class.forName("org.eclipse.ui.console.ConsolePlugin");
+            Object consolePlugin = pluginClass.getMethod("getDefault").invoke(null);
+            if (consolePlugin == null) return;
+            Object consoleManager = pluginClass.getMethod("getConsoleManager").invoke(consolePlugin);
+            if (consoleManager == null) return;
+
+            Class<?> msgConsoleClass = Class.forName("org.eclipse.ui.console.MessageConsole");
+            Object[] existingConsoles = (Object[]) consoleManager.getClass().getMethod("getConsoles").invoke(consoleManager);
+            for (Object c : existingConsoles) {
+                if (c != null) {
+                    String name = (String) c.getClass().getMethod("getName").invoke(c);
+                    if ("TRYST Console".equals(name)) {
+                        eclipseMessageConsole = c;
+                        break;
+                    }
+                }
+            }
+
+            if (eclipseMessageConsole == null) {
+                Class<?> imgDescClass = null;
+                try {
+                    imgDescClass = Class.forName("org.eclipse.jface.resource.ImageDescriptor");
+                } catch (Throwable ignored) {}
+                if (imgDescClass != null) {
+                    eclipseMessageConsole = msgConsoleClass.getConstructor(String.class, imgDescClass)
+                            .newInstance("TRYST Console", null);
+                } else {
+                    eclipseMessageConsole = msgConsoleClass.getConstructor(String.class).newInstance("TRYST Console");
+                }
+                Class<?> iconsoleClass = Class.forName("org.eclipse.ui.console.IConsole");
+                Object array = java.lang.reflect.Array.newInstance(iconsoleClass, 1);
+                java.lang.reflect.Array.set(array, 0, eclipseMessageConsole);
+                consoleManager.getClass().getMethod("addConsoles", array.getClass()).invoke(consoleManager, array);
+            }
+
+            eclipseConsoleOutputStream = eclipseMessageConsole.getClass().getMethod("newMessageStream").invoke(eclipseMessageConsole);
+        } catch (Throwable ignored) {
+            // Console framework optional / not running
+        }
+    }
+
+    private static String formatConsoleLine(LogEntry entry) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(entry.timestamp()).append(" [").append(entry.level()).append("] [").append(entry.category()).append("]");
+        if (entry.correlationId() != null) {
+            sb.append(" [corr:").append(entry.correlationId()).append("]");
+        }
+        if (entry.taskId() != null) {
+            sb.append(" [task:").append(entry.taskId()).append("]");
+        }
+        sb.append(" ").append(entry.message());
+        if (entry.formattedStackTrace() != null) {
+            sb.append("\n").append(entry.formattedStackTrace());
+        }
+        return sb.toString();
     }
 
     private static void trimBuffer() {

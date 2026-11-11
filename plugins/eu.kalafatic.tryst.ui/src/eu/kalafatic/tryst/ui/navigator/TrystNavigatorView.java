@@ -327,7 +327,7 @@ public class TrystNavigatorView extends ViewPart implements WorkspaceChangeListe
                             GitService git = TrystUiServices.getGitService();
                             if (git != null) {
                                 try {
-                                    var res = git.pull(p.getLocation(), "origin", "main", null);
+                                    var res = git.pull(p.getLocation(), "origin", "master", null);
                                     MessageDialog.openInformation(getSite().getShell(), "Git Pull",
                                             res.isSuccess() ? "Pulled successfully:\n" + res.output() : "Pull status:\n" + res.error());
                                     refreshAsync();
@@ -355,19 +355,21 @@ public class TrystNavigatorView extends ViewPart implements WorkspaceChangeListe
                     });
                 }
             }
-            case TASK, TASK_RUNNING, TASK_COMPLETED, TASK_FAILED, TASK_CANCELLED -> {
+            case TASK, TASK_QUEUE, TASK_RUNNING, TASK_PAUSED, TASK_ARCHIVED, TASK_COMPLETED, TASK_FAILED, TASK_CANCELLED -> {
                 String taskId = null;
-                boolean canCancel = false;
+                TaskStatus tStatus = null;
                 if (node.getDomainObject() instanceof AgentTask task) {
                     taskId = task.getId();
-                    canCancel = (task.getStatus() == ExecutionStatus.RUNNING || task.getStatus() == ExecutionStatus.CLAIMED);
+                    tStatus = task.getTaskStatus();
                 } else if (node.getDomainObject() instanceof Task task) {
                     taskId = task.getId();
-                    canCancel = task.getStatus().isActive();
+                    tStatus = task.getStatus();
                 }
 
                 if (taskId != null) {
                     final String tid = taskId;
+                    final TaskStatus currentStatus = tStatus != null ? tStatus : TaskStatus.CREATED;
+
                     manager.add(new Action("Open Task Details") {
                         @Override
                         public void run() {
@@ -381,19 +383,91 @@ public class TrystNavigatorView extends ViewPart implements WorkspaceChangeListe
                             copyToClipboard(tid);
                         }
                     });
-                    if (canCancel) {
-                        manager.add(new Action("Cancel Task Execution") {
+                    manager.add(new Separator());
+
+                    var orch = TrystUiServices.getTaskOrchestrator();
+
+                    if (currentStatus == TaskStatus.PAUSED) {
+                        manager.add(new Action("Resume Task") {
                             @Override
                             public void run() {
-                                boolean confirm = MessageDialog.openConfirm(getSite().getShell(), "Cancel Task", "Cancel execution of task: " + node.getName() + "?");
+                                if (orch != null) orch.resumeTask(tid, null);
+                                refreshAsync();
+                            }
+                        });
+                    }
+
+                    if (currentStatus.isActive()) {
+                        manager.add(new Action("Pause Task") {
+                            @Override
+                            public void run() {
+                                if (orch != null) orch.pauseTask(tid, null);
+                                refreshAsync();
+                            }
+                        });
+                        manager.add(new Action("Stop / Cancel Task") {
+                            @Override
+                            public void run() {
+                                boolean confirm = MessageDialog.openConfirm(getSite().getShell(), "Stop Task", "Stop execution of task: " + node.getName() + "?");
                                 if (confirm) {
-                                    var orch = TrystUiServices.getSessionTaskOrchestrator();
-                                    if (orch != null) orch.cancelCurrentExecution();
+                                    if (orch != null) orch.cancelTask(tid, "Stopped by user");
                                     refreshAsync();
                                 }
                             }
                         });
+                    } else if (currentStatus == TaskStatus.QUEUED || currentStatus == TaskStatus.CREATED) {
+                        manager.add(new Action("Start Task Now") {
+                            @Override
+                            public void run() {
+                                if (orch != null) orch.processNextTask();
+                                refreshAsync();
+                            }
+                        });
+                        manager.add(new Action("Move Up (Increase Priority)") {
+                            @Override
+                            public void run() {
+                                if (orch != null) orch.moveTaskUp(tid);
+                                refreshAsync();
+                            }
+                        });
+                        manager.add(new Action("Move Down (Decrease Priority)") {
+                            @Override
+                            public void run() {
+                                if (orch != null) orch.moveTaskDown(tid);
+                                refreshAsync();
+                            }
+                        });
+                        manager.add(new Action("Cancel Task") {
+                            @Override
+                            public void run() {
+                                if (orch != null) orch.cancelTask(tid, "Cancelled by user");
+                                refreshAsync();
+                            }
+                        });
                     }
+
+                    if (currentStatus != TaskStatus.ARCHIVED && (currentStatus.isTerminal() || currentStatus == TaskStatus.PAUSED)) {
+                        manager.add(new Action("Archive Task") {
+                            @Override
+                            public void run() {
+                                if (orch != null) orch.archiveTask(tid, null);
+                                refreshAsync();
+                            }
+                        });
+                    }
+
+                    manager.add(new Separator());
+                    manager.add(new Action("Delete Task") {
+                        @Override
+                        public void run() {
+                            boolean confirm = MessageDialog.openConfirm(getSite().getShell(), "Delete Task",
+                                    "Are you sure you want to delete task '" + node.getName() + "'?\nThis cannot be undone.");
+                            if (confirm) {
+                                if (orch != null) orch.deleteTask(tid, false, null);
+                                refreshAsync();
+                            }
+                        }
+                    });
                 }
             }
             case REVIEW_SESSION -> {
@@ -551,22 +625,28 @@ public class TrystNavigatorView extends ViewPart implements WorkspaceChangeListe
         sessionRoot.setChildren(sessionNodes);
         rootCategories.add(sessionRoot);
 
-        // 3. Tasks partitioned by lifecycle status
-        NavigatorNode taskPartitionRoot = new NavigatorNode("root-tasks-lifecycle", "Tasks by Status",
+        // 3. Tasks partitioned by lifecycle status (Running, Queued, Paused, Completed, Failed, Archived)
+        NavigatorNode taskPartitionRoot = new NavigatorNode("root-tasks-lifecycle", "Tasks",
                 NavigatorNode.NodeType.ROOT_CATEGORY, null, null);
         List<NavigatorNode> taskPartitionNodes = new ArrayList<>();
         List<AgentTask> allTasks = taskRepo != null ? taskRepo.findAll() : Collections.emptyList();
 
-        List<NavigatorNode> queuedTasks = new ArrayList<>();
         List<NavigatorNode> runningTasks = new ArrayList<>();
+        List<NavigatorNode> queuedTasks = new ArrayList<>();
+        List<NavigatorNode> pausedTasks = new ArrayList<>();
         List<NavigatorNode> completedTasks = new ArrayList<>();
         List<NavigatorNode> failedTasks = new ArrayList<>();
+        List<NavigatorNode> archivedTasks = new ArrayList<>();
         List<NavigatorNode> cancelledTasks = new ArrayList<>();
 
         for (AgentTask t : allTasks) {
             String label = "[" + t.getStatus() + "] " + t.getTitle();
             ExecutionStatus st = t.getStatus();
-            if (st == ExecutionStatus.COMPLETED) {
+            if (st == ExecutionStatus.PAUSED) {
+                pausedTasks.add(new NavigatorNode(t.getId(), label, NavigatorNode.NodeType.TASK_PAUSED, t, null));
+            } else if (st == ExecutionStatus.ARCHIVED) {
+                archivedTasks.add(new NavigatorNode(t.getId(), label, NavigatorNode.NodeType.TASK_ARCHIVED, t, null));
+            } else if (st == ExecutionStatus.COMPLETED) {
                 completedTasks.add(new NavigatorNode(t.getId(), label, NavigatorNode.NodeType.TASK_COMPLETED, t, null));
             } else if (st == ExecutionStatus.FAILED) {
                 failedTasks.add(new NavigatorNode(t.getId(), label, NavigatorNode.NodeType.TASK_FAILED, t, null));
@@ -579,13 +659,17 @@ public class TrystNavigatorView extends ViewPart implements WorkspaceChangeListe
             }
         }
 
+        NavigatorNode runningNode = new NavigatorNode("grp-running", "Running (" + runningTasks.size() + ")", NavigatorNode.NodeType.TASK_RUNNING, null, taskPartitionRoot);
+        runningNode.setChildren(runningTasks);
+        taskPartitionNodes.add(runningNode);
+
         NavigatorNode queuedNode = new NavigatorNode("grp-queued", "Queued (" + queuedTasks.size() + ")", NavigatorNode.NodeType.TASK_QUEUE, null, taskPartitionRoot);
         queuedNode.setChildren(queuedTasks);
         taskPartitionNodes.add(queuedNode);
 
-        NavigatorNode runningNode = new NavigatorNode("grp-running", "Running (" + runningTasks.size() + ")", NavigatorNode.NodeType.TASK_RUNNING, null, taskPartitionRoot);
-        runningNode.setChildren(runningTasks);
-        taskPartitionNodes.add(runningNode);
+        NavigatorNode pausedNode = new NavigatorNode("grp-paused", "Paused (" + pausedTasks.size() + ")", NavigatorNode.NodeType.TASK_PAUSED, null, taskPartitionRoot);
+        pausedNode.setChildren(pausedTasks);
+        taskPartitionNodes.add(pausedNode);
 
         NavigatorNode completedNode = new NavigatorNode("grp-completed", "Completed (" + completedTasks.size() + ")", NavigatorNode.NodeType.TASK_COMPLETED, null, taskPartitionRoot);
         completedNode.setChildren(completedTasks);
@@ -595,9 +679,15 @@ public class TrystNavigatorView extends ViewPart implements WorkspaceChangeListe
         failedNode.setChildren(failedTasks);
         taskPartitionNodes.add(failedNode);
 
-        NavigatorNode cancelledNode = new NavigatorNode("grp-cancelled", "Cancelled (" + cancelledTasks.size() + ")", NavigatorNode.NodeType.TASK_CANCELLED, null, taskPartitionRoot);
-        cancelledNode.setChildren(cancelledTasks);
-        taskPartitionNodes.add(cancelledNode);
+        NavigatorNode archivedNode = new NavigatorNode("grp-archived", "Archived (" + archivedTasks.size() + ")", NavigatorNode.NodeType.TASK_ARCHIVED, null, taskPartitionRoot);
+        archivedNode.setChildren(archivedTasks);
+        taskPartitionNodes.add(archivedNode);
+
+        if (!cancelledTasks.isEmpty()) {
+            NavigatorNode cancelledNode = new NavigatorNode("grp-cancelled", "Cancelled (" + cancelledTasks.size() + ")", NavigatorNode.NodeType.TASK_CANCELLED, null, taskPartitionRoot);
+            cancelledNode.setChildren(cancelledTasks);
+            taskPartitionNodes.add(cancelledNode);
+        }
 
         taskPartitionRoot.setChildren(taskPartitionNodes);
         rootCategories.add(taskPartitionRoot);

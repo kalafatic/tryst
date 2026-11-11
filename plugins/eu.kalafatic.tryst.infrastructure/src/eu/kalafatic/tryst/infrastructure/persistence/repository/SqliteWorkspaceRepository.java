@@ -71,7 +71,7 @@ public class SqliteWorkspaceRepository implements WorkspaceRepository {
                 pstmt.setString(5, workspace.getTaskId());
                 pstmt.setString(6, workspace.getStatus() != null ? workspace.getStatus().name() : WorkspaceStatus.ACTIVE.name());
                 pstmt.setString(7, workspace.getRepositoryUrl());
-                pstmt.setString(8, workspace.getBranch() != null ? workspace.getBranch() : "main");
+                pstmt.setString(8, workspace.getBranch() != null ? workspace.getBranch() : "master");
                 pstmt.setString(9, serializeMetadata(workspace.getMetadata()));
                 pstmt.setString(10, createdAt);
                 pstmt.setString(11, now);
@@ -237,7 +237,7 @@ public class SqliteWorkspaceRepository implements WorkspaceRepository {
         }
 
         String repoUrl = getColumnOrDefault(rs, "repository_url", null);
-        String branch = getColumnOrDefault(rs, "branch", "main");
+        String branch = getColumnOrDefault(rs, "branch", "master");
         String metadataJson = getColumnOrDefault(rs, "metadata_json", null);
 
         Instant createdAt = parseInstant(getColumnOrDefault(rs, "created_at", null));

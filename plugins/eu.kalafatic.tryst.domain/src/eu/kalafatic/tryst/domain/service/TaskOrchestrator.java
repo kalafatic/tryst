@@ -294,6 +294,95 @@ public class TaskOrchestrator {
         return taskQueue.cancel(taskId, reason);
     }
 
+    /**
+     * Safely pauses a task at the nearest execution boundary, preserving recoverable state.
+     */
+    public boolean pauseTask(String taskId, String userId) {
+        Objects.requireNonNull(taskId, "taskId must not be null");
+        Optional<Task> optTask = taskRepository.findTaskById(taskId);
+        if (optTask.isEmpty()) return false;
+        Task task = optTask.get();
+
+        TaskExecutionContext ctx = activeContexts.get(taskId);
+        if (ctx != null) {
+            ctx.pause();
+            TrystLog.info(TaskOrchestrator.class, "Requested pause for active task " + taskId);
+            return true;
+        }
+
+        // If queued, transition to PAUSED so claimNext won't pick it up
+        if (task.getStatus() == TaskStatus.QUEUED || task.getStatus() == TaskStatus.CREATED) {
+            lifecycleManager.transition(task, TaskStatus.PAUSED, "Paused in queue", null);
+            if (notificationService != null && userId != null) {
+                notificationService.notifyUser(userId, "TASK_PAUSED", "Task Paused: " + task.getTitle(),
+                        "Task execution paused in queue.", "task", taskId, userId + ":TASK_PAUSED:" + taskId);
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Resumes a previously paused task, continuing from its last recoverable state.
+     */
+    public boolean resumeTask(String taskId, String userId) {
+        Objects.requireNonNull(taskId, "taskId must not be null");
+        Optional<Task> optTask = taskRepository.findTaskById(taskId);
+        if (optTask.isEmpty()) return false;
+        Task task = optTask.get();
+
+        if (task.getStatus() == TaskStatus.PAUSED) {
+            lifecycleManager.transition(task, TaskStatus.QUEUED, "Resuming paused task", null);
+            taskQueue.enqueue(task);
+            if (notificationService != null && userId != null) {
+                notificationService.notifyUser(userId, "TASK_RESUMED", "Task Resumed: " + task.getTitle(),
+                        "Task queued for execution resumption.", "task", taskId, userId + ":TASK_RESUMED:" + taskId);
+            }
+            synchronized (this) {
+                notifyAll();
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Archives a completed, cancelled or failed task while preserving all history, logs, and artifacts.
+     */
+    public boolean archiveTask(String taskId, String userId) {
+        Objects.requireNonNull(taskId, "taskId must not be null");
+        Optional<Task> optTask = taskRepository.findTaskById(taskId);
+        if (optTask.isEmpty()) return false;
+        Task task = optTask.get();
+
+        lifecycleManager.transition(task, TaskStatus.ARCHIVED, "Task archived", null);
+        if (notificationService != null && userId != null) {
+            notificationService.notifyUser(userId, "TASK_ARCHIVED", "Task Archived: " + task.getTitle(),
+                    "Task moved to archive; history and logs preserved.", "task", taskId, userId + ":TASK_ARCHIVED:" + taskId);
+        }
+        return true;
+    }
+
+    /**
+     * Deletes task according to policy: cancels if running, deletes metadata and records audit log.
+     */
+    public boolean deleteTask(String taskId, boolean deleteWorkspace, String userId) {
+        Objects.requireNonNull(taskId, "taskId must not be null");
+        Optional<Task> optTask = taskRepository.findTaskById(taskId);
+        if (optTask.isEmpty()) return false;
+
+        cancelTask(taskId, "Task deleted by user");
+        if (deleteWorkspace && workspaceService != null) {
+            try {
+                var ws = workspaceService.getWorkspaceForTask(taskId);
+                if (ws != null) {
+                    workspaceService.cleanupWorkspace(ws.getId(), true);
+                }
+            } catch (Exception ignored) {}
+        }
+        return taskRepository.delete(taskId);
+    }
+
     public Optional<Task> getTask(String taskId) {
         return taskRepository.findTaskById(taskId);
     }
@@ -308,6 +397,14 @@ public class TaskOrchestrator {
 
     public int getQueueDepth() {
         return taskQueue.getQueueDepth();
+    }
+
+    public boolean moveTaskUp(String taskId) {
+        return taskQueue.moveUp(taskId);
+    }
+
+    public boolean moveTaskDown(String taskId) {
+        return taskQueue.moveDown(taskId);
     }
 
     public Map<String, TaskExecutionContext> getActiveContexts() {
