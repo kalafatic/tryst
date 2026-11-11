@@ -3836,6 +3836,23 @@ public class TrystHttpServer implements TrystHttpService {
                         .comment-box.resolved { opacity: 0.7; border-color: var(--green); background: #f0fdf4; }
                         select.input-ctrl, input.input-ctrl { background: #ffffff; border: 1px solid var(--border); color: var(--text); padding: 5px 8px; border-radius: 3px; font-size: 12px; font-family: inherit; }
 
+
+                        /* Task Lifecycle 13-Stage Stepper Component */
+                        .stepper-container { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 14px 18px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.03); }
+                        .stepper-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+                        .stepper-track { display: flex; align-items: center; justify-content: space-between; position: relative; overflow-x: auto; padding-bottom: 4px; }
+                        .stepper-step { display: flex; flex-direction: column; align-items: center; min-width: 80px; flex: 1; position: relative; z-index: 2; text-align: center; }
+                        .stepper-icon { width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold; background: #ffffff; border: 2px solid #cbd5e1; color: var(--muted); }
+                        .stepper-label { font-size: 9px; font-weight: 600; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.3px; text-align: center; white-space: nowrap; }
+                        .stepper-step.completed .stepper-icon { background: var(--green); border-color: var(--green); color: #ffffff; }
+                        .stepper-step.completed .stepper-label { color: var(--green); }
+                        .stepper-step.active .stepper-icon { background: #e0f2fe; border-color: var(--primary); color: var(--primary); box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.2); }
+                        .stepper-step.active .stepper-label { color: var(--primary); font-weight: 700; }
+                        .stepper-step.failed .stepper-icon { background: var(--red); border-color: var(--red); color: #ffffff; }
+                        .stepper-step.failed .stepper-label { color: var(--red); }
+                        .stepper-line { flex: 1; height: 2px; background: #e2e8f0; margin: 0 2px 16px 2px; }
+                        .stepper-line.completed { background: var(--green); }
+
                         /* Visual Workflow Designer Styles */
                         .wf-container { display: flex; height: calc(100vh - 50px); width: 100%; overflow: hidden; }
                         .wf-palette { width: 260px; min-width: 240px; background: var(--sidebar-bg); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto; padding: 14px; }
@@ -4172,6 +4189,17 @@ public class TrystHttpServer implements TrystHttpService {
                                         </select>
                                         <button class="btn btn-sm btn-primary" onclick="loadReviewDiff()">Refresh Diff</button>
                                         <span id="diffStatsBadge" style="margin-left: auto;" class="badge badge-info">Files: 0 | +0 -0</span>
+                                    </div>
+                                </div>
+
+                                <!-- Task Lifecycle 13-Stage Stepper -->
+                                <div class="stepper-container" id="reviewLifecycleStepper">
+                                    <div class="stepper-header">
+                                        <div><b style="font-size:12px; color:var(--text);">TASK EXECUTION LIFECYCLE PROGRESSION</b></div>
+                                        <div id="stepperStatusBadge" class="badge badge-info">IDLE</div>
+                                    </div>
+                                    <div class="stepper-track" id="stepperTrackContainer">
+                                        <!-- Stages populated dynamically -->
                                     </div>
                                 </div>
 
@@ -5701,6 +5729,43 @@ public class TrystHttpServer implements TrystHttpService {
                             if (r) selectReview(r);
                         }
 
+                        function renderTaskLifecycleStepper(status) {
+                            const stages = [
+                                "CREATED", "QUEUED", "CLONING", "ANALYZING", "PLANNING",
+                                "IMPLEMENTING", "BUILDING", "TESTING", "WAITING_FOR_REVIEW",
+                                "REWORK_REQUESTED", "COMMITTING", "COMPLETED"
+                            ];
+                            const track = document.getElementById("stepperTrackContainer");
+                            const badge = document.getElementById("stepperStatusBadge");
+                            if (!track) return;
+                            if (badge) {
+                                badge.textContent = status || "WAITING_FOR_REVIEW";
+                                badge.className = "badge badge-" + (status === "COMPLETED" ? "success" : (status === "FAILED" ? "error" : "info"));
+                            }
+                            let activeIdx = stages.indexOf(status);
+                            if (activeIdx < 0) {
+                                if (status === "REWORKING") activeIdx = 9;
+                                else if (status === "APPROVED") activeIdx = 8;
+                                else activeIdx = 8;
+                            }
+                            let html = "";
+                            for (let i = 0; i < stages.length; i++) {
+                                const s = stages[i];
+                                let cls = "stepper-step";
+                                if (status === "FAILED" && i === activeIdx) cls += " failed";
+                                else if (i < activeIdx || status === "COMPLETED") cls += " completed";
+                                else if (i === activeIdx) cls += " active";
+
+                                const check = (i < activeIdx || status === "COMPLETED") ? "✓" : (i + 1);
+                                html += `<div class="${cls}"><div class="stepper-icon">${check}</div><div class="stepper-label">${s}</div></div>`;
+                                if (i < stages.length - 1) {
+                                    const lineCls = (i < activeIdx) ? "stepper-line completed" : "stepper-line";
+                                    html += `<div class="${lineCls}"></div>`;
+                                }
+                            }
+                            track.innerHTML = html;
+                        }
+
                         async function selectReview(r) {
                             activeReview = r;
                             document.getElementById('noSelectionNotice').style.display = 'none';
@@ -5717,6 +5782,7 @@ public class TrystHttpServer implements TrystHttpService {
                             const btnPush = document.getElementById('btnPush');
                             btnPush.style.display = (r.status === 'APPROVED' && r.commitHash) ? 'inline-block' : 'none';
 
+                            renderTaskLifecycleStepper(r.status);
                             await loadReviewDetails();
                             await loadReviewDiff();
                         }

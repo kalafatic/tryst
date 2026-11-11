@@ -12,6 +12,9 @@ import org.eclipse.jface.viewers.ITableLabelProvider;
 import org.eclipse.jface.viewers.LabelProvider;
 import org.eclipse.jface.viewers.TableViewer;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.dnd.Clipboard;
+import org.eclipse.swt.dnd.TextTransfer;
+import org.eclipse.swt.dnd.Transfer;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
@@ -26,6 +29,7 @@ import java.util.Collections;
 
 /**
  * Editor page for Server Overview, Runtime Monitoring, and Managed OS Subprocesses.
+ * Enhanced with toolbar controls for copying server metrics, browser shortcut, and lifecycle actions.
  */
 public class ServerMonitoringPage extends AbstractTrystEditorPage {
 
@@ -46,6 +50,27 @@ public class ServerMonitoringPage extends AbstractTrystEditorPage {
 
     @Override
     protected void createPageContent(Composite parent) {
+        // Top Global Toolbar
+        Composite topToolbar = new Composite(parent, SWT.NONE);
+        topToolbar.setLayout(new GridLayout(5, false));
+        topToolbar.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+
+        Button btnRefreshAll = new Button(topToolbar, SWT.PUSH);
+        btnRefreshAll.setText("🔄 Refresh All Metrics");
+        btnRefreshAll.addListener(SWT.Selection, e -> refresh());
+
+        Button btnCopyMetrics = new Button(topToolbar, SWT.PUSH);
+        btnCopyMetrics.setText("📋 Copy Telemetry Summary");
+        btnCopyMetrics.addListener(SWT.Selection, e -> copyMetricsSummary());
+
+        Button btnDashboard = new Button(topToolbar, SWT.PUSH);
+        btnDashboard.setText("📊 Overview Dashboard");
+        btnDashboard.addListener(SWT.Selection, e -> editor.selectPage(OverviewDashboardPage.ID));
+
+        Button btnConfig = new Button(topToolbar, SWT.PUSH);
+        btnConfig.setText("⚙ System Configuration");
+        btnConfig.addListener(SWT.Selection, e -> editor.selectPage(ConfigurationPage.ID));
+
         Group serverGroup = new Group(parent, SWT.NONE);
         serverGroup.setText("Embedded HTTP Server & Network");
         serverGroup.setLayout(new GridLayout(2, false));
@@ -131,7 +156,7 @@ public class ServerMonitoringPage extends AbstractTrystEditorPage {
         });
 
         Button btnRefreshServer = new Button(serverBtnBar, SWT.PUSH);
-        btnRefreshServer.setText("Refresh Status");
+        btnRefreshServer.setText("Refresh Server");
         btnRefreshServer.addListener(SWT.Selection, e -> refresh());
 
         Group healthGroup = new Group(parent, SWT.NONE);
@@ -171,11 +196,19 @@ public class ServerMonitoringPage extends AbstractTrystEditorPage {
         processViewer.setContentProvider(ArrayContentProvider.getInstance());
         processViewer.setLabelProvider(new ProcessLabelProvider());
 
-        Button btnRefresh = new Button(parent, SWT.PUSH);
-        btnRefresh.setText("Refresh Runtime Metrics");
-        btnRefresh.addListener(SWT.Selection, e -> refresh());
-
         refresh();
+    }
+
+    private void copyMetricsSummary() {
+        Clipboard cb = new Clipboard(getControl().getDisplay());
+        try {
+            String text = String.format("TRYST Server & Telemetry:\nStatus: %s\nPort: %s\nReadiness: %s\nCPU: %s\nHeap: %s\nThreads: %s",
+                    lblHttpStatus.getText(), lblHttpPort.getText(), lblReadiness.getText(),
+                    lblSystemCpu.getText(), lblHeap.getText(), lblThreads.getText());
+            cb.setContents(new Object[]{text}, new Transfer[]{TextTransfer.getInstance()});
+        } finally {
+            cb.dispose();
+        }
     }
 
     private void createRow(Composite parent, String text) {
@@ -204,6 +237,7 @@ public class ServerMonitoringPage extends AbstractTrystEditorPage {
 
     @Override
     public void refresh() {
+        super.refresh();
         if (lblReadiness == null || lblReadiness.isDisposed()) return;
 
         var lifecycleService = TrystUiServices.getServerLifecycleService();

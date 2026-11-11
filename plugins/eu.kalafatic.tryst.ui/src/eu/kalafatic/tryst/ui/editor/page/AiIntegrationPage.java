@@ -8,8 +8,13 @@ import eu.kalafatic.tryst.domain.service.AiMonitoringService;
 import eu.kalafatic.tryst.ui.TrystUiServices;
 import eu.kalafatic.tryst.ui.editor.AbstractTrystEditorPage;
 import eu.kalafatic.tryst.ui.editor.TrystWorkbenchEditor;
+import org.eclipse.jface.dialogs.InputDialog;
 import org.eclipse.jface.dialogs.MessageDialog;
+import org.eclipse.jface.window.Window;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.dnd.Clipboard;
+import org.eclipse.swt.dnd.TextTransfer;
+import org.eclipse.swt.dnd.Transfer;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Button;
@@ -24,6 +29,7 @@ import java.util.List;
 
 /**
  * Editor page for AI Infrastructure, LLM provider connectivity, and Darwin reasoning models.
+ * Enhanced with toolbar controls for testing, start/stop, configuring endpoint, copying model info, and metrics.
  */
 public class AiIntegrationPage extends AbstractTrystEditorPage {
 
@@ -43,6 +49,35 @@ public class AiIntegrationPage extends AbstractTrystEditorPage {
 
     @Override
     protected void createPageContent(Composite parent) {
+        // Top Toolbar
+        Composite toolbar = new Composite(parent, SWT.NONE);
+        toolbar.setLayout(new GridLayout(6, false));
+        toolbar.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+
+        Button btnCheck = new Button(toolbar, SWT.PUSH);
+        btnCheck.setText("⚡ Test AI Connectivity");
+        btnCheck.addListener(SWT.Selection, e -> testAiConnectivity());
+
+        Button btnRefresh = new Button(toolbar, SWT.PUSH);
+        btnRefresh.setText("🔄 Refresh Models");
+        btnRefresh.addListener(SWT.Selection, e -> refresh());
+
+        btnStartAi = new Button(toolbar, SWT.PUSH);
+        btnStartAi.setText("▶ Start AI Service");
+        btnStartAi.addListener(SWT.Selection, e -> startAiService());
+
+        btnStopAi = new Button(toolbar, SWT.PUSH);
+        btnStopAi.setText("⏹ Stop AI Service");
+        btnStopAi.addListener(SWT.Selection, e -> stopAiService());
+
+        Button btnConfigure = new Button(toolbar, SWT.PUSH);
+        btnConfigure.setText("⚙ Configure Endpoint...");
+        btnConfigure.addListener(SWT.Selection, e -> onConfigureEndpoint());
+
+        Button btnCopyInfo = new Button(toolbar, SWT.PUSH);
+        btnCopyInfo.setText("📋 Copy Model Info");
+        btnCopyInfo.addListener(SWT.Selection, e -> copyModelInfo());
+
         Group infoGroup = new Group(parent, SWT.NONE);
         infoGroup.setText("AI Provider & Reasoning Engine");
         infoGroup.setLayout(new GridLayout(2, false));
@@ -65,26 +100,30 @@ public class AiIntegrationPage extends AbstractTrystEditorPage {
         createRow(infoGroup, "Inference Requests Processed:");
         lblRequests = createValueLabel(infoGroup, "0");
 
-        Composite btnBar = new Composite(parent, SWT.NONE);
-        btnBar.setLayout(new GridLayout(4, false));
-
-        Button btnCheck = new Button(btnBar, SWT.PUSH);
-        btnCheck.setText("Test AI Connectivity");
-        btnCheck.addListener(SWT.Selection, e -> testAiConnectivity());
-
-        Button btnRefresh = new Button(btnBar, SWT.PUSH);
-        btnRefresh.setText("Refresh");
-        btnRefresh.addListener(SWT.Selection, e -> refresh());
-
-        btnStartAi = new Button(btnBar, SWT.PUSH);
-        btnStartAi.setText("▶ Start AI Service");
-        btnStartAi.addListener(SWT.Selection, e -> startAiService());
-
-        btnStopAi = new Button(btnBar, SWT.PUSH);
-        btnStopAi.setText("⏹ Stop AI Service");
-        btnStopAi.addListener(SWT.Selection, e -> stopAiService());
-
         refresh();
+    }
+
+    private void onConfigureEndpoint() {
+        ApplicationConfiguration cfg = TrystUiServices.getConfiguration();
+        String currentEndpoint = cfg != null ? cfg.ollamaEndpoint() : "http://localhost:11434";
+        InputDialog dialog = new InputDialog(resolveShell(), "Configure AI Endpoint", "Ollama REST Endpoint URL:", currentEndpoint, null);
+        if (dialog.open() == Window.OK && dialog.getValue() != null && !dialog.getValue().isBlank()) {
+            ConfigurationService cfgSvc = TrystUiServices.getConfigurationService();
+            if (cfgSvc != null && cfg != null) {
+                cfgSvc.updateConfiguration(cfg.withOllamaEndpoint(dialog.getValue().trim()));
+                refresh();
+            }
+        }
+    }
+
+    private void copyModelInfo() {
+        Clipboard cb = new Clipboard(getControl().getDisplay());
+        try {
+            String text = "AI Provider: " + lblProvider.getText() + "\nEndpoint: " + lblEndpoint.getText() + "\nModel: " + cmbModel.getText() + "\nStatus: " + lblStatus.getText();
+            cb.setContents(new Object[]{text}, new Transfer[]{TextTransfer.getInstance()});
+        } finally {
+            cb.dispose();
+        }
     }
 
     private void createRow(Composite parent, String text) {
@@ -272,6 +311,7 @@ public class AiIntegrationPage extends AbstractTrystEditorPage {
 
     @Override
     public void refresh() {
+        super.refresh();
         if (lblProvider == null || lblProvider.isDisposed()) return;
 
         ApplicationConfiguration cfg = TrystUiServices.getConfiguration();
