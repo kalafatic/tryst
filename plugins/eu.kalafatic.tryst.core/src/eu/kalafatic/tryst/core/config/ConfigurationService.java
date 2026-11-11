@@ -188,6 +188,32 @@ public class ConfigurationService {
             String contextPath = props.getProperty("server.contextPath", base.contextPath());
             String canonicalUrl = props.getProperty("server.canonicalUrl", base.canonicalUrl());
 
+            // Network Mode and interface binding resolution
+            String netModeStr = System.getProperty("tryst.network.mode");
+            if (netModeStr == null || netModeStr.isBlank()) {
+                netModeStr = System.getenv("TRYST_NETWORK_MODE");
+            }
+            if (netModeStr == null || netModeStr.isBlank()) {
+                netModeStr = props.getProperty("server.networkMode");
+            }
+            NetworkMode netMode = NetworkMode.fromString(netModeStr);
+
+            String bindAddr = System.getProperty("tryst.bind.address");
+            if (bindAddr == null || bindAddr.isBlank()) {
+                bindAddr = System.getenv("TRYST_BIND_ADDRESS");
+            }
+            if (bindAddr == null || bindAddr.isBlank()) {
+                bindAddr = props.getProperty("server.bindAddress");
+            }
+
+            String extBaseUrl = System.getProperty("tryst.external.base.url");
+            if (extBaseUrl == null || extBaseUrl.isBlank()) {
+                extBaseUrl = System.getenv("TRYST_EXTERNAL_BASE_URL");
+            }
+            if (extBaseUrl == null || extBaseUrl.isBlank()) {
+                extBaseUrl = props.getProperty("server.externalBaseUrl", publicUrl);
+            }
+
             ApplicationConfiguration config = new ApplicationConfiguration(
                     base.applicationName(),
                     base.version(),
@@ -208,10 +234,13 @@ public class ConfigurationService {
                     dynamicFallback,
                     rangeStart,
                     rangeEnd,
-                    publicUrl,
+                    extBaseUrl != null && !extBaseUrl.isBlank() ? extBaseUrl : publicUrl,
                     reverseProxy,
                     contextPath,
-                    canonicalUrl
+                    canonicalUrl,
+                    netMode,
+                    bindAddr,
+                    extBaseUrl
             );
 
             if (migrationRequired) {
@@ -317,6 +346,15 @@ public class ConfigurationService {
             props.setProperty("server.reverseProxyEnabled", String.valueOf(config.reverseProxyEnabled()));
             props.setProperty("server.contextPath", config.contextPath());
             props.setProperty("server.canonicalUrl", config.canonicalUrl());
+            if (config.networkMode() != null) {
+                props.setProperty("server.networkMode", config.networkMode().name());
+            }
+            if (config.bindAddress() != null && !config.bindAddress().isBlank()) {
+                props.setProperty("server.bindAddress", config.bindAddress());
+            }
+            if (config.externalBaseUrl() != null && !config.externalBaseUrl().isBlank()) {
+                props.setProperty("server.externalBaseUrl", config.externalBaseUrl());
+            }
 
             try (FileOutputStream fos = new FileOutputStream(configFilePath.toFile())) {
                 props.store(fos, "TRYST Configuration Properties");

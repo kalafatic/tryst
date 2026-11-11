@@ -489,7 +489,7 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
 
         // Initialize and start TCP and HTTP communication services
         try {
-            this.tcpService = new TrystTcpServer(configuration.serverHost(), effectiveTcpPort, workspaceService, portRegistry);
+            this.tcpService = new TrystTcpServer("127.0.0.1", effectiveTcpPort, workspaceService, portRegistry);
             this.tcpService.start();
             if (serverReadinessService != null) {
                 serverReadinessService.markHealthy("TcpServer", java.util.Map.of("port", Integer.toString(this.tcpService.getPort())));
@@ -502,8 +502,9 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
         }
 
         try {
+            String httpBindAddress = configuration.resolveEffectiveBindAddress();
             TrystHttpServer server = new TrystHttpServer(
-                    configuration.serverHost(), effectiveHttpPort,
+                    httpBindAddress, effectiveHttpPort,
                     workspaceService, projectRepository, taskRepository,
                     codeReviewRepository, gitService, buildAndTestService, permissionManager
             );
@@ -1160,8 +1161,9 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
                 ? configurationService.getPortRegistry().getAllocationGroup().getPort(eu.kalafatic.tryst.core.port.ServicePortIdentifier.HTTP_SERVICE)
                 : configuration.httpPort();
 
+        String httpBindAddress = configuration.resolveEffectiveBindAddress();
         TrystHttpServer server = new TrystHttpServer(
-                configuration.serverHost(), effectiveHttpPort,
+                httpBindAddress, effectiveHttpPort,
                 workspaceService, projectRepository, taskRepository,
                 codeReviewRepository, gitService, buildAndTestService, permissionManager
         );

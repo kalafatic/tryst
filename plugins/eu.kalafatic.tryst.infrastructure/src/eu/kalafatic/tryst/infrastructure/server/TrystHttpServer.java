@@ -265,7 +265,10 @@ public class TrystHttpServer implements TrystHttpService {
                 }
             }
 
-            TrystLog.info(TrystHttpServer.class, "HTTP Server started on http://" + host + ":" + actualPort + "/ (Canonical: " + getCanonicalUrl() + ")");
+            String accessUrl = (configurationService != null)
+                    ? configurationService.getConfiguration().resolveEffectiveExternalUrl(actualPort)
+                    : ("http://" + host + ":" + actualPort + "/tryst");
+            TrystLog.info(TrystHttpServer.class, "HTTP Server started on http://" + host + ":" + actualPort + "/ (Access URL: " + accessUrl + ")");
         } catch (IOException e) {
             this.running.set(false);
             throw new TrystInfrastructureException("Failed to start HTTP server on " + host + ":" + preferredPort, e);
@@ -582,10 +585,23 @@ public class TrystHttpServer implements TrystHttpService {
         return authenticationService != null && authenticationService.hasAdministrator() && ctx.isEmpty();
     }
 
+    private boolean isTrustedProxy(HttpExchange exchange) {
+        if (configurationService == null || !configurationService.getConfiguration().reverseProxyEnabled()) {
+            return false;
+        }
+        if (exchange.getRemoteAddress() != null && exchange.getRemoteAddress().getAddress() != null) {
+            var addr = exchange.getRemoteAddress().getAddress();
+            return addr.isLoopbackAddress() || addr.isSiteLocalAddress();
+        }
+        return false;
+    }
+
     private String getClientIp(HttpExchange exchange) {
-        String xff = exchange.getRequestHeaders().getFirst("X-Forwarded-For");
-        if (xff != null && !xff.isBlank()) {
-            return xff.split(",")[0].trim();
+        if (isTrustedProxy(exchange)) {
+            String xff = exchange.getRequestHeaders().getFirst("X-Forwarded-For");
+            if (xff != null && !xff.isBlank()) {
+                return xff.split(",")[0].trim();
+            }
         }
         if (exchange.getRemoteAddress() != null && exchange.getRemoteAddress().getAddress() != null) {
             return exchange.getRemoteAddress().getAddress().getHostAddress();

@@ -38,6 +38,7 @@ public class ServerMonitoringPage extends AbstractTrystEditorPage {
     private Label lblReadiness;
     private Label lblHttpStatus;
     private Label lblHttpPort;
+    private Label lblNetworkMode;
     private Label lblCanonicalUrl;
     private Label lblSystemCpu;
     private Label lblHeap;
@@ -78,6 +79,9 @@ public class ServerMonitoringPage extends AbstractTrystEditorPage {
 
         createRow(serverGroup, "HTTP Server Lifecycle:");
         lblHttpStatus = createValueLabel(serverGroup, "STOPPED");
+
+        createRow(serverGroup, "Network Mode & Bind:");
+        lblNetworkMode = createValueLabel(serverGroup, "-");
 
         createRow(serverGroup, "Listening Address & Port:");
         lblHttpPort = createValueLabel(serverGroup, "-");
@@ -271,12 +275,19 @@ public class ServerMonitoringPage extends AbstractTrystEditorPage {
         var cfgService = TrystUiServices.getConfigurationService();
         if (cfgService != null && cfgService.getConfiguration() != null) {
             var cfg = cfgService.getConfiguration();
+            if (lblNetworkMode != null && !lblNetworkMode.isDisposed()) {
+                lblNetworkMode.setText((cfg.networkMode() != null ? cfg.networkMode().name() : "LOOPBACK")
+                        + " (bind: " + cfg.resolveEffectiveBindAddress() + ")");
+            }
             if (httpService != null && httpService.isRunning()) {
                 lblCanonicalUrl.setText(cfg.resolveEffectiveExternalUrl(httpService.getPort()) + " (Canonical: " + cfg.canonicalUrl() + ")");
             } else {
                 lblCanonicalUrl.setText(cfg.canonicalUrl());
             }
         } else {
+            if (lblNetworkMode != null && !lblNetworkMode.isDisposed()) {
+                lblNetworkMode.setText("-");
+            }
             lblCanonicalUrl.setText("-");
         }
 
