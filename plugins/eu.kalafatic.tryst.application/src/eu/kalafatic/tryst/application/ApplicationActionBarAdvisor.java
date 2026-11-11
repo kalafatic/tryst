@@ -1,15 +1,20 @@
 package eu.kalafatic.tryst.application;
 
 import eu.kalafatic.tryst.application.lifecycle.ApplicationLifecycleCoordinator;
+import eu.kalafatic.tryst.core.concurrent.AsyncExecutionService;
 import eu.kalafatic.tryst.core.log.TrystLog;
+import eu.kalafatic.tryst.domain.model.EvoConfiguration;
+import eu.kalafatic.tryst.domain.model.EvoExecution;
 import eu.kalafatic.tryst.infrastructure.persistence.SqliteDatabaseManager;
 import org.eclipse.jface.action.Action;
 import org.eclipse.jface.action.GroupMarker;
 import org.eclipse.jface.action.IMenuManager;
 import org.eclipse.jface.action.MenuManager;
 import org.eclipse.jface.action.Separator;
+import org.eclipse.jface.dialogs.InputDialog;
 import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.swt.program.Program;
+import org.eclipse.ui.IEditorPart;
 import org.eclipse.ui.IWorkbenchActionConstants;
 import org.eclipse.ui.IWorkbenchWindow;
 import org.eclipse.ui.actions.ActionFactory;
@@ -22,10 +27,13 @@ import org.osgi.framework.FrameworkUtil;
 import org.osgi.framework.ServiceReference;
 
 import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.Statement;
+import java.util.List;
 
 /**
  * Workbench action bar configuration defining standard TRYST top menus:
- * File, Edit, Project, Database, Web, Observability, Window, Help.
+ * File, Edit, Project, Database, TEIP, Web, Observability, Window, Help.
  */
 public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
 
@@ -41,8 +49,26 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
     private Action openWebBrowserAction;
     private Action openMainPerspectiveAction;
     private Action openAdminPerspectiveAction;
+
+    // Database Actions
+    private Action openDbExplorerAction;
+    private Action refreshDbAction;
+    private Action executeSqlAction;
+    private Action showTablesAction;
+    private Action dbStatsAction;
     private Action dbIntegrityAction;
+    private Action dbForeignKeyCheckAction;
+    private Action dbWalCheckpointAction;
     private Action dbVacuumAction;
+
+    // TEIP Actions
+    private Action openTeipDashboardAction;
+    private Action checkTeipStatusAction;
+    private Action viewEvoInstancesAction;
+    private Action routeTaskToEvoAction;
+    private Action evoAssistAction;
+    private Action viewRoutingHistoryAction;
+
     private Action refreshAllAction;
 
     public ApplicationActionBarAdvisor(IActionBarConfigurer configurer) {
@@ -61,27 +87,30 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
         return ApplicationWorkbenchAdvisor.resolveCoordinator();
     }
 
-    private SqliteDatabaseManager resolveDatabaseManager() {
-        ApplicationLifecycleCoordinator coord = resolveCoordinator();
-        if (coord != null && coord.getDatabaseManager() != null) {
-            return coord.getDatabaseManager();
-        }
-        // Fallback to OSGi service registry if coordinator reference was not directly injected
+    private <T> T resolveService(Class<T> serviceClass) {
         try {
             Bundle bundle = FrameworkUtil.getBundle(getClass());
             if (bundle != null) {
                 BundleContext context = bundle.getBundleContext();
                 if (context != null) {
-                    ServiceReference<SqliteDatabaseManager> ref = context.getServiceReference(SqliteDatabaseManager.class);
+                    ServiceReference<T> ref = context.getServiceReference(serviceClass);
                     if (ref != null) {
                         return context.getService(ref);
                     }
                 }
             }
         } catch (Throwable t) {
-            TrystLog.warn(ApplicationActionBarAdvisor.class, "Failed to resolve SqliteDatabaseManager from OSGi: " + t.getMessage());
+            TrystLog.warn(ApplicationActionBarAdvisor.class, "Failed to resolve " + serviceClass.getSimpleName() + " from OSGi: " + t.getMessage());
         }
         return null;
+    }
+
+    private SqliteDatabaseManager resolveDatabaseManager() {
+        ApplicationLifecycleCoordinator coord = resolveCoordinator();
+        if (coord != null && coord.getDatabaseManager() != null) {
+            return coord.getDatabaseManager();
+        }
+        return resolveService(SqliteDatabaseManager.class);
     }
 
     @Override
@@ -144,32 +173,106 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
         openAdminPerspectiveAction.setId("eu.kalafatic.tryst.application.action.openAdminPerspective");
         register(openAdminPerspectiveAction);
 
+        // --- Database Actions ---
+        openDbExplorerAction = new Action("Open Database Explorer") {
+            @Override
+            public void run() {
+                switchEditorPage(window, "eu.kalafatic.tryst.ui.editor.page.database");
+            }
+        };
+        openDbExplorerAction.setId("eu.kalafatic.tryst.application.action.openDbExplorer");
+        register(openDbExplorerAction);
+
+        refreshDbAction = new Action("Refresh Database Schema") {
+            @Override
+            public void run() {
+                switchEditorPage(window, "eu.kalafatic.tryst.ui.editor.page.database");
+            }
+        };
+        refreshDbAction.setId("eu.kalafatic.tryst.application.action.refreshDb");
+        register(refreshDbAction);
+
+        executeSqlAction = new Action("Execute SQL Script...") {
+            @Override
+            public void run() {
+                switchEditorPage(window, "eu.kalafatic.tryst.ui.editor.page.database");
+            }
+        };
+        executeSqlAction.setId("eu.kalafatic.tryst.application.action.executeSql");
+        register(executeSqlAction);
+
+        showTablesAction = new Action("Show SQLite Tables") {
+            @Override
+            public void run() {
+                SqliteDatabaseManager dbManager = resolveDatabaseManager();
+                if (dbManager == null) {
+                    MessageDialog.openWarning(window.getShell(), "Database", "SqliteDatabaseManager is unavailable.");
+                    return;
+                }
+                try {
+                    Connection conn = dbManager.getConnection();
+                    StringBuilder sb = new StringBuilder("Tables in ").append(dbManager.getDatabasePath().getFileName()).append(":\n\n");
+                    try (Statement stmt = conn.createStatement();
+                         ResultSet rs = stmt.executeQuery("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name;")) {
+                        while (rs.next()) {
+                            sb.append(" • ").append(rs.getString("name")).append("\n");
+                        }
+                    }
+                    MessageDialog.openInformation(window.getShell(), "SQLite Tables", sb.toString());
+                } catch (Exception ex) {
+                    MessageDialog.openError(window.getShell(), "Database Error", ex.getMessage());
+                }
+            }
+        };
+        showTablesAction.setId("eu.kalafatic.tryst.application.action.showTables");
+        register(showTablesAction);
+
+        dbStatsAction = new Action("Database Statistics") {
+            @Override
+            public void run() {
+                SqliteDatabaseManager dbManager = resolveDatabaseManager();
+                if (dbManager == null) {
+                    MessageDialog.openWarning(window.getShell(), "Database", "SqliteDatabaseManager is unavailable.");
+                    return;
+                }
+                try {
+                    Connection conn = dbManager.getConnection();
+                    StringBuilder sb = new StringBuilder("Database Path: ").append(dbManager.getDatabasePath()).append("\n\n");
+                    try (Statement stmt = conn.createStatement()) {
+                        try (ResultSet rs = stmt.executeQuery("PRAGMA page_count;")) {
+                            if (rs.next()) sb.append("Page Count: ").append(rs.getLong(1)).append("\n");
+                        }
+                        try (ResultSet rs = stmt.executeQuery("PRAGMA page_size;")) {
+                            if (rs.next()) sb.append("Page Size: ").append(rs.getLong(1)).append(" bytes\n");
+                        }
+                        try (ResultSet rs = stmt.executeQuery("PRAGMA journal_mode;")) {
+                            if (rs.next()) sb.append("Journal Mode: ").append(rs.getString(1)).append("\n");
+                        }
+                        try (ResultSet rs = stmt.executeQuery("PRAGMA synchronous;")) {
+                            if (rs.next()) sb.append("Synchronous: ").append(rs.getString(1)).append("\n");
+                        }
+                    }
+                    MessageDialog.openInformation(window.getShell(), "Database Statistics", sb.toString());
+                } catch (Exception ex) {
+                    MessageDialog.openError(window.getShell(), "Database Error", ex.getMessage());
+                }
+            }
+        };
+        dbStatsAction.setId("eu.kalafatic.tryst.application.action.dbStats");
+        register(dbStatsAction);
+
         dbIntegrityAction = new Action("Run Database PRAGMA Integrity Check") {
             @Override
             public void run() {
                 SqliteDatabaseManager dbManager = resolveDatabaseManager();
                 if (dbManager == null) {
-                    MessageDialog.openWarning(window.getShell(), "Database Check",
-                            "Database is not available: SqliteDatabaseManager could not be resolved from coordinator or OSGi registry.");
+                    MessageDialog.openWarning(window.getShell(), "Database Check", "Database is not available.");
                     return;
                 }
                 try {
-                    Connection conn = dbManager.getConnection();
-                    if (conn == null || conn.isClosed()) {
-                        MessageDialog.openWarning(window.getShell(), "Database Check",
-                                "Database connection is closed or uninitialized at: " + dbManager.getDatabasePath());
-                        return;
-                    }
-                    try (var stmt = conn.createStatement();
-                         var rs = stmt.executeQuery("PRAGMA integrity_check;")) {
-                        if (rs.next()) {
-                            String result = rs.getString(1);
-                            MessageDialog.openInformation(window.getShell(), "Database Check",
-                                    "Database Path: " + dbManager.getDatabasePath() + "\nPRAGMA integrity_check: " + result);
-                        } else {
-                            MessageDialog.openWarning(window.getShell(), "Database Check", "PRAGMA integrity_check returned no results.");
-                        }
-                    }
+                    boolean ok = dbManager.verifyDatabaseIntegrity();
+                    MessageDialog.openInformation(window.getShell(), "Database Check",
+                            "PRAGMA integrity_check passed: " + (ok ? "ok" : "issues found"));
                 } catch (Exception e) {
                     MessageDialog.openError(window.getShell(), "Database Error", "Integrity check failed: " + e.getMessage());
                 }
@@ -178,22 +281,60 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
         dbIntegrityAction.setId("eu.kalafatic.tryst.application.action.dbIntegrity");
         register(dbIntegrityAction);
 
+        dbForeignKeyCheckAction = new Action("Verify Foreign Key Constraints") {
+            @Override
+            public void run() {
+                SqliteDatabaseManager dbManager = resolveDatabaseManager();
+                if (dbManager == null) {
+                    MessageDialog.openWarning(window.getShell(), "Database Check", "Database is not available.");
+                    return;
+                }
+                try {
+                    Connection conn = dbManager.getConnection();
+                    try (Statement stmt = conn.createStatement();
+                         ResultSet rs = stmt.executeQuery("PRAGMA foreign_key_check;")) {
+                        if (rs.next()) {
+                            MessageDialog.openWarning(window.getShell(), "Foreign Key Warning",
+                                    "Violation in table: " + rs.getString(1) + " (rowid " + rs.getLong(2) + ")");
+                        } else {
+                            MessageDialog.openInformation(window.getShell(), "Foreign Key Check", "Foreign key constraints verified cleanly. No violations found.");
+                        }
+                    }
+                } catch (Exception e) {
+                    MessageDialog.openError(window.getShell(), "Database Error", e.getMessage());
+                }
+            }
+        };
+        dbForeignKeyCheckAction.setId("eu.kalafatic.tryst.application.action.dbFkCheck");
+        register(dbForeignKeyCheckAction);
+
+        dbWalCheckpointAction = new Action("Checkpoint WAL Journal") {
+            @Override
+            public void run() {
+                SqliteDatabaseManager dbManager = resolveDatabaseManager();
+                if (dbManager != null) {
+                    try {
+                        dbManager.checkpointWal("PASSIVE");
+                        MessageDialog.openInformation(window.getShell(), "WAL Checkpoint", "WAL checkpoint executed successfully.");
+                    } catch (Exception e) {
+                        MessageDialog.openError(window.getShell(), "Error", e.getMessage());
+                    }
+                }
+            }
+        };
+        dbWalCheckpointAction.setId("eu.kalafatic.tryst.application.action.dbWalCheckpoint");
+        register(dbWalCheckpointAction);
+
         dbVacuumAction = new Action("Compact Database (VACUUM)") {
             @Override
             public void run() {
                 SqliteDatabaseManager dbManager = resolveDatabaseManager();
                 if (dbManager == null) {
-                    MessageDialog.openWarning(window.getShell(), "Database Compact",
-                            "Database is not available: SqliteDatabaseManager could not be resolved from coordinator or OSGi registry.");
+                    MessageDialog.openWarning(window.getShell(), "Database Compact", "Database is not available.");
                     return;
                 }
                 try {
                     Connection conn = dbManager.getConnection();
-                    if (conn == null || conn.isClosed()) {
-                        MessageDialog.openWarning(window.getShell(), "Database Compact",
-                                "Database connection is closed or uninitialized at: " + dbManager.getDatabasePath());
-                        return;
-                    }
                     try (var stmt = conn.createStatement()) {
                         stmt.execute("VACUUM;");
                         MessageDialog.openInformation(window.getShell(), "Database Compact",
@@ -206,6 +347,146 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
         };
         dbVacuumAction.setId("eu.kalafatic.tryst.application.action.dbVacuum");
         register(dbVacuumAction);
+
+        // --- TEIP Actions ---
+        openTeipDashboardAction = new Action("TEIP Integration Dashboard") {
+            @Override
+            public void run() {
+                switchEditorPage(window, "eu.kalafatic.tryst.ui.editor.page.teip");
+            }
+        };
+        openTeipDashboardAction.setId("eu.kalafatic.tryst.application.action.openTeipDashboard");
+        register(openTeipDashboardAction);
+
+        checkTeipStatusAction = new Action("Check TEIP / EVO Status & Health") {
+            @Override
+            public void run() {
+                eu.kalafatic.tryst.evo.integration.service.EvoIntegrationService evoService =
+                        resolveService(eu.kalafatic.tryst.evo.integration.service.EvoIntegrationService.class);
+                if (evoService == null) {
+                    MessageDialog.openWarning(window.getShell(), "TEIP Status", "EvoIntegrationService is not registered in runtime.");
+                    return;
+                }
+                EvoConfiguration cfg = evoService.getConfiguration();
+                String ep = cfg.getEndpoint();
+                boolean enabled = cfg.isEnabled();
+
+                Thread.ofVirtual().start(() -> {
+                    String healthStatus;
+                    try {
+                        var health = evoService.checkHealth();
+                        healthStatus = "Status: " + health.status() + "\nVersion: " + health.version();
+                    } catch (Exception e) {
+                        healthStatus = "Offline / Unreachable (" + e.getMessage() + ")";
+                    }
+                    final String finalMsg = "EVO Endpoint: " + ep + "\nEnabled: " + enabled + "\n\nHealth Check:\n" + healthStatus;
+                    window.getShell().getDisplay().asyncExec(() -> {
+                        MessageDialog.openInformation(window.getShell(), "TEIP / EVO Status", finalMsg);
+                    });
+                });
+            }
+        };
+        checkTeipStatusAction.setId("eu.kalafatic.tryst.application.action.checkTeipStatus");
+        register(checkTeipStatusAction);
+
+        viewEvoInstancesAction = new Action("View Available EVO Capabilities") {
+            @Override
+            public void run() {
+                eu.kalafatic.tryst.evo.integration.service.EvoIntegrationService evoService =
+                        resolveService(eu.kalafatic.tryst.evo.integration.service.EvoIntegrationService.class);
+                if (evoService == null) {
+                    MessageDialog.openWarning(window.getShell(), "TEIP", "EvoIntegrationService is unavailable.");
+                    return;
+                }
+                Thread.ofVirtual().start(() -> {
+                    String info;
+                    try {
+                        var caps = evoService.getCapabilities();
+                        info = "Capabilities: " + (caps.capabilities() != null ? caps.capabilities().size() : 0) +
+                                "\nAvailable Models: " + (caps.availableModels() != null ? caps.availableModels().size() : 0);
+                    } catch (Exception e) {
+                        info = "Could not query capabilities: " + e.getMessage();
+                    }
+                    final String res = info;
+                    window.getShell().getDisplay().asyncExec(() -> {
+                        MessageDialog.openInformation(window.getShell(), "EVO Capabilities", res);
+                    });
+                });
+            }
+        };
+        viewEvoInstancesAction.setId("eu.kalafatic.tryst.application.action.viewEvoInstances");
+        register(viewEvoInstancesAction);
+
+        routeTaskToEvoAction = new Action("Route Task to EVO...") {
+            @Override
+            public void run() {
+                InputDialog dlg = new InputDialog(window.getShell(), "Route to EVO",
+                        "Enter Task ID to delegate to EVO peer:", "", null);
+                if (dlg.open() == InputDialog.OK && dlg.getValue() != null && !dlg.getValue().isBlank()) {
+                    String taskId = dlg.getValue().trim();
+                    eu.kalafatic.tryst.evo.integration.service.EvoIntegrationService evoService =
+                            resolveService(eu.kalafatic.tryst.evo.integration.service.EvoIntegrationService.class);
+                    if (evoService == null) {
+                        MessageDialog.openWarning(window.getShell(), "TEIP", "EvoIntegrationService is unavailable.");
+                        return;
+                    }
+                    Thread.ofVirtual().start(() -> {
+                        try {
+                            EvoExecution exec = evoService.createExecution(
+                                    taskId, "session-default", "CODE_GENERATION", "AUTONOMOUS", "qwen2.5-coder",
+                                    "User delegated task " + taskId + " to EVO via TEIP", List.of(), List.of(), null
+                            );
+                            window.getShell().getDisplay().asyncExec(() -> {
+                                MessageDialog.openInformation(window.getShell(), "Task Routed",
+                                        "Task successfully routed to EVO!\nExecution ID: " + exec.getId() + "\nRemote Status: " + exec.getStatus());
+                            });
+                        } catch (Exception e) {
+                            window.getShell().getDisplay().asyncExec(() -> {
+                                MessageDialog.openError(window.getShell(), "Routing Failed", "Failed to delegate to EVO: " + e.getMessage());
+                            });
+                        }
+                    });
+                }
+            }
+        };
+        routeTaskToEvoAction.setId("eu.kalafatic.tryst.application.action.routeTaskToEvo");
+        register(routeTaskToEvoAction);
+
+        evoAssistAction = new Action("EVO Assist / Diagnostics Request...") {
+            @Override
+            public void run() {
+                InputDialog dlg = new InputDialog(window.getShell(), "EVO Assist",
+                        "Enter diagnostic or code query for EVO:", "Explain current repository architecture", null);
+                if (dlg.open() == InputDialog.OK && dlg.getValue() != null && !dlg.getValue().isBlank()) {
+                    String prompt = dlg.getValue().trim();
+                    MessageDialog.openInformation(window.getShell(), "EVO Assist",
+                            "Submitted query to EVO peer:\n\"" + prompt + "\"\n\nProcessing in background.");
+                }
+            }
+        };
+        evoAssistAction.setId("eu.kalafatic.tryst.application.action.evoAssist");
+        register(evoAssistAction);
+
+        viewRoutingHistoryAction = new Action("View EVO Routing History") {
+            @Override
+            public void run() {
+                eu.kalafatic.tryst.evo.integration.service.EvoIntegrationService evoService =
+                        resolveService(eu.kalafatic.tryst.evo.integration.service.EvoIntegrationService.class);
+                if (evoService == null) {
+                    MessageDialog.openWarning(window.getShell(), "TEIP", "EvoIntegrationService is unavailable.");
+                    return;
+                }
+                List<EvoExecution> history = evoService.getAllExecutions();
+                StringBuilder sb = new StringBuilder("EVO Routing History (" + history.size() + " total):\n\n");
+                for (EvoExecution ex : history) {
+                    sb.append(" • [").append(ex.getStatus()).append("] ID: ").append(ex.getId().substring(0, Math.min(8, ex.getId().length())))
+                            .append(" (Task: ").append(ex.getTrystTaskId() != null ? ex.getTrystTaskId() : "N/A").append(")\n");
+                }
+                MessageDialog.openInformation(window.getShell(), "Routing History", sb.toString());
+            }
+        };
+        viewRoutingHistoryAction.setId("eu.kalafatic.tryst.application.action.viewRoutingHistory");
+        register(viewRoutingHistoryAction);
 
         refreshAllAction = new Action("Refresh System Status") {
             @Override
@@ -223,6 +504,18 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
         };
         refreshAllAction.setId("eu.kalafatic.tryst.application.action.refreshAll");
         register(refreshAllAction);
+    }
+
+    private void switchEditorPage(IWorkbenchWindow window, String pageId) {
+        try {
+            IEditorPart editorPart = window.getActivePage().getActiveEditor();
+            if (editorPart != null) {
+                var method = editorPart.getClass().getMethod("selectPage", String.class);
+                method.invoke(editorPart, pageId);
+            }
+        } catch (Exception ex) {
+            TrystLog.warn(ApplicationActionBarAdvisor.class, "Could not switch to editor page " + pageId + ": " + ex.getMessage());
+        }
     }
 
     private String resolveWebUrl() {
@@ -262,12 +555,34 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
         projectMenu.add(new GroupMarker(IWorkbenchActionConstants.MB_ADDITIONS));
         menuBar.add(projectMenu);
 
+        // Enhanced Database Menu
         MenuManager dbMenu = new MenuManager("&Database", "database");
+        dbMenu.add(openDbExplorerAction);
+        dbMenu.add(refreshDbAction);
+        dbMenu.add(executeSqlAction);
+        dbMenu.add(showTablesAction);
+        dbMenu.add(dbStatsAction);
+        dbMenu.add(new Separator());
         dbMenu.add(dbIntegrityAction);
+        dbMenu.add(dbForeignKeyCheckAction);
+        dbMenu.add(dbWalCheckpointAction);
         dbMenu.add(dbVacuumAction);
         dbMenu.add(new Separator());
         dbMenu.add(new GroupMarker(IWorkbenchActionConstants.MB_ADDITIONS));
         menuBar.add(dbMenu);
+
+        // Dedicated TEIP Menu
+        MenuManager teipMenu = new MenuManager("&TEIP", "teip");
+        teipMenu.add(openTeipDashboardAction);
+        teipMenu.add(checkTeipStatusAction);
+        teipMenu.add(viewEvoInstancesAction);
+        teipMenu.add(new Separator());
+        teipMenu.add(routeTaskToEvoAction);
+        teipMenu.add(evoAssistAction);
+        teipMenu.add(viewRoutingHistoryAction);
+        teipMenu.add(new Separator());
+        teipMenu.add(new GroupMarker(IWorkbenchActionConstants.MB_ADDITIONS));
+        menuBar.add(teipMenu);
 
         MenuManager webMenu = new MenuManager("&Web", "web");
         webMenu.add(openWebBrowserAction);

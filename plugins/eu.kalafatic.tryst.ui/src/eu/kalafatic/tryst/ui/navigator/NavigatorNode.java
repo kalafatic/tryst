@@ -11,16 +11,28 @@ public class NavigatorNode {
 
     public enum NodeType {
         ROOT_CATEGORY,
+        SERVER,
+        SESSION,
+        TASK,
+        TASK_QUEUE,
+        TASK_RUNNING,
+        TASK_COMPLETED,
+        TASK_FAILED,
+        TASK_CANCELLED,
         PROJECT,
         GIT_REPO,
         GIT_BRANCH,
-        TASK,
         WORKSPACE,
         REVIEW_SESSION,
+        USER,
         BUILD_RESULT,
         AI_EXECUTION,
         MCP_RESOURCE,
-        TEIP_INTEGRATION
+        TEIP_INTEGRATION,
+        DATABASE,
+        TABLE,
+        SQL_SCRIPT,
+        SYSTEM_ITEM
     }
 
     private final String id;

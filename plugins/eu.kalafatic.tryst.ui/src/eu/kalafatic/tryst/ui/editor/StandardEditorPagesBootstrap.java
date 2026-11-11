@@ -3,7 +3,8 @@ package eu.kalafatic.tryst.ui.editor;
 import eu.kalafatic.tryst.ui.editor.page.*;
 
 /**
- * Bootstrapper populating {@link TrystEditorPageRegistry} with the standard 13 TRYST workbench pages.
+ * Bootstrapper populating {@link TrystEditorPageRegistry} with the standard TRYST workbench pages,
+ * including Task Details and Database Viewer.
  */
 public final class StandardEditorPagesBootstrap {
 
@@ -20,6 +21,9 @@ public final class StandardEditorPagesBootstrap {
 
         reg.registerPage(new TrystEditorPageDescriptor(
                 TaskManagementPage.ID, "Task Management", 30, TaskManagementPage::new));
+
+        reg.registerPage(new TrystEditorPageDescriptor(
+                TaskDetailsPage.ID, "Task Details", 35, TaskDetailsPage::new));
 
         reg.registerPage(new TrystEditorPageDescriptor(
                 TaskExecutionPage.ID, "Task Execution", 40, TaskExecutionPage::new));
@@ -47,6 +51,9 @@ public final class StandardEditorPagesBootstrap {
 
         reg.registerPage(new TrystEditorPageDescriptor(
                 ServerMonitoringPage.ID, "Server Monitoring", 120, ServerMonitoringPage::new));
+
+        reg.registerPage(new TrystEditorPageDescriptor(
+                DatabasePage.ID, "Database", 125, DatabasePage::new));
 
         reg.registerPage(new TrystEditorPageDescriptor(
                 ConfigurationPage.ID, "Configuration", 130, ConfigurationPage::new));
