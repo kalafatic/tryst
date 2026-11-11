@@ -3,10 +3,15 @@ package eu.kalafatic.tryst.ui.editor.page;
 import eu.kalafatic.tryst.ui.editor.AbstractTrystEditorPage;
 import eu.kalafatic.tryst.ui.editor.TrystWorkbenchEditor;
 import org.eclipse.jface.viewers.ArrayContentProvider;
+import org.eclipse.jface.viewers.IStructuredSelection;
 import org.eclipse.jface.viewers.ITableLabelProvider;
 import org.eclipse.jface.viewers.LabelProvider;
 import org.eclipse.jface.viewers.TableViewer;
+import org.eclipse.jface.viewers.ViewerFilter;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.dnd.Clipboard;
+import org.eclipse.swt.dnd.TextTransfer;
+import org.eclipse.swt.dnd.Transfer;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
@@ -15,11 +20,13 @@ import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Table;
 import org.eclipse.swt.widgets.TableColumn;
+import org.eclipse.swt.widgets.Text;
 
 import java.util.List;
 
 /**
  * Editor page for Model Context Protocol (MCP) resources, tools, and endpoints.
+ * Enhanced with toolbar controls for filter search, copy tool schema, copy endpoint, and refresh.
  */
 public class McpPage extends AbstractTrystEditorPage {
 
@@ -27,6 +34,8 @@ public class McpPage extends AbstractTrystEditorPage {
 
     private TableViewer toolViewer;
     private Label lblEndpoint;
+    private Text filterText;
+    private Button btnCopyTool;
 
     public McpPage(TrystWorkbenchEditor editor) {
         super(ID, "MCP", editor);
@@ -34,6 +43,39 @@ public class McpPage extends AbstractTrystEditorPage {
 
     @Override
     protected void createPageContent(Composite parent) {
+        // Top Toolbar
+        Composite toolbar = new Composite(parent, SWT.NONE);
+        toolbar.setLayout(new GridLayout(5, false));
+        toolbar.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+
+        Button btnRefresh = new Button(toolbar, SWT.PUSH);
+        btnRefresh.setText("🔄 Refresh Tools");
+        btnRefresh.addListener(SWT.Selection, e -> refresh());
+
+        Button btnCopyEndpoint = new Button(toolbar, SWT.PUSH);
+        btnCopyEndpoint.setText("📋 Copy MCP Endpoint");
+        btnCopyEndpoint.addListener(SWT.Selection, e -> {
+            Clipboard cb = new Clipboard(getControl().getDisplay());
+            try {
+                cb.setContents(new Object[]{lblEndpoint.getText()}, new Transfer[]{TextTransfer.getInstance()});
+            } finally {
+                cb.dispose();
+            }
+        });
+
+        btnCopyTool = new Button(toolbar, SWT.PUSH);
+        btnCopyTool.setText("📋 Copy Tool Name");
+        btnCopyTool.setEnabled(false);
+        btnCopyTool.addListener(SWT.Selection, e -> copySelectedTool());
+
+        Label lblSearch = new Label(toolbar, SWT.NONE);
+        lblSearch.setText("  🔍 Filter:");
+
+        filterText = new Text(toolbar, SWT.BORDER | SWT.SEARCH);
+        filterText.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        filterText.setMessage("Filter MCP tools by name, description or scope...");
+        filterText.addModifyListener(e -> applyFilter());
+
         Composite topBar = new Composite(parent, SWT.NONE);
         topBar.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
         topBar.setLayout(new GridLayout(2, false));
@@ -61,11 +103,42 @@ public class McpPage extends AbstractTrystEditorPage {
         toolViewer.setContentProvider(ArrayContentProvider.getInstance());
         toolViewer.setLabelProvider(new McpToolLabelProvider());
 
-        Button btnRefresh = new Button(parent, SWT.PUSH);
-        btnRefresh.setText("Refresh Tools");
-        btnRefresh.addListener(SWT.Selection, e -> refresh());
+        toolViewer.addSelectionChangedListener(e -> {
+            btnCopyTool.setEnabled(!e.getSelection().isEmpty());
+        });
 
         refresh();
+    }
+
+    private void applyFilter() {
+        String query = filterText.getText().trim().toLowerCase();
+        if (query.isEmpty()) {
+            toolViewer.setFilters(new ViewerFilter[0]);
+        } else {
+            toolViewer.setFilters(new ViewerFilter() {
+                @Override
+                public boolean select(org.eclipse.jface.viewers.Viewer viewer, Object parentElement, Object element) {
+                    if (element instanceof McpToolEntry entry) {
+                        return entry.name().toLowerCase().contains(query)
+                                || entry.description().toLowerCase().contains(query)
+                                || entry.scope().toLowerCase().contains(query);
+                    }
+                    return true;
+                }
+            });
+        }
+    }
+
+    private void copySelectedTool() {
+        IStructuredSelection sel = (IStructuredSelection) toolViewer.getSelection();
+        if (!sel.isEmpty() && sel.getFirstElement() instanceof McpToolEntry entry) {
+            Clipboard cb = new Clipboard(getControl().getDisplay());
+            try {
+                cb.setContents(new Object[]{entry.name()}, new Transfer[]{TextTransfer.getInstance()});
+            } finally {
+                cb.dispose();
+            }
+        }
     }
 
     private void createColumn(String title, int width) {
@@ -90,6 +163,7 @@ public class McpPage extends AbstractTrystEditorPage {
 
     @Override
     public void refresh() {
+        super.refresh();
         if (lblEndpoint != null && !lblEndpoint.isDisposed()) {
             lblEndpoint.setText(resolveMcpEndpoint());
         }

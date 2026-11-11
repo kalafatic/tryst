@@ -4,18 +4,24 @@ import eu.kalafatic.tryst.core.lifecycle.ServerReadinessService;
 import eu.kalafatic.tryst.domain.service.ServerMonitoringService;
 import eu.kalafatic.tryst.ui.TrystUiServices;
 import eu.kalafatic.tryst.ui.context.WorkbenchContext;
+import eu.kalafatic.tryst.ui.context.WorkbenchContextManager;
 import eu.kalafatic.tryst.ui.editor.AbstractTrystEditorPage;
 import eu.kalafatic.tryst.ui.editor.TrystWorkbenchEditor;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.dnd.Clipboard;
+import org.eclipse.swt.dnd.TextTransfer;
+import org.eclipse.swt.dnd.Transfer;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Group;
 import org.eclipse.swt.widgets.Label;
+import org.eclipse.swt.widgets.MessageBox;
 
 /**
  * Overview & Dashboard page displaying system health, active project, and high-level platform status.
+ * Equipped with standardized action toolbar controls.
  */
 public class OverviewDashboardPage extends AbstractTrystEditorPage {
 
@@ -34,6 +40,34 @@ public class OverviewDashboardPage extends AbstractTrystEditorPage {
 
     @Override
     protected void createPageContent(Composite parent) {
+        // Top Toolbar Control Bar
+        Composite controlBar = new Composite(parent, SWT.NONE);
+        controlBar.setLayout(new GridLayout(4, false));
+        controlBar.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+
+        Button btnRefresh = new Button(controlBar, SWT.PUSH);
+        btnRefresh.setText("🔄 Refresh Dashboard");
+        btnRefresh.setToolTipText("Refresh all dashboard metrics and system status");
+        btnRefresh.addListener(SWT.Selection, e -> refresh());
+
+        Button btnClearContext = new Button(controlBar, SWT.PUSH);
+        btnClearContext.setText("✖ Reset Context");
+        btnClearContext.setToolTipText("Clear active project, task, and session selections");
+        btnClearContext.addListener(SWT.Selection, e -> {
+            WorkbenchContextManager.getInstance().reset();
+            refresh();
+        });
+
+        Button btnCopyInfo = new Button(controlBar, SWT.PUSH);
+        btnCopyInfo.setText("📋 Copy Status Summary");
+        btnCopyInfo.setToolTipText("Copy current dashboard system state to system clipboard");
+        btnCopyInfo.addListener(SWT.Selection, e -> copyStatusSummary());
+
+        Button btnOpenServerPage = new Button(controlBar, SWT.PUSH);
+        btnOpenServerPage.setText("📊 Server Metrics");
+        btnOpenServerPage.setToolTipText("Switch to detailed Server Monitoring page");
+        btnOpenServerPage.addListener(SWT.Selection, e -> editor.selectPage(ServerMonitoringPage.ID));
+
         Group statusGroup = new Group(parent, SWT.NONE);
         statusGroup.setText("Workspace Status");
         statusGroup.setLayout(new GridLayout(2, false));
@@ -61,10 +95,18 @@ public class OverviewDashboardPage extends AbstractTrystEditorPage {
 
         createRow(metricsGroup, "JVM Heap (Used / Max):");
         lblHeap = createValueLabel(metricsGroup, "-");
+    }
 
-        Button btnRefresh = new Button(parent, SWT.PUSH);
-        btnRefresh.setText("Refresh Dashboard");
-        btnRefresh.addListener(SWT.Selection, e -> refresh());
+    private void copyStatusSummary() {
+        Clipboard cb = new Clipboard(getControl().getDisplay());
+        try {
+            String text = String.format("TRYST System Status:\nReadiness: %s\nProject: %s\nSession: %s\nTask: %s\nCPU: %s\nHeap: %s",
+                    lblServerReadiness.getText(), lblActiveProject.getText(), lblActiveSession.getText(),
+                    lblActiveTask.getText(), lblCpu.getText(), lblHeap.getText());
+            cb.setContents(new Object[]{text}, new Transfer[]{TextTransfer.getInstance()});
+        } finally {
+            cb.dispose();
+        }
     }
 
     private void createRow(Composite parent, String labelText) {
@@ -87,6 +129,7 @@ public class OverviewDashboardPage extends AbstractTrystEditorPage {
 
     @Override
     public void onContextChanged(WorkbenchContext context) {
+        super.onContextChanged(context);
         if (lblActiveProject != null && !lblActiveProject.isDisposed()) {
             lblActiveProject.setText(context.projectName() != null ? context.projectName() : "None");
         }
@@ -100,6 +143,7 @@ public class OverviewDashboardPage extends AbstractTrystEditorPage {
 
     @Override
     public void refresh() {
+        super.refresh();
         if (lblServerReadiness == null || lblServerReadiness.isDisposed()) return;
 
         var readinessService = TrystUiServices.getServerReadinessService();

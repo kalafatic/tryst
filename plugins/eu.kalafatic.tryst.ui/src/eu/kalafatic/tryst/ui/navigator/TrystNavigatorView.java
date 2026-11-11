@@ -3,6 +3,7 @@ package eu.kalafatic.tryst.ui.navigator;
 import eu.kalafatic.tryst.core.concurrent.AsyncExecutionService;
 import eu.kalafatic.tryst.core.log.TrystLog;
 import eu.kalafatic.tryst.domain.model.AgentTask;
+import eu.kalafatic.tryst.domain.model.ExecutionStatus;
 import eu.kalafatic.tryst.domain.model.Project;
 import eu.kalafatic.tryst.domain.model.Workspace;
 import eu.kalafatic.tryst.domain.review.CodeReview;
@@ -27,9 +28,14 @@ import org.eclipse.jface.action.IMenuListener;
 import org.eclipse.jface.action.IMenuManager;
 import org.eclipse.jface.action.IToolBarManager;
 import org.eclipse.jface.action.MenuManager;
+import org.eclipse.jface.action.Separator;
+import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.jface.viewers.IStructuredSelection;
 import org.eclipse.jface.viewers.TreeViewer;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.dnd.Clipboard;
+import org.eclipse.swt.dnd.TextTransfer;
+import org.eclipse.swt.dnd.Transfer;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Composite;
@@ -48,6 +54,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * TRYST Navigator View (upper-left dock) providing hierarchical navigation across:
  * Projects, Git Repositories, Branches, Tasks, Workspaces, Review Sessions,
  * Builds/Tests, AI Executions, MCP Resources, and TEIP Integrations.
+ * Enhanced with rich context menus for each node type.
  */
 public class TrystNavigatorView extends ViewPart implements WorkspaceChangeListener {
 
@@ -56,6 +63,8 @@ public class TrystNavigatorView extends ViewPart implements WorkspaceChangeListe
     private TreeViewer treeViewer;
     private Action refreshAction;
     private Action openInEditorAction;
+    private Action expandAllAction;
+    private Action collapseAllAction;
     private final AtomicLong asyncRequestCounter = new AtomicLong(0);
 
     @Override
@@ -169,9 +178,29 @@ public class TrystNavigatorView extends ViewPart implements WorkspaceChangeListe
             }
         };
 
+        expandAllAction = new Action("Expand All") {
+            @Override
+            public void run() {
+                if (treeViewer != null && !treeViewer.getControl().isDisposed()) {
+                    treeViewer.expandAll();
+                }
+            }
+        };
+
+        collapseAllAction = new Action("Collapse All") {
+            @Override
+            public void run() {
+                if (treeViewer != null && !treeViewer.getControl().isDisposed()) {
+                    treeViewer.collapseAll();
+                }
+            }
+        };
+
         IToolBarManager toolbar = getViewSite().getActionBars().getToolBarManager();
         toolbar.add(refreshAction);
         toolbar.add(openInEditorAction);
+        toolbar.add(expandAllAction);
+        toolbar.add(collapseAllAction);
     }
 
     private void createContextMenu() {
@@ -180,13 +209,160 @@ public class TrystNavigatorView extends ViewPart implements WorkspaceChangeListe
         menuMgr.addMenuListener(new IMenuListener() {
             @Override
             public void menuAboutToShow(IMenuManager manager) {
-                manager.add(openInEditorAction);
-                manager.add(refreshAction);
+                IStructuredSelection sel = (IStructuredSelection) treeViewer.getSelection();
+                if (!sel.isEmpty() && sel.getFirstElement() instanceof NavigatorNode node) {
+                    populateContextMenuForNode(manager, node);
+                } else {
+                    manager.add(refreshAction);
+                    manager.add(expandAllAction);
+                    manager.add(collapseAllAction);
+                }
             }
         });
         Menu menu = menuMgr.createContextMenu(treeViewer.getControl());
         treeViewer.getControl().setMenu(menu);
         getSite().registerContextMenu(menuMgr, treeViewer);
+    }
+
+    private void populateContextMenuForNode(IMenuManager manager, NavigatorNode node) {
+        // Standard Actions
+        manager.add(openInEditorAction);
+        manager.add(new Action("Show Details") {
+            @Override
+            public void run() {
+                showNodeDetails(node);
+            }
+        });
+
+        manager.add(new Separator());
+
+        // Context-sensitive actions based on Node Type
+        switch (node.getType()) {
+            case PROJECT -> {
+                if (node.getDomainObject() instanceof Project p) {
+                    manager.add(new Action("Copy Project Path") {
+                        @Override
+                        public void run() {
+                            if (p.getLocation() != null) copyToClipboard(p.getLocation().toString());
+                        }
+                    });
+                    manager.add(new Action("Create Task for Project") {
+                        @Override
+                        public void run() {
+                            handleNodeSelection(node);
+                            navigateNodeToEditor(new NavigatorNode("task", "Tasks", NavigatorNode.NodeType.TASK, null, null));
+                        }
+                    });
+                }
+            }
+            case GIT_REPO -> {
+                if (node.getDomainObject() instanceof Project p && p.getLocation() != null) {
+                    manager.add(new Action("Git Pull / Update") {
+                        @Override
+                        public void run() {
+                            GitService git = TrystUiServices.getGitService();
+                            if (git != null) {
+                                try {
+                                    var res = git.pull(p.getLocation(), "origin", "main", null);
+                                    MessageDialog.openInformation(getSite().getShell(), "Git Pull",
+                                            res.isSuccess() ? "Pulled successfully:\n" + res.output() : "Pull status:\n" + res.error());
+                                    refreshAsync();
+                                } catch (Exception ex) {
+                                    MessageDialog.openError(getSite().getShell(), "Git Error", ex.getMessage());
+                                }
+                            }
+                        }
+                    });
+                    manager.add(new Action("Copy Repository Path") {
+                        @Override
+                        public void run() {
+                            copyToClipboard(p.getLocation().toString());
+                        }
+                    });
+                }
+            }
+            case GIT_BRANCH -> {
+                if (node.getDomainObject() instanceof String branch) {
+                    manager.add(new Action("Copy Branch Name") {
+                        @Override
+                        public void run() {
+                            copyToClipboard(branch);
+                        }
+                    });
+                }
+            }
+            case TASK -> {
+                if (node.getDomainObject() instanceof AgentTask task) {
+                    manager.add(new Action("Copy Task ID") {
+                        @Override
+                        public void run() {
+                            copyToClipboard(task.getId());
+                        }
+                    });
+                    if (task.getStatus() == ExecutionStatus.RUNNING || task.getStatus() == ExecutionStatus.CLAIMED) {
+                        manager.add(new Action("Cancel Task Execution") {
+                            @Override
+                            public void run() {
+                                boolean confirm = MessageDialog.openConfirm(getSite().getShell(), "Cancel Task", "Cancel execution of task: " + task.getTitle() + "?");
+                                if (confirm) {
+                                    var orch = TrystUiServices.getSessionTaskOrchestrator();
+                                    if (orch != null) orch.cancelCurrentExecution();
+                                    refreshAsync();
+                                }
+                            }
+                        });
+                    }
+                }
+            }
+            case REVIEW_SESSION -> {
+                if (node.getDomainObject() instanceof CodeReview review) {
+                    manager.add(new Action("Copy Review ID") {
+                        @Override
+                        public void run() {
+                            copyToClipboard(review.getId());
+                        }
+                    });
+                }
+            }
+            case WORKSPACE -> {
+                if (node.getDomainObject() instanceof Workspace w) {
+                    manager.add(new Action("Copy Workspace ID") {
+                        @Override
+                        public void run() {
+                            copyToClipboard(w.getId());
+                        }
+                    });
+                }
+            }
+            default -> {}
+        }
+
+        manager.add(new Separator());
+        manager.add(refreshAction);
+        manager.add(expandAllAction);
+        manager.add(collapseAllAction);
+    }
+
+    private void showNodeDetails(NavigatorNode node) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Type: ").append(node.getType()).append("\n");
+        sb.append("Name: ").append(node.getName()).append("\n");
+        sb.append("ID: ").append(node.getId()).append("\n");
+        if (node.getDomainObject() != null) {
+            sb.append("Domain Object: ").append(node.getDomainObject().getClass().getSimpleName()).append("\n");
+            sb.append("Details: ").append(node.getDomainObject()).append("\n");
+        }
+        MessageDialog.openInformation(getSite().getShell(), "Node Details - " + node.getName(), sb.toString());
+    }
+
+    private void copyToClipboard(String text) {
+        if (text == null) return;
+        Clipboard cb = new Clipboard(getSite().getShell().getDisplay());
+        try {
+            cb.setContents(new Object[]{text}, new Transfer[]{TextTransfer.getInstance()});
+        } finally {
+            cb.dispose();
+        }
     }
 
     public void refreshAsync() {
