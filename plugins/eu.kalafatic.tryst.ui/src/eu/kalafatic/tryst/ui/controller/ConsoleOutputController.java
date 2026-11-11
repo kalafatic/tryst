@@ -31,6 +31,9 @@ public class ConsoleOutputController implements WorkspaceChangeListener, LogList
     private volatile LogLevel filterLevel = null; // null means ALL
     private volatile String filterCategory = null;
     private volatile String searchText = null;
+    private volatile String contextSessionId = null;
+    private volatile String contextTaskId = null;
+    private volatile boolean followContext = true;
 
     public ConsoleOutputController(WorkspaceService workspaceService) {
         this.workspaceService = Objects.requireNonNull(workspaceService, "workspaceService must not be null");
@@ -101,7 +104,43 @@ public class ConsoleOutputController implements WorkspaceChangeListener, LogList
             }
         }
 
+        // Selection Context Filter (Session / Task)
+        if (followContext) {
+            if (contextTaskId != null && !contextTaskId.isBlank()) {
+                String tid = contextTaskId.trim().toLowerCase();
+                boolean matchTid = entry.taskId() != null && entry.taskId().toLowerCase().contains(tid);
+                boolean matchInMsg = entry.message() != null && entry.message().toLowerCase().contains(tid);
+                if (!matchTid && !matchInMsg) return false;
+            } else if (contextSessionId != null && !contextSessionId.isBlank()) {
+                String sid = contextSessionId.trim().toLowerCase();
+                boolean matchSid = entry.correlationId() != null && entry.correlationId().toLowerCase().contains(sid);
+                boolean matchInMsg = entry.message() != null && entry.message().toLowerCase().contains(sid);
+                if (!matchSid && !matchInMsg) return false;
+            }
+        }
+
         return true;
+    }
+
+    public void setContextFilter(String sessionId, String taskId) {
+        this.contextSessionId = sessionId;
+        this.contextTaskId = taskId;
+    }
+
+    public String getContextTaskId() {
+        return contextTaskId;
+    }
+
+    public String getContextSessionId() {
+        return contextSessionId;
+    }
+
+    public boolean isFollowContext() {
+        return followContext;
+    }
+
+    public void setFollowContext(boolean followContext) {
+        this.followContext = followContext;
     }
 
     public List<LogEntry> getFilteredEntries() {

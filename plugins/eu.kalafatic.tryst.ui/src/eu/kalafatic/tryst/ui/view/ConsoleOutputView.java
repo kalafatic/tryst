@@ -51,7 +51,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * - Detailed inspector pane showing metadata, correlation ID, task ID, thread, and stack trace.
  * - Contextual task navigation.
  */
-public class ConsoleOutputView extends ViewPart {
+public class ConsoleOutputView extends ViewPart implements eu.kalafatic.tryst.ui.context.IWorkbenchContextListener {
 
     public static final String ID = "eu.kalafatic.tryst.ui.view.consoleOutput";
     private static final DateTimeFormatter TIME_FORMAT =
@@ -63,6 +63,7 @@ public class ConsoleOutputView extends ViewPart {
     private StyledText detailText;
     private Text searchBox;
     private Combo levelCombo;
+    private Label contextLabel;
     private Label statusLabel;
 
     private Action pauseResumeAction;
@@ -70,6 +71,8 @@ public class ConsoleOutputView extends ViewPart {
     private Action copyAction;
     private Action copyDetailsAction;
     private Action navigateTaskAction;
+    private Action followContextAction;
+    private Action resetFilterAction;
 
     private Color errorColor;
     private Color warnColor;
@@ -89,6 +92,8 @@ public class ConsoleOutputView extends ViewPart {
         parent.setLayout(new GridLayout(1, false));
 
         createFilterBar(parent);
+
+        eu.kalafatic.tryst.ui.context.WorkbenchContextManager.getInstance().addContextListener(this);
 
         SashForm sashForm = new SashForm(parent, SWT.VERTICAL);
         sashForm.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
@@ -117,7 +122,7 @@ public class ConsoleOutputView extends ViewPart {
     private void createFilterBar(Composite parent) {
         Composite filterBar = new Composite(parent, SWT.NONE);
         filterBar.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        GridLayout layout = new GridLayout(6, false);
+        GridLayout layout = new GridLayout(7, false);
         layout.marginWidth = 2;
         layout.marginHeight = 2;
         filterBar.setLayout(layout);
@@ -151,6 +156,10 @@ public class ConsoleOutputView extends ViewPart {
             controller.setSearchText(searchBox.getText());
             refreshAllLogs();
         });
+
+        contextLabel = new Label(filterBar, SWT.BORDER);
+        contextLabel.setText(" [Global Console] ");
+        contextLabel.setToolTipText("Current Console Target Context");
 
         statusLabel = new Label(filterBar, SWT.NONE);
         statusLabel.setLayoutData(new GridData(SWT.RIGHT, SWT.CENTER, false, false));
@@ -307,6 +316,28 @@ public class ConsoleOutputView extends ViewPart {
             statusLabel.setText(String.format("Status: %s | Displayed: %d | Total: %d",
                     streamingState, logTable.getItemCount(), controller.getTotalCapturedCount()));
         }
+        if (contextLabel != null && !contextLabel.isDisposed()) {
+            if (!controller.isFollowContext() || (controller.getContextTaskId() == null && controller.getContextSessionId() == null)) {
+                contextLabel.setText(" [Global Console] ");
+            } else if (controller.getContextTaskId() != null) {
+                contextLabel.setText(" [Task: " + controller.getContextTaskId() + "] ");
+            } else {
+                contextLabel.setText(" [Session: " + controller.getContextSessionId() + "] ");
+            }
+        }
+    }
+
+    @Override
+    public void onContextChanged(eu.kalafatic.tryst.ui.context.WorkbenchContext context) {
+        if (controller == null) return;
+        String tid = context.task() != null ? context.task().getId() : null;
+        String sid = context.session() != null ? context.session().getId() : null;
+        controller.setContextFilter(sid, tid);
+
+        Display display = getSite().getShell().getDisplay();
+        if (!display.isDisposed()) {
+            display.asyncExec(this::refreshAllLogs);
+        }
     }
 
     private void updateDetailPane() {
@@ -393,9 +424,30 @@ public class ConsoleOutputView extends ViewPart {
             }
         };
 
+        followContextAction = new Action("Follow Active Selection Context", Action.AS_CHECK_BOX) {
+            @Override
+            public void run() {
+                controller.setFollowContext(isChecked());
+                refreshAllLogs();
+            }
+        };
+        followContextAction.setChecked(true);
+
+        resetFilterAction = new Action("Show Global Logs") {
+            @Override
+            public void run() {
+                controller.setFollowContext(false);
+                followContextAction.setChecked(false);
+                refreshAllLogs();
+            }
+        };
+
         IToolBarManager toolbar = getViewSite().getActionBars().getToolBarManager();
         toolbar.add(pauseResumeAction);
         toolbar.add(clearAction);
+        toolbar.add(new Separator());
+        toolbar.add(followContextAction);
+        toolbar.add(resetFilterAction);
         toolbar.add(new Separator());
         toolbar.add(copyAction);
         toolbar.add(copyDetailsAction);
@@ -449,6 +501,7 @@ public class ConsoleOutputView extends ViewPart {
 
     @Override
     public void dispose() {
+        eu.kalafatic.tryst.ui.context.WorkbenchContextManager.getInstance().removeContextListener(this);
         if (controller != null) {
             controller.dispose();
         }
