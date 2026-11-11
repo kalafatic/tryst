@@ -68,8 +68,13 @@ class SecurityArchitectureAndPenetrationTest {
     private HttpClient httpClient;
     private String baseUrl;
 
+    private String savedDevMode;
+
     @BeforeEach
     void setUp() throws IOException {
+        savedDevMode = System.getProperty("tryst.dev.mode");
+        System.setProperty("tryst.dev.mode", "false");
+
         Path dbPath = tempDir.resolve("sec_arch_test.db");
         databaseManager = new SqliteDatabaseManager(dbPath);
         databaseManager.initialize();
@@ -108,6 +113,11 @@ class SecurityArchitectureAndPenetrationTest {
 
     @AfterEach
     void tearDown() {
+        if (savedDevMode != null) {
+            System.setProperty("tryst.dev.mode", savedDevMode);
+        } else {
+            System.clearProperty("tryst.dev.mode");
+        }
         if (httpServer != null) {
             httpServer.stop();
         }

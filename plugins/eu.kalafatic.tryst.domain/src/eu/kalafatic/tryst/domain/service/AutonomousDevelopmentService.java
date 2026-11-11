@@ -122,7 +122,7 @@ public class AutonomousDevelopmentService {
                         codeReview = new CodeReview(
                                 projId,
                                 task.getId(),
-                                "main",
+                                "master",
                                 diff,
                                 buildSuccess ? "SUCCESS" : "FAILURE",
                                 reviewReport.summary()

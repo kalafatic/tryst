@@ -68,8 +68,8 @@ public class LanNetworkAccessAndRemoteWorkflowTest {
 
         System.setProperty("tryst.dev.mode", "true");
         System.setProperty("tryst.network.mode", "LAN");
-        System.setProperty("tryst.http.port", "38080");
-        System.setProperty("tryst.tcp.port", "38280");
+        System.setProperty("tryst.http.port", "38090");
+        System.setProperty("tryst.tcp.port", "38290");
 
         Path tempDir = Files.createTempDirectory("tryst-lan-test-");
         System.setProperty("user.home", tempDir.toAbsolutePath().toString());

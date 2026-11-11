@@ -187,7 +187,7 @@ public class EditorLiveStatusAndProgressComposite extends Composite {
         String projectColor = (currentContext != null && currentContext.project() != null) ? "#0284c7" : "#64748b";
 
         String repoText = (currentContext != null && currentContext.repositoryPath() != null) ?
-                "Connected (" + (currentContext.branchName() != null ? currentContext.branchName() : "main") + ")" : "Not Connected";
+                "Connected (" + (currentContext.branchName() != null ? currentContext.branchName() : "master") + ")" : "Not Connected";
         String repoColor = (currentContext != null && currentContext.repositoryPath() != null) ? "#16a34a" : "#64748b";
 
         String taskText = (currentContext != null && currentContext.task() != null) ?
@@ -375,10 +375,10 @@ public class EditorLiveStatusAndProgressComposite extends Composite {
     private int getStageIndex(ExecutionStatus status) {
         if (status == null) return 0;
         return switch (status) {
-            case IDLE, QUEUED, CLAIMED -> 0;
+            case IDLE, QUEUED, CLAIMED, PAUSED -> 0;
             case RUNNING -> 2;
             case WAITING_FOR_REVIEW, APPROVED, REJECTED, COMMITTING -> 5;
-            case COMPLETED -> 6;
+            case COMPLETED, ARCHIVED -> 6;
             case FAILED, CANCELLED, RECOVERY_REQUIRED -> 2;
         };
     }

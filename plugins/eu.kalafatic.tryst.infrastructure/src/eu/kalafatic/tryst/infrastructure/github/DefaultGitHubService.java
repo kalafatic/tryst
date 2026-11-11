@@ -251,7 +251,7 @@ public class DefaultGitHubService implements GitHubService {
         Objects.requireNonNull(cloneUrl, "cloneUrl must not be null");
         Objects.requireNonNull(targetDir, "targetDir must not be null");
 
-        String effectiveBranch = (branch != null && !branch.isBlank()) ? branch : "main";
+        String effectiveBranch = (branch != null && !branch.isBlank()) ? branch : "master";
 
         // Retrieve token if user is connected
         String token = null;
@@ -379,7 +379,7 @@ public class DefaultGitHubService implements GitHubService {
                         owner,
                         name != null ? name : fullName,
                         isPrivate,
-                        defaultBranch != null ? defaultBranch : "main",
+                        defaultBranch != null ? defaultBranch : "master",
                         cloneUrl,
                         htmlUrl != null ? htmlUrl : cloneUrl,
                         description != null ? description : ""

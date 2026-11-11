@@ -72,7 +72,7 @@ public class CodeReview {
         this.id = Objects.requireNonNull(id, "id must not be null");
         this.projectId = Objects.requireNonNull(projectId, "projectId must not be null");
         this.taskId = Objects.requireNonNull(taskId, "taskId must not be null");
-        this.branch = branch != null && !branch.isBlank() ? branch : "main";
+        this.branch = branch != null && !branch.isBlank() ? branch : "master";
         this.status = Objects.requireNonNull(status, "status must not be null");
         this.initialDiff = initialDiff != null ? initialDiff : "";
         this.effectiveDiff = effectiveDiff != null ? effectiveDiff : this.initialDiff;

@@ -30,8 +30,12 @@ class FullPlatformLifecycleAndSecurityIntegrationTest {
     private ApplicationLifecycleCoordinator coordinator;
     private HttpClient httpClient;
 
+    private String savedDevMode;
+
     @BeforeEach
     void setUp() {
+        savedDevMode = System.getProperty("tryst.dev.mode");
+        System.setProperty("tryst.dev.mode", "false");
         System.setProperty("user.home", tempDir.toString());
         System.setProperty("tryst.admin.password", "admin123");
         coordinator = new ApplicationLifecycleCoordinator();
@@ -40,6 +44,11 @@ class FullPlatformLifecycleAndSecurityIntegrationTest {
 
     @AfterEach
     void tearDown() {
+        if (savedDevMode != null) {
+            System.setProperty("tryst.dev.mode", savedDevMode);
+        } else {
+            System.clearProperty("tryst.dev.mode");
+        }
         if (coordinator != null) {
             try {
                 coordinator.transitionTo(ApplicationLifecycleStage.WORKBENCH_RUNNING);

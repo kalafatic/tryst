@@ -70,6 +70,8 @@ public class ConsoleOutputView extends ViewPart implements eu.kalafatic.tryst.ui
     private Action clearAction;
     private Action copyAction;
     private Action copyDetailsAction;
+    private Action selectAllAction;
+    private Action scrollLockAction;
     private Action navigateTaskAction;
     private Action followContextAction;
     private Action resetFilterAction;
@@ -189,7 +191,8 @@ public class ConsoleOutputView extends ViewPart implements eu.kalafatic.tryst.ui
     }
 
     private void createDetailPane(Composite parent) {
-        detailText = new StyledText(parent, SWT.BORDER | SWT.MULTI | SWT.V_SCROLL | SWT.H_SCROLL | SWT.READ_ONLY);
+        // Editable inspection area as requested: allow users to inspect, edit, and copy console text
+        detailText = new StyledText(parent, SWT.BORDER | SWT.MULTI | SWT.V_SCROLL | SWT.H_SCROLL);
         detailText.setFont(org.eclipse.jface.resource.JFaceResources.getTextFont());
     }
 
@@ -252,7 +255,7 @@ public class ConsoleOutputView extends ViewPart implements eu.kalafatic.tryst.ui
                 for (LogEntry entry : batch) {
                     addTableItem(entry);
                 }
-                while (logTable.getItemCount() > 2000) {
+                while (logTable.getItemCount() > 10000) {
                     logTable.remove(0);
                 }
             } finally {
@@ -273,6 +276,7 @@ public class ConsoleOutputView extends ViewPart implements eu.kalafatic.tryst.ui
         String levelStr = entry.level() != null ? entry.level().name() : "INFO";
         String catStr = entry.category() != null ? entry.category() : "";
         String taskStr = entry.taskId() != null ? entry.taskId() : "";
+        // Do not truncate message in the item data or representation
         String msgStr = entry.message() != null ? entry.message().replace("\n", " ") : "";
 
         item.setText(new String[]{timeStr, levelStr, catStr, taskStr, msgStr});
@@ -312,7 +316,7 @@ public class ConsoleOutputView extends ViewPart implements eu.kalafatic.tryst.ui
 
     private void updateStatusText() {
         if (statusLabel != null && !statusLabel.isDisposed()) {
-            String streamingState = controller.isPaused() ? "Paused" : "Streaming";
+            String streamingState = controller.isPaused() ? "Paused" : (autoScroll ? "Streaming (Auto-scroll)" : "Streaming (Scroll Lock)");
             statusLabel.setText(String.format("Status: %s | Displayed: %d | Total: %d",
                     streamingState, logTable.getItemCount(), controller.getTotalCapturedCount()));
         }
@@ -406,10 +410,35 @@ public class ConsoleOutputView extends ViewPart implements eu.kalafatic.tryst.ui
             @Override
             public void run() {
                 if (detailText != null && !detailText.isDisposed()) {
-                    copyToClipboard(detailText.getText());
+                    String sel = detailText.getSelectionText();
+                    if (sel != null && !sel.isEmpty()) {
+                        copyToClipboard(sel);
+                    } else {
+                        copyToClipboard(detailText.getText());
+                    }
                 }
             }
         };
+
+        selectAllAction = new Action("Select All") {
+            @Override
+            public void run() {
+                if (detailText != null && !detailText.isDisposed() && detailText.isFocusControl()) {
+                    detailText.selectAll();
+                } else if (logTable != null && !logTable.isDisposed()) {
+                    logTable.selectAll();
+                }
+            }
+        };
+
+        scrollLockAction = new Action("Scroll Lock / Auto-Scroll", Action.AS_CHECK_BOX) {
+            @Override
+            public void run() {
+                autoScroll = !isChecked();
+                updateStatusText();
+            }
+        };
+        scrollLockAction.setChecked(false); // unchecked means auto-scroll is ON
 
         navigateTaskAction = new Action("Navigate to Related Task") {
             @Override
@@ -445,10 +474,12 @@ public class ConsoleOutputView extends ViewPart implements eu.kalafatic.tryst.ui
         IToolBarManager toolbar = getViewSite().getActionBars().getToolBarManager();
         toolbar.add(pauseResumeAction);
         toolbar.add(clearAction);
+        toolbar.add(scrollLockAction);
         toolbar.add(new Separator());
         toolbar.add(followContextAction);
         toolbar.add(resetFilterAction);
         toolbar.add(new Separator());
+        toolbar.add(selectAllAction);
         toolbar.add(copyAction);
         toolbar.add(copyDetailsAction);
         toolbar.add(new Separator());
@@ -457,15 +488,18 @@ public class ConsoleOutputView extends ViewPart implements eu.kalafatic.tryst.ui
         org.eclipse.jface.action.MenuManager menuMgr = new org.eclipse.jface.action.MenuManager("#ConsolePopupMenu");
         menuMgr.setRemoveAllWhenShown(true);
         menuMgr.addMenuListener(m -> {
+            m.add(selectAllAction);
             m.add(copyAction);
             m.add(copyDetailsAction);
             m.add(new Separator());
             m.add(navigateTaskAction);
             m.add(new Separator());
+            m.add(scrollLockAction);
             m.add(pauseResumeAction);
             m.add(clearAction);
         });
         logTable.setMenu(menuMgr.createContextMenu(logTable));
+        detailText.setMenu(menuMgr.createContextMenu(detailText));
     }
 
     private void copyToClipboard(String text) {

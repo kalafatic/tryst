@@ -90,6 +90,8 @@ public class AgentTask {
             case APPROVED -> TaskStatus.APPROVED;
             case REJECTED -> TaskStatus.REJECTED;
             case COMMITTING -> TaskStatus.COMMITTING;
+            case PAUSED -> TaskStatus.PAUSED;
+            case ARCHIVED -> TaskStatus.ARCHIVED;
             case COMPLETED -> TaskStatus.COMPLETED;
             case FAILED -> TaskStatus.FAILED;
             case CANCELLED -> TaskStatus.CANCELLED;
@@ -107,6 +109,8 @@ public class AgentTask {
             case APPROVED -> ExecutionStatus.APPROVED;
             case REJECTED -> ExecutionStatus.REJECTED;
             case COMMITTING -> ExecutionStatus.COMMITTING;
+            case PAUSED -> ExecutionStatus.PAUSED;
+            case ARCHIVED -> ExecutionStatus.ARCHIVED;
             case COMPLETED -> ExecutionStatus.COMPLETED;
             case FAILED -> ExecutionStatus.FAILED;
             case CANCELLED -> ExecutionStatus.CANCELLED;

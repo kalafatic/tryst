@@ -47,6 +47,7 @@ public final class TaskStateTransitionValidator {
         ALLOWED_TRANSITIONS.put(TaskStatus.QUEUED, EnumSet.of(
                 TaskStatus.CLAIMED,
                 TaskStatus.RUNNING,
+                TaskStatus.PAUSED,
                 TaskStatus.CANCELLED,
                 TaskStatus.RECOVERY_REQUIRED
         ));
@@ -73,6 +74,7 @@ public final class TaskStateTransitionValidator {
                 TaskStatus.TESTING,
                 TaskStatus.WAITING_FOR_APPROVAL,
                 TaskStatus.WAITING_FOR_REVIEW,
+                TaskStatus.PAUSED,
                 TaskStatus.COMPLETED,
                 TaskStatus.FAILED,
                 TaskStatus.CANCELLED,
@@ -84,6 +86,7 @@ public final class TaskStateTransitionValidator {
                 TaskStatus.ANALYZING,
                 TaskStatus.PLANNING,
                 TaskStatus.IMPLEMENTING,
+                TaskStatus.PAUSED,
                 TaskStatus.FAILED,
                 TaskStatus.CANCELLED,
                 TaskStatus.RECOVERY_REQUIRED
@@ -93,6 +96,7 @@ public final class TaskStateTransitionValidator {
         ALLOWED_TRANSITIONS.put(TaskStatus.ANALYZING, EnumSet.of(
                 TaskStatus.PLANNING,
                 TaskStatus.IMPLEMENTING,
+                TaskStatus.PAUSED,
                 TaskStatus.FAILED,
                 TaskStatus.CANCELLED,
                 TaskStatus.RECOVERY_REQUIRED
@@ -103,6 +107,7 @@ public final class TaskStateTransitionValidator {
                 TaskStatus.READY,
                 TaskStatus.IMPLEMENTING,
                 TaskStatus.WAITING_FOR_APPROVAL,
+                TaskStatus.PAUSED,
                 TaskStatus.FAILED,
                 TaskStatus.CANCELLED,
                 TaskStatus.RECOVERY_REQUIRED
@@ -113,6 +118,7 @@ public final class TaskStateTransitionValidator {
                 TaskStatus.BUILDING,
                 TaskStatus.TESTING,
                 TaskStatus.WAITING_FOR_REVIEW,
+                TaskStatus.PAUSED,
                 TaskStatus.COMPLETED,
                 TaskStatus.FAILED,
                 TaskStatus.CANCELLED,
@@ -124,6 +130,7 @@ public final class TaskStateTransitionValidator {
                 TaskStatus.TESTING,
                 TaskStatus.IMPLEMENTING,
                 TaskStatus.WAITING_FOR_REVIEW,
+                TaskStatus.PAUSED,
                 TaskStatus.COMPLETED,
                 TaskStatus.FAILED,
                 TaskStatus.CANCELLED,
@@ -135,6 +142,7 @@ public final class TaskStateTransitionValidator {
                 TaskStatus.WAITING_FOR_REVIEW,
                 TaskStatus.IMPLEMENTING,
                 TaskStatus.BUILDING,
+                TaskStatus.PAUSED,
                 TaskStatus.COMPLETED,
                 TaskStatus.FAILED,
                 TaskStatus.CANCELLED,
@@ -155,6 +163,7 @@ public final class TaskStateTransitionValidator {
                 TaskStatus.APPROVED,
                 TaskStatus.REJECTED,
                 TaskStatus.REWORK_REQUESTED,
+                TaskStatus.ARCHIVED,
                 TaskStatus.CANCELLED
         ));
 
@@ -171,9 +180,26 @@ public final class TaskStateTransitionValidator {
                 TaskStatus.BUILDING,
                 TaskStatus.TESTING,
                 TaskStatus.WAITING_FOR_REVIEW,
+                TaskStatus.PAUSED,
                 TaskStatus.FAILED,
                 TaskStatus.CANCELLED,
                 TaskStatus.RECOVERY_REQUIRED
+        ));
+
+        // From PAUSED
+        ALLOWED_TRANSITIONS.put(TaskStatus.PAUSED, EnumSet.of(
+                TaskStatus.QUEUED,
+                TaskStatus.CLAIMED,
+                TaskStatus.RUNNING,
+                TaskStatus.CLONING,
+                TaskStatus.ANALYZING,
+                TaskStatus.PLANNING,
+                TaskStatus.IMPLEMENTING,
+                TaskStatus.BUILDING,
+                TaskStatus.TESTING,
+                TaskStatus.REWORKING,
+                TaskStatus.CANCELLED,
+                TaskStatus.ARCHIVED
         ));
 
         // From APPROVED
@@ -207,10 +233,11 @@ public final class TaskStateTransitionValidator {
                 TaskStatus.CANCELLED
         ));
 
-        // Terminal states: COMPLETED, FAILED, CANCELLED have no outward normal transitions
-        ALLOWED_TRANSITIONS.put(TaskStatus.COMPLETED, Collections.emptySet());
-        ALLOWED_TRANSITIONS.put(TaskStatus.FAILED, Collections.emptySet());
-        ALLOWED_TRANSITIONS.put(TaskStatus.CANCELLED, Collections.emptySet());
+        // Terminal states: can only transition to ARCHIVED
+        ALLOWED_TRANSITIONS.put(TaskStatus.COMPLETED, EnumSet.of(TaskStatus.ARCHIVED));
+        ALLOWED_TRANSITIONS.put(TaskStatus.FAILED, EnumSet.of(TaskStatus.ARCHIVED));
+        ALLOWED_TRANSITIONS.put(TaskStatus.CANCELLED, EnumSet.of(TaskStatus.ARCHIVED));
+        ALLOWED_TRANSITIONS.put(TaskStatus.ARCHIVED, Collections.emptySet());
     }
 
     private TaskStateTransitionValidator() {}

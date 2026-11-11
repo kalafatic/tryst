@@ -79,8 +79,13 @@ public class AdministrationAndOperationalManagementTest {
     private String devToken;
     private int boundPort;
 
+    private String savedDevMode;
+
     @BeforeEach
     void setUp() throws Exception {
+        savedDevMode = System.getProperty("tryst.dev.mode");
+        System.setProperty("tryst.dev.mode", "false");
+
         Path dbPath = tempDir.resolve("admin-test.db");
         dbManager = new SqliteDatabaseManager(dbPath);
         dbManager.initialize();
@@ -164,6 +169,11 @@ public class AdministrationAndOperationalManagementTest {
 
     @AfterEach
     void tearDown() {
+        if (savedDevMode != null) {
+            System.setProperty("tryst.dev.mode", savedDevMode);
+        } else {
+            System.clearProperty("tryst.dev.mode");
+        }
         if (httpServer != null) {
             httpServer.stop();
         }

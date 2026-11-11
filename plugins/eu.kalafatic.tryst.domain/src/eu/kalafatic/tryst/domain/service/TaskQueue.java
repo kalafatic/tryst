@@ -1,6 +1,7 @@
 package eu.kalafatic.tryst.domain.service;
 
 import eu.kalafatic.tryst.domain.model.Task;
+import eu.kalafatic.tryst.domain.model.TaskPriority;
 import eu.kalafatic.tryst.domain.model.TaskStatus;
 import eu.kalafatic.tryst.domain.repository.TaskRepository;
 
@@ -82,5 +83,53 @@ public class TaskQueue {
 
     public int getQueueDepth() {
         return getQueuedTasks().size();
+    }
+
+    /**
+     * Increases execution priority of a queued task (e.g. NORMAL -> HIGH -> URGENT).
+     */
+    public synchronized boolean moveUp(String taskId) {
+        Objects.requireNonNull(taskId, "taskId must not be null");
+        Optional<Task> opt = taskRepository.findTaskById(taskId);
+        if (opt.isEmpty()) return false;
+        Task task = opt.get();
+        if (task.getStatus().isTerminal()) return false;
+
+        TaskPriority p = task.getPriority();
+        TaskPriority next = switch (p) {
+            case LOW -> TaskPriority.NORMAL;
+            case NORMAL -> TaskPriority.HIGH;
+            case HIGH, URGENT -> TaskPriority.URGENT;
+        };
+        if (next != p) {
+            task.setPriority(next);
+            taskRepository.saveTask(task);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Decreases execution priority of a queued task (e.g. URGENT -> HIGH -> NORMAL -> LOW).
+     */
+    public synchronized boolean moveDown(String taskId) {
+        Objects.requireNonNull(taskId, "taskId must not be null");
+        Optional<Task> opt = taskRepository.findTaskById(taskId);
+        if (opt.isEmpty()) return false;
+        Task task = opt.get();
+        if (task.getStatus().isTerminal()) return false;
+
+        TaskPriority p = task.getPriority();
+        TaskPriority next = switch (p) {
+            case URGENT -> TaskPriority.HIGH;
+            case HIGH -> TaskPriority.NORMAL;
+            case NORMAL, LOW -> TaskPriority.LOW;
+        };
+        if (next != p) {
+            task.setPriority(next);
+            taskRepository.saveTask(task);
+            return true;
+        }
+        return false;
     }
 }

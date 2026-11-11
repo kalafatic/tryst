@@ -57,6 +57,119 @@ public class GitService {
         return runGit(repoDir, List.of("branch", "--list"));
     }
 
+    public enum RemoteQueryStatus {
+        SUCCESS,
+        INVALID_URL,
+        REPOSITORY_NOT_FOUND,
+        AUTHENTICATION_FAILURE,
+        NETWORK_FAILURE,
+        EMPTY_REPOSITORY,
+        ERROR
+    }
+
+    public record RemoteBranchDiscoveryResult(
+            RemoteQueryStatus status,
+            List<String> branches,
+            String detectedDefaultBranch,
+            String errorMessage
+    ) {
+        public boolean isSuccess() {
+            return status == RemoteQueryStatus.SUCCESS;
+        }
+    }
+
+    /**
+     * Queries remote heads and symbolic references using 'git ls-remote'
+     * with detailed error categorization (auth, network, non-existent, invalid).
+     */
+    public RemoteBranchDiscoveryResult listRemoteBranches(String repositoryUrl, String token) {
+        if (repositoryUrl == null || repositoryUrl.isBlank()) {
+            return new RemoteBranchDiscoveryResult(RemoteQueryStatus.INVALID_URL, List.of(), null, "Repository URL cannot be null or blank");
+        }
+
+        // Local paths check
+        boolean isLocal = repositoryUrl.startsWith("/") || repositoryUrl.startsWith("./") ||
+                repositoryUrl.startsWith("../") || repositoryUrl.startsWith("file://") ||
+                (repositoryUrl.length() > 2 && repositoryUrl.charAt(1) == ':');
+
+        if (isLocal) {
+            try {
+                Path localPath = repositoryUrl.startsWith("file://")
+                        ? Path.of(java.net.URI.create(repositoryUrl))
+                        : Path.of(repositoryUrl);
+                if (!Files.exists(localPath)) {
+                    return new RemoteBranchDiscoveryResult(RemoteQueryStatus.REPOSITORY_NOT_FOUND, List.of(), null, "Local repository directory does not exist: " + repositoryUrl);
+                }
+                GitCommandResult localBranches = listBranches(localPath);
+                if (localBranches.isSuccess()) {
+                    List<String> branches = localBranches.output().lines()
+                            .map(l -> l.replace("*", "").trim())
+                            .filter(l -> !l.isBlank())
+                            .toList();
+                    String def = branches.contains("master") ? "master" : (branches.contains("main") ? "main" : (branches.isEmpty() ? null : branches.get(0)));
+                    return new RemoteBranchDiscoveryResult(RemoteQueryStatus.SUCCESS, branches, def, null);
+                } else {
+                    return new RemoteBranchDiscoveryResult(RemoteQueryStatus.ERROR, List.of(), null, localBranches.error());
+                }
+            } catch (Exception e) {
+                return new RemoteBranchDiscoveryResult(RemoteQueryStatus.INVALID_URL, List.of(), null, e.getMessage());
+            }
+        }
+
+        String authUrl = buildAuthenticatedUrl(repositoryUrl, token);
+        Path runDir = Path.of(System.getProperty("java.io.tmpdir"));
+        GitCommandResult lsResult = runGit(runDir, List.of("ls-remote", "--heads", "--symref", authUrl));
+
+        if (!lsResult.isSuccess()) {
+            String err = lsResult.error().toLowerCase();
+            if (err.contains("authentication failed") || err.contains("could not read username") || err.contains("permission denied") || err.contains("terminal prompts disabled")) {
+                return new RemoteBranchDiscoveryResult(RemoteQueryStatus.AUTHENTICATION_FAILURE, List.of(), null, maskOutput(lsResult.error(), token));
+            } else if (err.contains("could not resolve host") || err.contains("connection timed out") || err.contains("failed to connect") || err.contains("network is unreachable")) {
+                return new RemoteBranchDiscoveryResult(RemoteQueryStatus.NETWORK_FAILURE, List.of(), null, maskOutput(lsResult.error(), token));
+            } else if (err.contains("not found") || err.contains("repository not found") || err.contains("does not exist")) {
+                return new RemoteBranchDiscoveryResult(RemoteQueryStatus.REPOSITORY_NOT_FOUND, List.of(), null, maskOutput(lsResult.error(), token));
+            } else {
+                return new RemoteBranchDiscoveryResult(RemoteQueryStatus.ERROR, List.of(), null, maskOutput(lsResult.error(), token));
+            }
+        }
+
+        List<String> branches = new ArrayList<>();
+        String detectedDefault = null;
+
+        for (String line : lsResult.output().lines().toList()) {
+            String trimmed = line.trim();
+            // Match ref: refs/heads/master HEAD
+            if (trimmed.startsWith("ref: refs/heads/") && trimmed.endsWith("HEAD")) {
+                String ref = trimmed.substring("ref: refs/heads/".length());
+                int sp = ref.indexOf('\t');
+                if (sp < 0) sp = ref.indexOf(' ');
+                detectedDefault = (sp > 0) ? ref.substring(0, sp).trim() : ref.trim();
+            } else if (trimmed.contains("refs/heads/")) {
+                int idx = trimmed.indexOf("refs/heads/");
+                String b = trimmed.substring(idx + "refs/heads/".length()).trim();
+                if (!b.isBlank() && !branches.contains(b)) {
+                    branches.add(b);
+                }
+            }
+        }
+
+        if (detectedDefault == null) {
+            if (branches.contains("master")) {
+                detectedDefault = "master";
+            } else if (branches.contains("main")) {
+                detectedDefault = "main";
+            } else if (!branches.isEmpty()) {
+                detectedDefault = branches.get(0);
+            }
+        }
+
+        if (branches.isEmpty() && detectedDefault == null) {
+            return new RemoteBranchDiscoveryResult(RemoteQueryStatus.EMPTY_REPOSITORY, List.of(), null, "Remote repository is empty (no branches found)");
+        }
+
+        return new RemoteBranchDiscoveryResult(RemoteQueryStatus.SUCCESS, branches, detectedDefault, null);
+    }
+
     public GitCommandResult createBranch(Path repoDir, String branchName) {
         Objects.requireNonNull(branchName, "branchName must not be null");
         return runGit(repoDir, List.of("checkout", "-b", branchName));
@@ -78,7 +191,7 @@ public class GitService {
     public GitCommandResult pull(Path repoDir, String remote, String branch, String token) {
         Objects.requireNonNull(repoDir, "repoDir must not be null");
         String effectiveRemote = (remote != null && !remote.isBlank()) ? remote : "origin";
-        String effectiveBranch = (branch != null && !branch.isBlank()) ? branch : "main";
+        String effectiveBranch = (branch != null && !branch.isBlank()) ? branch : "master";
         if (token != null && !token.isBlank()) {
             GitCommandResult remoteUrlRes = runGit(repoDir, List.of("remote", "get-url", effectiveRemote));
             if (remoteUrlRes.isSuccess()) {
@@ -95,7 +208,7 @@ public class GitService {
         Objects.requireNonNull(targetDir, "targetDir must not be null");
         Objects.requireNonNull(cloneUrl, "cloneUrl must not be null");
 
-        String effectiveBranch = (branch != null && !branch.isBlank()) ? branch : "main";
+        String effectiveBranch = (branch != null && !branch.isBlank()) ? branch : "master";
         String authenticatedUrl = buildAuthenticatedUrl(cloneUrl, token);
 
         try {
@@ -163,7 +276,7 @@ public class GitService {
     public boolean hasRemoteConflicts(Path repoDir, String remote, String branch, String token) {
         if (!isGitRepository(repoDir)) return false;
         String effRemote = (remote != null && !remote.isBlank()) ? remote : "origin";
-        String effBranch = (branch != null && !branch.isBlank()) ? branch : "main";
+        String effBranch = (branch != null && !branch.isBlank()) ? branch : "master";
 
         // Fetch remote state
         GitCommandResult fetchRes = runGit(repoDir, List.of("fetch", effRemote, effBranch));
@@ -185,7 +298,7 @@ public class GitService {
     public String getRemoteConflictDetails(Path repoDir, String remote, String branch, String token) {
         if (!isGitRepository(repoDir)) return null;
         String effRemote = (remote != null && !remote.isBlank()) ? remote : "origin";
-        String effBranch = (branch != null && !branch.isBlank()) ? branch : "main";
+        String effBranch = (branch != null && !branch.isBlank()) ? branch : "master";
 
         GitCommandResult revListRes = runGit(repoDir, List.of("rev-list", "--left-right", "--count", "HEAD..." + effRemote + "/" + effBranch));
         if (revListRes.isSuccess()) {
@@ -206,7 +319,7 @@ public class GitService {
     public GitCommandResult push(Path repoDir, String remote, String branch, String token, boolean force) {
         Objects.requireNonNull(repoDir, "repoDir must not be null");
         String effRemote = (remote != null && !remote.isBlank()) ? remote : "origin";
-        String effBranch = (branch != null && !branch.isBlank()) ? branch : "main";
+        String effBranch = (branch != null && !branch.isBlank()) ? branch : "master";
 
         List<String> args = new ArrayList<>();
         args.add("push");

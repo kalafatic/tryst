@@ -149,7 +149,7 @@ public class WorkspaceService {
                 ownerId,
                 taskId,
                 repositoryUrl != null ? repositoryUrl : "",
-                branch != null ? branch : "main",
+                branch != null ? branch : "master",
                 WorkspaceStatus.ALLOCATED,
                 Instant.now(),
                 Instant.now(),
