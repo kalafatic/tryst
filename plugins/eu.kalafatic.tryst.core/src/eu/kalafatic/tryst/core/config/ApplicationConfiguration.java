@@ -7,7 +7,8 @@ import java.util.Objects;
 
 /**
  * Baseline authoritative application configuration with validation, safe defaults,
- * and support for AI provider settings, timeouts, limits, and retry policies.
+ * and support for AI provider settings, timeouts, limits, retry policies,
+ * and LAN/reverse-proxy network deployment.
  */
 public record ApplicationConfiguration(
         String applicationName,
@@ -32,7 +33,10 @@ public record ApplicationConfiguration(
         String publicServerUrl,
         boolean reverseProxyEnabled,
         String contextPath,
-        String canonicalUrl
+        String canonicalUrl,
+        NetworkMode networkMode,
+        String bindAddress,
+        String externalBaseUrl
 ) {
     public static final boolean DEFAULT_DYNAMIC_PORT_FALLBACK = true;
     public static final int DEFAULT_PORT_RANGE_START = 38080;
@@ -55,6 +59,7 @@ public record ApplicationConfiguration(
     public static final String DEFAULT_SERVER_HOST = "127.0.0.1";
     public static final int DEFAULT_HTTP_PORT = 38080;
     public static final int DEFAULT_TCP_PORT = 38280;
+    public static final NetworkMode DEFAULT_NETWORK_MODE = NetworkMode.LOOPBACK;
 
     public ApplicationConfiguration {
         Objects.requireNonNull(applicationName, "applicationName must not be null");
@@ -65,6 +70,9 @@ public record ApplicationConfiguration(
         Objects.requireNonNull(ollamaEndpoint, "ollamaEndpoint must not be null");
         Objects.requireNonNull(defaultModel, "defaultModel must not be null");
         Objects.requireNonNull(serverHost, "serverHost must not be null");
+        if (networkMode == null) {
+            networkMode = DEFAULT_NETWORK_MODE;
+        }
 
         if (applicationName.isBlank()) {
             throw new TrystApplicationException("applicationName must not be blank");
@@ -120,6 +128,64 @@ public record ApplicationConfiguration(
         if (canonicalUrl == null || canonicalUrl.isBlank()) {
             throw new TrystApplicationException("canonicalUrl must not be blank");
         }
+    }
+
+    /**
+     * Backward-compatible 22-parameter constructor delegating to full canonical constructor.
+     */
+    public ApplicationConfiguration(
+            String applicationName,
+            String version,
+            Path userHomeDirectory,
+            Path configurationDirectory,
+            Path defaultWorkspaceDirectory,
+            String ollamaEndpoint,
+            String defaultModel,
+            int requestTimeoutSeconds,
+            int maxIterations,
+            int maxContextTokens,
+            int maxOutputTokens,
+            int maxRetryAttempts,
+            boolean secureSandboxEnabled,
+            String serverHost,
+            int httpPort,
+            int tcpPort,
+            boolean dynamicPortFallbackEnabled,
+            int portRangeStart,
+            int portRangeEnd,
+            String publicServerUrl,
+            boolean reverseProxyEnabled,
+            String contextPath,
+            String canonicalUrl
+    ) {
+        this(
+                applicationName,
+                version,
+                userHomeDirectory,
+                configurationDirectory,
+                defaultWorkspaceDirectory,
+                ollamaEndpoint,
+                defaultModel,
+                requestTimeoutSeconds,
+                maxIterations,
+                maxContextTokens,
+                maxOutputTokens,
+                maxRetryAttempts,
+                secureSandboxEnabled,
+                serverHost,
+                httpPort,
+                tcpPort,
+                dynamicPortFallbackEnabled,
+                portRangeStart,
+                portRangeEnd,
+                publicServerUrl,
+                reverseProxyEnabled,
+                contextPath,
+                canonicalUrl,
+                DEFAULT_NETWORK_MODE,
+                null,
+                publicServerUrl
+        );
     }
 
     public ApplicationConfiguration(
@@ -274,7 +340,8 @@ public record ApplicationConfiguration(
                 defaultWorkspaceDirectory, newEndpoint, defaultModel, requestTimeoutSeconds,
                 maxIterations, maxContextTokens, maxOutputTokens, maxRetryAttempts, secureSandboxEnabled,
                 serverHost, httpPort, tcpPort, dynamicPortFallbackEnabled, portRangeStart, portRangeEnd,
-                publicServerUrl, reverseProxyEnabled, contextPath, canonicalUrl
+                publicServerUrl, reverseProxyEnabled, contextPath, canonicalUrl,
+                networkMode, bindAddress, externalBaseUrl
         );
     }
 
@@ -284,7 +351,8 @@ public record ApplicationConfiguration(
                 defaultWorkspaceDirectory, ollamaEndpoint, newModel, requestTimeoutSeconds,
                 maxIterations, maxContextTokens, maxOutputTokens, maxRetryAttempts, secureSandboxEnabled,
                 serverHost, httpPort, tcpPort, dynamicPortFallbackEnabled, portRangeStart, portRangeEnd,
-                publicServerUrl, reverseProxyEnabled, contextPath, canonicalUrl
+                publicServerUrl, reverseProxyEnabled, contextPath, canonicalUrl,
+                networkMode, bindAddress, externalBaseUrl
         );
     }
 
@@ -294,7 +362,8 @@ public record ApplicationConfiguration(
                 defaultWorkspaceDirectory, ollamaEndpoint, defaultModel, timeoutSecs,
                 iterations, maxContextTokens, maxOutputTokens, retryAttempts, secureSandboxEnabled,
                 serverHost, httpPort, tcpPort, dynamicPortFallbackEnabled, portRangeStart, portRangeEnd,
-                publicServerUrl, reverseProxyEnabled, contextPath, canonicalUrl
+                publicServerUrl, reverseProxyEnabled, contextPath, canonicalUrl,
+                networkMode, bindAddress, externalBaseUrl
         );
     }
 
@@ -304,7 +373,8 @@ public record ApplicationConfiguration(
                 defaultWorkspaceDirectory, ollamaEndpoint, defaultModel, requestTimeoutSeconds,
                 maxIterations, maxContextTokens, maxOutputTokens, maxRetryAttempts, secureSandboxEnabled,
                 host, httpPort, tcpPort, dynamicPortFallbackEnabled, portRangeStart, portRangeEnd,
-                publicServerUrl, reverseProxyEnabled, contextPath, canonicalUrl
+                publicServerUrl, reverseProxyEnabled, contextPath, canonicalUrl,
+                networkMode, bindAddress, externalBaseUrl
         );
     }
 
@@ -314,7 +384,19 @@ public record ApplicationConfiguration(
                 defaultWorkspaceDirectory, ollamaEndpoint, defaultModel, requestTimeoutSeconds,
                 maxIterations, maxContextTokens, maxOutputTokens, maxRetryAttempts, secureSandboxEnabled,
                 serverHost, httpPort, tcpPort, fallback, startPort, endPort,
-                publicUrl != null ? publicUrl : "", reverseProxy, contextPath, canonicalUrl
+                publicUrl != null ? publicUrl : "", reverseProxy, contextPath, canonicalUrl,
+                networkMode, bindAddress, publicUrl != null ? publicUrl : externalBaseUrl
+        );
+    }
+
+    public ApplicationConfiguration withNetworkModeSettings(NetworkMode mode, String explicitBindAddress, String externalBaseUrl) {
+        return new ApplicationConfiguration(
+                applicationName, version, userHomeDirectory, configurationDirectory,
+                defaultWorkspaceDirectory, ollamaEndpoint, defaultModel, requestTimeoutSeconds,
+                maxIterations, maxContextTokens, maxOutputTokens, maxRetryAttempts, secureSandboxEnabled,
+                serverHost, httpPort, tcpPort, dynamicPortFallbackEnabled, portRangeStart, portRangeEnd,
+                externalBaseUrl != null ? externalBaseUrl : publicServerUrl, reverseProxyEnabled, contextPath, canonicalUrl,
+                mode != null ? mode : DEFAULT_NETWORK_MODE, explicitBindAddress, externalBaseUrl
         );
     }
 
@@ -326,8 +408,42 @@ public record ApplicationConfiguration(
                 serverHost, httpPort, tcpPort, dynamicPortFallbackEnabled, portRangeStart, portRangeEnd,
                 publicServerUrl, reverseProxyEnabled,
                 contextPath != null ? contextPath : DEFAULT_CONTEXT_PATH,
-                canonicalUrl != null ? canonicalUrl : DEFAULT_CANONICAL_URL
+                canonicalUrl != null ? canonicalUrl : DEFAULT_CANONICAL_URL,
+                networkMode, bindAddress, externalBaseUrl
         );
+    }
+
+    /**
+     * Resolves the actual effective IP address to which the HTTP server must bind.
+     * - LOOPBACK: binds to 127.0.0.1
+     * - LAN: binds to explicit bindAddress if provided; otherwise resolves primary LAN IP (e.g. 192.168.0.2).
+     * - ALL_INTERFACES: binds to 0.0.0.0.
+     */
+    public String resolveEffectiveBindAddress() {
+        if (bindAddress != null && !bindAddress.isBlank()) {
+            return bindAddress.trim();
+        }
+        return switch (networkMode != null ? networkMode : DEFAULT_NETWORK_MODE) {
+            case LOOPBACK -> "127.0.0.1";
+            case LAN -> NetworkAddressDetector.detectLanIpAddress();
+            case ALL_INTERFACES -> "0.0.0.0";
+        };
+    }
+
+    /**
+     * Resolves the effective host or IP name to display or advertise to external clients.
+     */
+    public String resolveEffectiveHostName() {
+        NetworkMode mode = networkMode != null ? networkMode : DEFAULT_NETWORK_MODE;
+        if (mode == NetworkMode.LAN) {
+            if (bindAddress != null && !bindAddress.isBlank() && !"0.0.0.0".equals(bindAddress.trim())) {
+                return bindAddress.trim();
+            }
+            return NetworkAddressDetector.detectLanIpAddress();
+        } else if (mode == NetworkMode.ALL_INTERFACES) {
+            return NetworkAddressDetector.detectLanIpAddress();
+        }
+        return serverHost != null && !serverHost.isBlank() ? serverHost : "127.0.0.1";
     }
 
     /**
@@ -347,18 +463,30 @@ public record ApplicationConfiguration(
     }
 
     public String resolveEffectiveExternalUrl(int actualPort) {
+        String effectivePub = (externalBaseUrl != null && !externalBaseUrl.isBlank())
+                ? externalBaseUrl
+                : publicServerUrl;
+
         if (reverseProxyEnabled) {
-            if (publicServerUrl != null && !publicServerUrl.isBlank()) {
-                return publicServerUrl.endsWith("/") ? publicServerUrl.substring(0, publicServerUrl.length() - 1) : publicServerUrl;
+            if (effectivePub != null && !effectivePub.isBlank()) {
+                return effectivePub.endsWith("/") ? effectivePub.substring(0, effectivePub.length() - 1) : effectivePub;
             }
             if (canonicalUrl != null && !canonicalUrl.isBlank()) {
                 return canonicalUrl.endsWith("/") ? canonicalUrl.substring(0, canonicalUrl.length() - 1) : canonicalUrl;
             }
         }
+
+        // If an explicit externalBaseUrl is configured (e.g. for custom domain or reverse proxy), use it
+        if (effectivePub != null && !effectivePub.isBlank()) {
+            return effectivePub.endsWith("/") ? effectivePub.substring(0, effectivePub.length() - 1) : effectivePub;
+        }
+
         String cleanContext = contextPath.startsWith("/") ? contextPath : "/" + contextPath;
         if (cleanContext.endsWith("/")) {
             cleanContext = cleanContext.substring(0, cleanContext.length() - 1);
         }
-        return "http://" + serverHost + ":" + actualPort + cleanContext;
+
+        String host = resolveEffectiveHostName();
+        return "http://" + host + ":" + actualPort + cleanContext;
     }
 }

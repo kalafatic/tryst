@@ -22,6 +22,11 @@ public class EmergencyDevelopmentModeE2ETest {
 
     @Test
     void testEndToEndRepositoryIntakeAndAiWorkflow() throws Exception {
+        String oldDev = System.getProperty("tryst.dev.mode");
+        String oldHttp = System.getProperty("tryst.http.port");
+        String oldTcp = System.getProperty("tryst.tcp.port");
+        String oldHome = System.getProperty("user.home");
+
         System.setProperty("tryst.dev.mode", "true");
         System.setProperty("tryst.http.port", "38099");
         System.setProperty("tryst.tcp.port", "38299");
@@ -151,6 +156,11 @@ public class EmergencyDevelopmentModeE2ETest {
             serverApp.stop();
             future.get(5, TimeUnit.SECONDS);
             executor.shutdown();
+
+            if (oldDev != null) System.setProperty("tryst.dev.mode", oldDev); else System.clearProperty("tryst.dev.mode");
+            if (oldHttp != null) System.setProperty("tryst.http.port", oldHttp); else System.clearProperty("tryst.http.port");
+            if (oldTcp != null) System.setProperty("tryst.tcp.port", oldTcp); else System.clearProperty("tryst.tcp.port");
+            if (oldHome != null) System.setProperty("user.home", oldHome); else System.clearProperty("user.home");
         }
     }
 }

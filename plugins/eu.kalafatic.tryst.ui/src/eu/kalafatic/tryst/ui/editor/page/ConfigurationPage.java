@@ -27,8 +27,11 @@ public class ConfigurationPage extends AbstractTrystEditorPage {
 
     public static final String ID = "eu.kalafatic.tryst.ui.editor.page.configuration";
 
+    private Label lblNetworkMode;
+    private Label lblBindAddress;
     private Label lblHttpPort;
     private Label lblApiPort;
+    private Label lblEffectiveUrl;
     private Label lblDbPath;
     private Label lblDbSize;
     private Label lblDbSchema;
@@ -72,8 +75,17 @@ public class ConfigurationPage extends AbstractTrystEditorPage {
         portGroup.setLayout(new GridLayout(2, false));
         portGroup.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
 
+        createRow(portGroup, "Network Mode:");
+        lblNetworkMode = createValueLabel(portGroup, "LOOPBACK");
+
+        createRow(portGroup, "Effective Bind Address:");
+        lblBindAddress = createValueLabel(portGroup, "127.0.0.1");
+
         createRow(portGroup, "HTTP Listener Port:");
         lblHttpPort = createValueLabel(portGroup, "38080");
+
+        createRow(portGroup, "Effective Access URL:");
+        lblEffectiveUrl = createValueLabel(portGroup, "-");
 
         createRow(portGroup, "API Listener Port:");
         lblApiPort = createValueLabel(portGroup, "38180");
@@ -137,6 +149,15 @@ public class ConfigurationPage extends AbstractTrystEditorPage {
         if (config != null) {
             var http = TrystUiServices.getHttpService();
             int port = (http != null && http.isRunning()) ? http.getPort() : config.httpPort();
+            if (lblNetworkMode != null && !lblNetworkMode.isDisposed()) {
+                lblNetworkMode.setText(config.networkMode() != null ? config.networkMode().name() : "LOOPBACK");
+            }
+            if (lblBindAddress != null && !lblBindAddress.isDisposed()) {
+                lblBindAddress.setText(config.resolveEffectiveBindAddress());
+            }
+            if (lblEffectiveUrl != null && !lblEffectiveUrl.isDisposed()) {
+                lblEffectiveUrl.setText(config.resolveEffectiveExternalUrl(port));
+            }
             lblHttpPort.setText(String.valueOf(port));
             lblApiPort.setText(String.valueOf(config.tcpPort()));
         }
