@@ -98,6 +98,12 @@ public class TrystNavigatorView extends ViewPart implements WorkspaceChangeListe
             ws.addChangeListener(this);
         }
 
+        var bus = TrystUiServices.getEventBus();
+        if (bus != null) {
+            bus.subscribe(eu.kalafatic.tryst.core.event.ApplicationEvents.TaskStateChangedEvent.class, evt -> refreshAsync());
+            bus.subscribe(eu.kalafatic.tryst.core.event.ApplicationEvents.SessionEvent.class, evt -> refreshAsync());
+        }
+
         refreshAsync();
     }
 

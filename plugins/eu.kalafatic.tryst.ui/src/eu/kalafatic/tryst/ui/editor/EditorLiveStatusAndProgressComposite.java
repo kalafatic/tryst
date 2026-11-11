@@ -233,7 +233,7 @@ public class EditorLiveStatusAndProgressComposite extends Composite {
               .node { border: 1px solid #e2e8f0; border-radius: 4px; padding: 5px 7px; background: #f8fafc; }
               .node-title { font-size: 10px; font-weight: 700; color: #64748b; text-transform: uppercase; margin-bottom: 2px; }
               .node-val { font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-              .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
+              .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%%; margin-right: 4px; }
             </style>
             </head>
             <body>

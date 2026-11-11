@@ -25,6 +25,7 @@ public class TrystMainPerspective implements IPerspectiveFactory {
 
         IFolderLayout leftBottomFolder = layout.createFolder("consoleFolder", IPageLayout.BOTTOM, 0.50f, "navigatorFolder");
         leftBottomFolder.addView(ConsoleOutputView.ID);
+        leftBottomFolder.addView("org.eclipse.ui.console.ConsoleView");
 
         if (layout.getViewLayout(eu.kalafatic.tryst.ui.navigator.TrystNavigatorView.ID) != null) {
             layout.getViewLayout(eu.kalafatic.tryst.ui.navigator.TrystNavigatorView.ID).setCloseable(false);
@@ -35,6 +36,7 @@ public class TrystMainPerspective implements IPerspectiveFactory {
 
         layout.addShowViewShortcut(eu.kalafatic.tryst.ui.navigator.TrystNavigatorView.ID);
         layout.addShowViewShortcut(ConsoleOutputView.ID);
+        layout.addShowViewShortcut("org.eclipse.ui.console.ConsoleView");
         layout.addPerspectiveShortcut(ID);
         layout.addPerspectiveShortcut(TrystAdministrationPerspective.ID);
     }
