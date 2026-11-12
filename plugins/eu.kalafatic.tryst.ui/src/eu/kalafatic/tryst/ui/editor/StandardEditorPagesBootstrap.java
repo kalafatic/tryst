@@ -26,6 +26,9 @@ public final class StandardEditorPagesBootstrap {
                 TaskDetailsPage.ID, "Task Details", 35, TaskDetailsPage::new));
 
         reg.registerPage(new TrystEditorPageDescriptor(
+                StudioEditorPage.ID, "TRYST Studio", 38, StudioEditorPage::new));
+
+        reg.registerPage(new TrystEditorPageDescriptor(
                 TaskExecutionPage.ID, "Task Execution", 40, TaskExecutionPage::new));
 
         reg.registerPage(new TrystEditorPageDescriptor(

@@ -151,6 +151,19 @@ public class TaskDetailsPage extends AbstractTrystEditorPage {
             editor.selectPage(TaskExecutionPage.ID);
         });
 
+        Button btnOpenStudio = new Button(controlBar, SWT.PUSH);
+        btnOpenStudio.setText("⚡ Open in Studio");
+        btnOpenStudio.addListener(SWT.Selection, e -> {
+            if (activeTask != null) {
+                WorkbenchContextManager.getInstance().setContext(
+                        WorkbenchContextManager.getInstance().getContext().toBuilder()
+                                .task(activeTask.toAgentTask())
+                                .build()
+                );
+            }
+            editor.selectPage(StudioEditorPage.ID);
+        });
+
         Button btnOpenReview = new Button(controlBar, SWT.PUSH);
         btnOpenReview.setText("🔍 Open Review");
         btnOpenReview.addListener(SWT.Selection, e -> {

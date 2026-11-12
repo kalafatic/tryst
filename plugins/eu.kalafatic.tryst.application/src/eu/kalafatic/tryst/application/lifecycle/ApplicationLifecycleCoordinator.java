@@ -395,6 +395,23 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
         this.taskOrchestrator.setBuildAndQualityService(this.buildAndTestService);
         this.taskOrchestrator.setTaskInstructionRepository(this.taskInstructionRepository);
         this.taskOrchestrator.setModelRegistry(this.aiModelRegistryService);
+
+        // Studio Service
+        if (this.databaseManager != null) {
+            eu.kalafatic.tryst.domain.studio.StudioService studioService = new eu.kalafatic.tryst.domain.studio.DefaultStudioService(
+                    this.taskRepository,
+                    this.workspaceService,
+                    this.projectRepository,
+                    this.taskInstructionRepository,
+                    this.codeReviewRepository,
+                    this.taskOrchestrator,
+                    this.notificationService,
+                    this.eventBus,
+                    () -> this.databaseManager.getConnection()
+            );
+            this.taskOrchestrator.setStudioService(studioService);
+        }
+
         this.taskOrchestrator.start();
 
         // Task Intake Service
@@ -529,6 +546,9 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
             server.setTaskIntakeService(this.taskIntakeService);
             server.setRepositoryPoolManager(this.repositoryPoolManager);
             server.setPortRegistry(portRegistry);
+            if (this.taskOrchestrator != null && this.taskOrchestrator.getStudioService() != null) {
+                server.setStudioService(this.taskOrchestrator.getStudioService());
+            }
 
             // Wire workflow and scheduling services
             if (this.databaseManager != null) {

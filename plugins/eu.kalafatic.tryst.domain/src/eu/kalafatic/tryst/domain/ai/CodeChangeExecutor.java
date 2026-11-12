@@ -20,12 +20,17 @@ public class CodeChangeExecutor {
     private final ToolRegistry toolRegistry;
     private final PermissionManager permissionManager;
     private final Set<Path> modifiedFiles = Collections.newSetFromMap(new ConcurrentHashMap<>());
+    private java.util.function.BiConsumer<Path, String> changeListener;
 
     public record ExecutionOutcome(boolean success, String output, String error, Set<Path> touchedFiles) {}
 
     public CodeChangeExecutor(ToolRegistry toolRegistry, PermissionManager permissionManager) {
         this.toolRegistry = toolRegistry;
         this.permissionManager = Objects.requireNonNull(permissionManager, "permissionManager must not be null");
+    }
+
+    public void setChangeListener(java.util.function.BiConsumer<Path, String> changeListener) {
+        this.changeListener = changeListener;
     }
 
     public synchronized void reset() {
@@ -54,6 +59,10 @@ public class CodeChangeExecutor {
             Files.writeString(target, content != null ? content : "");
             Path rel = workspace.getRootPath().relativize(target);
             modifiedFiles.add(rel);
+
+            if (changeListener != null) {
+                changeListener.accept(rel, content != null ? content : "");
+            }
 
             return new ExecutionOutcome(true, "File updated: " + rel, "", Set.of(rel));
         } catch (Exception e) {

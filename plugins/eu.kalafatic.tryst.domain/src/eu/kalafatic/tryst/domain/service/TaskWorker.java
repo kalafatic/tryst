@@ -61,6 +61,7 @@ public class TaskWorker implements Callable<ExecutionResult> {
     private TaskRecoveryService taskRecoveryService;
     private eu.kalafatic.tryst.domain.repository.TaskInstructionRepository taskInstructionRepository;
     private eu.kalafatic.tryst.domain.ai.ExternalAiDelegator externalAiDelegator;
+    private eu.kalafatic.tryst.domain.studio.StudioService studioService;
 
     public TaskWorker(
             TaskExecutionContext context,
@@ -196,6 +197,10 @@ public class TaskWorker implements Callable<ExecutionResult> {
         this.externalAiDelegator = externalAiDelegator;
     }
 
+    public void setStudioService(eu.kalafatic.tryst.domain.studio.StudioService studioService) {
+        this.studioService = studioService;
+    }
+
     private void recordRecoveryCheckpoint(Task task, TaskStatus stage, String data) {
         if (taskRecoveryService != null) {
             taskRecoveryService.recordCheckpoint(task.getId(), stage, data);
@@ -302,6 +307,27 @@ public class TaskWorker implements Callable<ExecutionResult> {
                 );
             }
 
+            if (this.codeChangeExecutor != null) {
+                this.codeChangeExecutor.setChangeListener((path, content) -> {
+                    String diff = extractWorkspaceDiff();
+                    context.setCapturedDiff(diff);
+                    if (studioService != null) {
+                        studioService.recordFileModification(task.getId(), path.toString(), diff, 1, 0);
+                    }
+                    if (notificationService != null) {
+                        notificationService.notifyUser(
+                                "all",
+                                "DIFF_UPDATE",
+                                "Diff Updated: " + path,
+                                "{\"taskId\":\"" + task.getId() + "\",\"filePath\":\"" + path.toString().replace("\\", "/") + "\"}",
+                                "studio",
+                                task.getId(),
+                                "diff:" + task.getId() + ":" + System.currentTimeMillis()
+                        );
+                    }
+                });
+            }
+
             executeAgentImplementationLoop(task, analysis, plan, logBuilder);
 
             Set<Path> modified = codeChangeExecutor.getModifiedFiles();
@@ -309,6 +335,7 @@ public class TaskWorker implements Callable<ExecutionResult> {
             for (Path p : modified) {
                 logBuilder.append("  * ").append(p).append("\n");
             }
+            context.setCapturedDiff(extractWorkspaceDiff());
 
             // Stage 5: BUILDING (Run build verification)
             checkCancelled();
@@ -593,6 +620,26 @@ public class TaskWorker implements Callable<ExecutionResult> {
                 for (eu.kalafatic.tryst.domain.model.TaskInstruction inst : instructionsList) {
                     promptBuilder.append("- [").append(inst.getInstructionType().name()).append("]: ")
                             .append(inst.getContent()).append("\n");
+                }
+            }
+        }
+
+        // Drain any pending real-time user instructions submitted during execution
+        List<String> liveInstructions = context.drainPendingInstructions();
+        if (!liveInstructions.isEmpty()) {
+            promptBuilder.append("\n\n=== LIVE INTERACTIVE USER INSTRUCTIONS (TRYST STUDIO) ===\n");
+            for (String liveInst : liveInstructions) {
+                promptBuilder.append("- ").append(liveInst).append("\n");
+                if (notificationService != null) {
+                    notificationService.notifyUser(
+                            "all",
+                            "THINKING_UPDATE",
+                            "Applying User Instruction",
+                            "{\"taskId\":\"" + task.getId() + "\",\"message\":\"Processing live user instruction: " + liveInst.replace("\"", "\\\"") + "\"}",
+                            "studio",
+                            task.getId(),
+                            "thinking:" + task.getId() + ":" + System.currentTimeMillis()
+                    );
                 }
             }
         }

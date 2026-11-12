@@ -555,6 +555,19 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
         projectMenu.add(new GroupMarker(IWorkbenchActionConstants.MB_ADDITIONS));
         menuBar.add(projectMenu);
 
+        // Dedicated Tasks & Studio Menu
+        MenuManager tasksMenu = new MenuManager("&Tasks", "tasks");
+        tasksMenu.add(new Action("Open in Studio...") {
+            @Override
+            public void run() {
+                var window = getActionBarConfigurer().getWindowConfigurer().getWindow();
+                switchEditorPage(window, "eu.kalafatic.tryst.ui.editor.page.studio");
+            }
+        });
+        tasksMenu.add(new Separator());
+        tasksMenu.add(new GroupMarker(IWorkbenchActionConstants.MB_ADDITIONS));
+        menuBar.add(tasksMenu);
+
         // Enhanced Database Menu
         MenuManager dbMenu = new MenuManager("&Database", "database");
         dbMenu.add(openDbExplorerAction);

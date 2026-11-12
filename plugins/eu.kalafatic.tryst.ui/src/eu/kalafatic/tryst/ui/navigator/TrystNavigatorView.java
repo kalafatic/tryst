@@ -370,6 +370,21 @@ public class TrystNavigatorView extends ViewPart implements WorkspaceChangeListe
                     final String tid = taskId;
                     final TaskStatus currentStatus = tStatus != null ? tStatus : TaskStatus.CREATED;
 
+                    manager.add(new Action("Open in Studio") {
+                        @Override
+                        public void run() {
+                            handleNodeSelection(node);
+                            try {
+                                IWorkbenchPage page = getSite().getPage();
+                                IEditorPart editorPart = page.getActiveEditor();
+                                if (editorPart instanceof TrystWorkbenchEditor editor) {
+                                    editor.selectPage("eu.kalafatic.tryst.ui.editor.page.studio");
+                                }
+                            } catch (Exception ex) {
+                                TrystLog.warn(TrystNavigatorView.class, "Could not open task in Studio: " + ex.getMessage());
+                            }
+                        }
+                    });
                     manager.add(new Action("Open Task Details") {
                         @Override
                         public void run() {

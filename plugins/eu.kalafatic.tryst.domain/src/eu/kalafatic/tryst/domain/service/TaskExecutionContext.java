@@ -23,6 +23,8 @@ public final class TaskExecutionContext {
     private final String modelName;
     private final AtomicBoolean cancelled = new AtomicBoolean(false);
     private final AtomicBoolean paused = new AtomicBoolean(false);
+    private volatile String capturedDiff = "";
+    private final java.util.Queue<String> pendingInstructions = new java.util.concurrent.ConcurrentLinkedQueue<>();
 
     public TaskExecutionContext(Task task, Project project, Workspace workspace, String userId, String workerId, String modelName) {
         this.task = Objects.requireNonNull(task, "task must not be null");
@@ -87,6 +89,29 @@ public final class TaskExecutionContext {
 
     public boolean isPaused() {
         return paused.get();
+    }
+
+    public String getCapturedDiff() {
+        return capturedDiff;
+    }
+
+    public void setCapturedDiff(String diff) {
+        this.capturedDiff = diff != null ? diff : "";
+    }
+
+    public void queueInstruction(String instruction) {
+        if (instruction != null && !instruction.isBlank()) {
+            pendingInstructions.offer(instruction.trim());
+        }
+    }
+
+    public java.util.List<String> drainPendingInstructions() {
+        java.util.List<String> list = new java.util.ArrayList<>();
+        String item;
+        while ((item = pendingInstructions.poll()) != null) {
+            list.add(item);
+        }
+        return list;
     }
 
     @Override
