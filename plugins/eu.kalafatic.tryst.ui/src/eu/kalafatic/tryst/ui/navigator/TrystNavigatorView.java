@@ -125,6 +125,7 @@ public class TrystNavigatorView extends ViewPart implements WorkspaceChangeListe
             eventBus.subscribe(ApplicationEvents.AgentExecutionEvent.class, e -> {
                 if (e.isComplete()) refreshAsync();
             });
+            eventBus.subscribe(ApplicationEvents.TaskAddedEvent.class, e -> refreshAsync());
         }
 
         refreshAsync();

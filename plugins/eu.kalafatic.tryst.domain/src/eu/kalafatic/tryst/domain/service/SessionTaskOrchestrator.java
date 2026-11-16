@@ -5,6 +5,7 @@ import eu.kalafatic.tryst.core.event.EventBus;
 import eu.kalafatic.tryst.domain.ai.AiContextManager;
 import eu.kalafatic.tryst.domain.ai.AiInferenceService;
 import eu.kalafatic.tryst.domain.model.AgentTask;
+import eu.kalafatic.tryst.domain.model.AgentType;
 import eu.kalafatic.tryst.domain.model.ConversationMessage;
 import eu.kalafatic.tryst.domain.model.ExecutionResult;
 import eu.kalafatic.tryst.domain.model.ExecutionStatus;
@@ -13,10 +14,14 @@ import eu.kalafatic.tryst.domain.repository.ConversationMessageRepository;
 import eu.kalafatic.tryst.domain.repository.ExecutionResultRepository;
 import eu.kalafatic.tryst.domain.repository.SessionRepository;
 import eu.kalafatic.tryst.domain.repository.TaskRepository;
+import eu.kalafatic.tryst.domain.sandbox.SandboxProvider;
 import eu.kalafatic.tryst.domain.security.PermissionManager;
 import eu.kalafatic.tryst.domain.tool.Tool;
 import eu.kalafatic.tryst.domain.tool.ToolRegistry;
+import eu.kalafatic.tryst.domain.model.Workspace;
 
+import java.nio.file.Path;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -42,6 +47,7 @@ public class SessionTaskOrchestrator {
     private final EventBus eventBus;
     private final WorkspaceService workspaceService;
     private final AiContextManager contextManager;
+    private final SandboxProvider sandboxProvider;
 
     private volatile boolean cancelled = false;
 
@@ -54,7 +60,8 @@ public class SessionTaskOrchestrator {
             PermissionManager permissionManager,
             EventBus eventBus,
             WorkspaceService workspaceService,
-            AiContextManager contextManager
+            AiContextManager contextManager,
+            SandboxProvider sandboxProvider
     ) {
         this.sessionRepository = Objects.requireNonNull(sessionRepository, "sessionRepository must not be null");
         this.taskRepository = Objects.requireNonNull(taskRepository, "taskRepository must not be null");
@@ -65,6 +72,7 @@ public class SessionTaskOrchestrator {
         this.eventBus = Objects.requireNonNull(eventBus, "eventBus must not be null");
         this.workspaceService = Objects.requireNonNull(workspaceService, "workspaceService must not be null");
         this.contextManager = Objects.requireNonNull(contextManager, "contextManager must not be null");
+        this.sandboxProvider = Objects.requireNonNull(sandboxProvider, "sandboxProvider must not be null");
     }
 
     public Session createSession(String projectId, String sessionName) {
@@ -108,6 +116,10 @@ public class SessionTaskOrchestrator {
         task.start();
         taskRepository.save(task);
         eventBus.publish(new ApplicationEvents.TaskStateChangedEvent(task.getId(), "IDLE", "RUNNING", "Agent execution started"));
+
+        if (AgentType.OPENCODE.name().equals(task.getAgentType())) {
+            return executeTaskWithSandboxProvider(task, streamCallback, startTime);
+        }
 
         return CompletableFuture.supplyAsync(() -> {
             StringBuilder executionLog = new StringBuilder();
@@ -235,5 +247,60 @@ public class SessionTaskOrchestrator {
                     null, toolName, params.toString(), false, result.error()
             ));
         }
+    }
+
+    private CompletableFuture<ExecutionResult> executeTaskWithSandboxProvider(
+            AgentTask task,
+            Consumer<String> streamCallback,
+            long startTime
+    ) {
+        return CompletableFuture.supplyAsync(() -> {
+            StringBuilder executionLog = new StringBuilder();
+            
+            try {
+                Workspace workspace = workspaceService.getWorkspaceForTask(task.getId());
+                Path workspaceDir = workspace != null ? workspace.getRootPath() : workspaceService.getDefaultWorkspacePath().resolve("sandboxes").resolve(task.getId());
+                SandboxProvider.SandboxResult result = sandboxProvider.execute(
+                        task.getId(),
+                        workspaceDir,
+                        List.of(),
+                        Map.of(),
+                        Duration.ofMinutes(30),
+                        () -> cancelled,
+                        streamCallback
+                );
+                
+                executionLog.append("Sandbox execution completed with exit code: ").append(result.exitCode()).append("\n");
+                if (result.stdout() != null && !result.stdout().isEmpty()) {
+                    executionLog.append("STDOUT:\n").append(result.stdout()).append("\n");
+                }
+                if (result.stderr() != null && !result.stderr().isEmpty()) {
+                    executionLog.append("STDERR:\n").append(result.stderr()).append("\n");
+                }
+                
+                if (result.exitCode() == 0) {
+                    task.complete();
+                } else {
+                    task.fail();
+                }
+                
+            } catch (Exception e) {
+                if (task.getStatus() == ExecutionStatus.RUNNING) {
+                    task.fail();
+                }
+                executionLog.append("\nSandbox execution exception: ").append(e.getMessage()).append("\n");
+            } finally {
+                taskRepository.save(task);
+                eventBus.publish(new ApplicationEvents.TaskStateChangedEvent(
+                        task.getId(), "RUNNING", task.getStatus().name(), "Execution terminated with status " + task.getStatus()
+                ));
+            }
+            
+            long duration = System.currentTimeMillis() - startTime;
+            int exitCode = task.getStatus() == ExecutionStatus.COMPLETED ? 0 : 1;
+            ExecutionResult result = new ExecutionResult(task.getId(), exitCode, executionLog.toString(), "", duration);
+            executionResultRepository.save(result);
+            return result;
+        });
     }
 }

@@ -476,8 +476,17 @@ public class SchemaMigrationService {
         );
         migrations.add(new Migration(6, "Production workspace and sandbox lifecycle isolation", v6Statements));
 
-        // V7: GitHub Credentials Storage (Encrypted at rest)
+        // V7: Add agent_type column to tasks table
         List<String> v7Statements = List.of(
+                """
+                ALTER TABLE tasks ADD COLUMN agent_type TEXT;
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_tasks_agent_type ON tasks(agent_type);"
+        );
+        migrations.add(new Migration(7, "Add agent_type column to tasks table", v7Statements));
+
+        // V8: GitHub Credentials Storage (Encrypted at rest)
+        List<String> v8Statements = List.of(
                 """
                 CREATE TABLE IF NOT EXISTS github_credentials (
                     id TEXT PRIMARY KEY,
@@ -495,10 +504,10 @@ public class SchemaMigrationService {
                 "CREATE INDEX IF NOT EXISTS idx_github_credentials_user ON github_credentials(user_id);",
                 "CREATE INDEX IF NOT EXISTS idx_github_credentials_username ON github_credentials(github_username);"
         );
-        migrations.add(new Migration(7, "Secure GitHub credentials storage encrypted at rest", v7Statements));
+        migrations.add(new Migration(8, "Secure GitHub credentials storage encrypted at rest", v8Statements));
 
-        // V8: Interactive Web Code Review Center Revisions & Comments
-        List<String> v8Statements = List.of(
+        // V9: Interactive Web Code Review Center Revisions & Comments
+        List<String> v9Statements = List.of(
                 """
                 CREATE TABLE IF NOT EXISTS review_revisions (
                     id TEXT PRIMARY KEY,
@@ -547,10 +556,10 @@ public class SchemaMigrationService {
                 ALTER TABLE code_reviews ADD COLUMN revision_count INTEGER DEFAULT 1;
                 """
         );
-        migrations.add(new Migration(8, "Interactive web code review revisions and comments", v8Statements));
+        migrations.add(new Migration(9, "Interactive web code review revisions and comments", v9Statements));
 
-        // V9: Task Recovery Checkpoints and Granular Persistence
-        List<String> v9Statements = List.of(
+        // V15: Task Recovery Checkpoints and Granular Persistence
+        List<String> v15Statements = List.of(
                 """
                 CREATE TABLE IF NOT EXISTS task_recovery_checkpoints (
                     id TEXT PRIMARY KEY,
@@ -564,7 +573,7 @@ public class SchemaMigrationService {
                 "CREATE INDEX IF NOT EXISTS idx_recovery_checkpoints_task ON task_recovery_checkpoints(task_id);",
                 "CREATE INDEX IF NOT EXISTS idx_recovery_checkpoints_created ON task_recovery_checkpoints(created_at);"
         );
-        migrations.add(new Migration(9, "Task recovery checkpoints and granular persistence", v9Statements));
+        migrations.add(new Migration(15, "Task recovery checkpoints and granular persistence", v15Statements));
 
         // V10: Notification Preferences, Deduplication, and Sequential Reconnection Replay
         List<String> v10Statements = List.of(

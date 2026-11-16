@@ -1,6 +1,8 @@
 package eu.kalafatic.tryst.domain.service;
 
 import eu.kalafatic.tryst.core.error.TrystDomainException;
+import eu.kalafatic.tryst.core.event.ApplicationEvents;
+import eu.kalafatic.tryst.core.event.EventBus;
 import eu.kalafatic.tryst.core.log.TrystLog;
 import eu.kalafatic.tryst.domain.ai.*;
 import eu.kalafatic.tryst.domain.model.Project;
@@ -171,6 +173,7 @@ public class TaskOrchestrator {
                 description,
                 TaskStatus.CREATED,
                 priority != null ? priority : TaskPriority.NORMAL,
+                null,
                 null,
                 null,
                 null,

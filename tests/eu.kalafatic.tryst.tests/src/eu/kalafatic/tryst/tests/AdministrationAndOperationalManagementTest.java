@@ -113,7 +113,7 @@ public class AdministrationAndOperationalManagementTest {
         AuthenticationService.AuthResult devAuth = authService.login("developer", "DevPass123!", "127.0.0.1", "Dev-Agent");
         devToken = devAuth.token();
 
-        workspaceService = new WorkspaceService(tempDir.resolve("workspaces"), workspaceRepo, projectRepo, taskRepository, permissionManager);
+        workspaceService = new WorkspaceService(tempDir.resolve("workspaces"), workspaceRepo, projectRepo, taskRepository, permissionManager, null);
         processExecutionManager = new ProcessExecutionManager();
         ServerMonitoringService monitoringService = new ServerMonitoringService(tempDir.resolve("workspaces"));
         telemetryService = new TelemetryService(telemetryRepo, monitoringService, sessionRepo, taskRepository);

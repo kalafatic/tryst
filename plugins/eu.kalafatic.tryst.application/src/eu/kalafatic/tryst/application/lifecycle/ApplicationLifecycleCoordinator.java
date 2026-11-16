@@ -28,6 +28,7 @@ import eu.kalafatic.tryst.domain.security.PermissionManager;
 import eu.kalafatic.tryst.domain.service.AutonomousDevelopmentService;
 import eu.kalafatic.tryst.domain.service.SessionTaskOrchestrator;
 import eu.kalafatic.tryst.domain.service.WorkspaceService;
+import eu.kalafatic.tryst.domain.sandbox.SandboxProvider;
 import eu.kalafatic.tryst.domain.tool.FileTools;
 import eu.kalafatic.tryst.domain.tool.GitTools;
 import eu.kalafatic.tryst.domain.tool.ToolRegistry;
@@ -108,6 +109,7 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
     private GitService gitService;
     private BuildAndTestService buildAndTestService;
     private CodeReviewService codeReviewService;
+    private SandboxProvider sandboxProvider;
     private SessionTaskOrchestrator sessionTaskOrchestrator;
     private AutonomousDevelopmentService autonomousDevelopmentService;
     private eu.kalafatic.tryst.domain.ai.AiModelRegistryService aiModelRegistryService;
@@ -274,7 +276,7 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
 
         // 5. Initialize Core domain & async services
         this.workspaceService = new WorkspaceService(configuration.defaultWorkspaceDirectory(),
-                workspaceRepository, projectRepository, taskRepository);
+                workspaceRepository, projectRepository, taskRepository, this.permissionManager, this.eventBus);
         this.asyncExecutionService = new ManagedAsyncExecutionService();
 
         // 6. Initialize Security, Tools & AI Infrastructure
@@ -333,6 +335,11 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
         }
         this.codeReviewService = new CodeReviewService();
 
+        // Sandbox Provider (OpenCode CLI adapter)
+        if (bundleContext != null) {
+            this.sandboxProvider = lookupSandboxProvider(bundleContext);
+        }
+
         // GitHub Integration
         this.gitHubCredentialRepository = new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteGitHubCredentialRepository(databaseManager);
         this.gitHubCredentialEncryptionService = new eu.kalafatic.tryst.infrastructure.github.DefaultGitHubCredentialEncryptionService();
@@ -357,7 +364,8 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
                 permissionManager,
                 eventBus,
                 workspaceService,
-                aiContextManager
+                aiContextManager,
+                sandboxProvider
         );
 
         this.autonomousDevelopmentService = new AutonomousDevelopmentService(
@@ -1222,5 +1230,22 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
 
     public List<ServiceRegistration<?>> getServiceRegistrations() {
         return Collections.unmodifiableList(serviceRegistrations);
+    }
+
+    private SandboxProvider lookupSandboxProvider(BundleContext context) {
+        try {
+            var ref = context.getServiceReference(SandboxProvider.class);
+            if (ref != null) {
+                var provider = context.getService(ref);
+                if (provider != null) {
+                    TrystLog.info(ApplicationLifecycleCoordinator.class, "SandboxProvider " + provider.getClass().getSimpleName() + " wired successfully");
+                    return provider;
+                }
+            }
+        } catch (Exception e) {
+            TrystLog.warn(ApplicationLifecycleCoordinator.class, "Failed to wire SandboxProvider: " + e.getMessage());
+        }
+        TrystLog.warn(ApplicationLifecycleCoordinator.class, "No SandboxProvider available; sandbox-based task execution will be disabled");
+        return null;
     }
 }

@@ -11,7 +11,8 @@ Require-Bundle: org.eclipse.osgi,
  org.eclipse.core.runtime,
  slf4j.api;bundle-version="2.0.12",
  eu.kalafatic.tryst.core;bundle-version="0.1.0",
- eu.kalafatic.tryst.domain;bundle-version="0.1.0"
+ eu.kalafatic.tryst.domain;bundle-version="0.1.0",
+ org.osgi.service.component.annotations;bundle-version="1.4.0"
 Export-Package: eu.kalafatic.tryst.infrastructure.ai,
  eu.kalafatic.tryst.infrastructure.build,
  eu.kalafatic.tryst.infrastructure.github,

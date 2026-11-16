@@ -461,6 +461,11 @@ public class SqliteTaskRepository implements TaskRepository {
             agentId = rs.getString("agent_id");
         } catch (Exception ignored) {}
 
+        String agentType = null;
+        try {
+            agentType = rs.getString("agent_type");
+        } catch (Exception ignored) {}
+
         String workerId = null;
         try {
             workerId = rs.getString("worker_id");
@@ -491,7 +496,7 @@ public class SqliteTaskRepository implements TaskRepository {
         Instant completedAt = completedAtStr != null ? Instant.parse(completedAtStr) : null;
 
         return new Task(id, projectId, sessionId, title, description, taskStatus, priority,
-                agentId, workerId, executionResultId, reviewId, reworkCount, failureReason,
+                agentId, agentType, workerId, executionResultId, reviewId, reworkCount, failureReason,
                 createdAt, completedAt);
     }
 }

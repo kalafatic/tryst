@@ -2,6 +2,8 @@ package eu.kalafatic.tryst.domain.service;
 
 import eu.kalafatic.tryst.core.TrystException;
 import eu.kalafatic.tryst.core.error.TrystDomainException;
+import eu.kalafatic.tryst.core.event.ApplicationEvents;
+import eu.kalafatic.tryst.core.event.EventBus;
 import eu.kalafatic.tryst.core.log.TrystLog;
 import eu.kalafatic.tryst.domain.model.AgentTask;
 import eu.kalafatic.tryst.domain.model.ConsoleMessage;
@@ -44,6 +46,7 @@ public class WorkspaceService {
     private final ProjectRepository projectRepository;
     private final TaskRepository taskRepository;
     private final PermissionManager permissionManager;
+    private final EventBus eventBus;
 
     // Cache of active workspaces mapped by workspace ID
     private final Map<String, Workspace> workspacesById = new ConcurrentHashMap<>();
@@ -58,30 +61,32 @@ public class WorkspaceService {
     private final List<ConsoleMessage> consoleMessages = new CopyOnWriteArrayList<>();
 
     public WorkspaceService() {
-        this(Path.of(System.getProperty("user.home"), ".tryst", "workspace"), null, null, null, new PermissionManager());
+        this(Path.of(System.getProperty("user.home"), ".tryst", "workspace"), null, null, null, new PermissionManager(), null);
     }
 
     public WorkspaceService(Path initialWorkspacePath) {
-        this(initialWorkspacePath, null, null, null, new PermissionManager());
+        this(initialWorkspacePath, null, null, null, new PermissionManager(), null);
     }
 
     public WorkspaceService(Path initialWorkspacePath,
                             WorkspaceRepository workspaceRepository,
                             ProjectRepository projectRepository,
                             TaskRepository taskRepository) {
-        this(initialWorkspacePath, workspaceRepository, projectRepository, taskRepository, new PermissionManager());
+        this(initialWorkspacePath, workspaceRepository, projectRepository, taskRepository, new PermissionManager(), null);
     }
 
     public WorkspaceService(Path initialWorkspacePath,
                             WorkspaceRepository workspaceRepository,
                             ProjectRepository projectRepository,
                             TaskRepository taskRepository,
-                            PermissionManager permissionManager) {
+                            PermissionManager permissionManager,
+                            EventBus eventBus) {
         this.defaultWorkspacePath = Objects.requireNonNull(initialWorkspacePath, "initialWorkspacePath must not be null");
         this.workspaceRepository = workspaceRepository;
         this.projectRepository = projectRepository;
         this.taskRepository = taskRepository;
-        this.permissionManager = permissionManager != null ? permissionManager : new PermissionManager();
+        this.permissionManager = Objects.requireNonNull(permissionManager, "permissionManager must not be null");
+        this.eventBus = eventBus;
         initializeDefaultWorkspace(initialWorkspacePath);
     }
 
@@ -226,6 +231,10 @@ public class WorkspaceService {
             }
         }
         return null;
+    }
+
+    public Path getDefaultWorkspacePath() {
+        return defaultWorkspacePath;
     }
 
     public synchronized List<Workspace> getAllWorkspaces() {
@@ -434,13 +443,24 @@ public class WorkspaceService {
         }
         AgentTask task = new AgentTask(java.util.UUID.randomUUID().toString(), projectId, null, title, description,
                 eu.kalafatic.tryst.domain.model.TaskStatus.CREATED, eu.kalafatic.tryst.domain.model.TaskPriority.NORMAL,
-                null, null, java.time.Instant.now(), null);
+                null, null, null, null, null, 0, null, java.time.Instant.now(), null);
         currentWorkspace.addTask(task);
         if (taskRepository != null) {
             taskRepository.save(task);
         }
         logMessage(ConsoleMessage.info("WorkspaceService", "Task created: " + title));
         notifyTaskAdded(task);
+        
+        // Publish TaskAddedEvent for Navigator refresh
+        if (eventBus != null) {
+            eventBus.publish(new ApplicationEvents.TaskAddedEvent(
+                task.getId(), 
+                projectId, 
+                title, 
+                description
+            ));
+        }
+        
         return task;
     }
 

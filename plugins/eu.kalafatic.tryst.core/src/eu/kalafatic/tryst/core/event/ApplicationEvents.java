@@ -110,4 +110,18 @@ public final class ApplicationEvents {
             this(UUID.randomUUID().toString(), Instant.now(), null, notificationId, userId, type, title, message, referenceType, referenceId, sequenceNumber);
         }
     }
+
+    public record TaskAddedEvent(
+            String eventId,
+            Instant timestamp,
+            String correlationId,
+            String taskId,
+            String projectId,
+            String title,
+            String description
+    ) implements TrystTypedEvent {
+        public TaskAddedEvent(String taskId, String projectId, String title, String description) {
+            this(UUID.randomUUID().toString(), Instant.now(), null, taskId, projectId, title, description);
+        }
+    }
 }

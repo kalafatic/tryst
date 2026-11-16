@@ -21,6 +21,7 @@ public class Task {
     private TaskStatus status;
     private TaskPriority priority;
     private String agentId;
+    private String agentType;
     private String workerId;
     private String executionResultId;
     private String reviewId;
@@ -30,13 +31,13 @@ public class Task {
     private Instant completedAt;
 
     public Task(String title, String description) {
-        this(UUID.randomUUID().toString(), null, null, title, description, TaskStatus.CREATED, TaskPriority.NORMAL, null, null, null, null, 0, null, Instant.now(), null);
+        this(UUID.randomUUID().toString(), null, null, title, description, TaskStatus.CREATED, TaskPriority.NORMAL, null, null, null, null, null, 0, null, Instant.now(), null);
     }
 
     public Task(String id, String projectId, String sessionId, String title, String description,
-                TaskStatus status, TaskPriority priority, String agentId, String workerId,
-                String executionResultId, String reviewId, int reworkCount, String failureReason,
-                Instant createdAt, Instant completedAt) {
+                TaskStatus status, TaskPriority priority, String agentId, String agentType,
+                String workerId, String executionResultId, String reviewId, int reworkCount,
+                String failureReason, Instant createdAt, Instant completedAt) {
         if (title == null || title.trim().isEmpty()) {
             throw new TrystDomainException("Task title must not be null or blank");
         }
@@ -48,6 +49,7 @@ public class Task {
         this.status = Objects.requireNonNull(status, "status must not be null");
         this.priority = priority != null ? priority : TaskPriority.NORMAL;
         this.agentId = agentId != null && !agentId.trim().isEmpty() ? agentId.trim() : null;
+        this.agentType = agentType != null && !agentType.trim().isEmpty() ? agentType.trim() : null;
         this.workerId = workerId != null && !workerId.trim().isEmpty() ? workerId.trim() : null;
         this.executionResultId = executionResultId != null && !executionResultId.trim().isEmpty() ? executionResultId.trim() : null;
         this.reviewId = reviewId != null && !reviewId.trim().isEmpty() ? reviewId.trim() : null;
@@ -101,6 +103,17 @@ public class Task {
             throw new TrystDomainException("Cannot assign agent to terminal task in status: " + this.status);
         }
         this.agentId = agentId;
+    }
+
+    public synchronized String getAgentType() {
+        return agentType;
+    }
+
+    public synchronized void setAgentType(String agentType) {
+        if (this.status.isTerminal()) {
+            throw new TrystDomainException("Cannot change agent type of terminal task in status: " + this.status);
+        }
+        this.agentType = agentType != null && !agentType.trim().isEmpty() ? agentType.trim() : null;
     }
 
     public synchronized String getWorkerId() {
@@ -164,13 +177,13 @@ public class Task {
 
     public AgentTask toAgentTask() {
         return new AgentTask(id, projectId, sessionId, title, description,
-                status, priority, agentId, workerId, executionResultId, reviewId, reworkCount, failureReason, createdAt, completedAt);
+                status, priority, agentId, agentType, workerId, executionResultId, reviewId, reworkCount, failureReason, createdAt, completedAt);
     }
 
     public static Task fromAgentTask(AgentTask at) {
         if (at == null) return null;
         return new Task(at.getId(), at.getProjectId(), at.getSessionId(), at.getTitle(), at.getDescription(),
-                at.getTaskStatus(), at.getPriority(), at.getAgentId(), at.getWorkerId(), at.getExecutionResultId(),
+                at.getTaskStatus(), at.getPriority(), at.getAgentId(), at.getAgentType(), at.getWorkerId(), at.getExecutionResultId(),
                 at.getReviewId(), at.getReworkCount(), at.getFailureReason(), at.getCreatedAt(), at.getCompletedAt());
     }
 
@@ -193,6 +206,8 @@ public class Task {
                 ", title='" + title + '\'' +
                 ", status=" + status +
                 ", priority=" + priority +
+                ", agentId='" + agentId + '\'' +
+                ", agentType='" + agentType + '\'' +
                 ", workerId='" + workerId + '\'' +
                 '}';
     }

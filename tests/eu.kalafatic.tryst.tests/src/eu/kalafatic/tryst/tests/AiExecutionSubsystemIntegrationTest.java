@@ -159,7 +159,7 @@ class AiExecutionSubsystemIntegrationTest {
         ));
 
         ModelSelectionService selector = new ModelSelectionService(registry);
-        Task task = new Task("t1", "p1", null, "Build feature", "Desc", TaskStatus.CREATED, TaskPriority.NORMAL, null, null, null, null, 0, null, java.time.Instant.now(), null);
+        Task task = new Task("t1", "p1", null, "Build feature", "Desc", TaskStatus.CREATED, TaskPriority.NORMAL, null, null, null, null, null, 0, null, java.time.Instant.now(), null);
 
         // Standard user gets user model
         String selectedForUser = selector.selectModel(task, null, UserRole.USER);
@@ -203,7 +203,7 @@ class AiExecutionSubsystemIntegrationTest {
             Workspace ws = new Workspace(UUID.randomUUID().toString(), workspaceDir);
             ws.setActiveProject(project.getId());
 
-            Task task = new Task("task-100", project.getId(), null, "Update Calculator.java to add sum function", "Detailed specs", TaskStatus.CLAIMED, TaskPriority.NORMAL, null, "worker-1", null, null, 0, null, java.time.Instant.now(), null);
+            Task task = new Task("task-100", project.getId(), null, "Update Calculator.java to add sum function", "Detailed specs", TaskStatus.CLAIMED, TaskPriority.NORMAL, null, "worker-1", null, null, null, 0, null, java.time.Instant.now(), null);
             taskRepo.saveTask(task);
 
             TaskExecutionContext execContext = new TaskExecutionContext(task, project, ws, "user1", "worker-1", "mock-model");
@@ -321,7 +321,7 @@ class AiExecutionSubsystemIntegrationTest {
 
         CodeAgent agent = new CodeAgent(timingOutProvider, new PromptContextBuilder(), null, 1, 1);
         CodeAgent.AgentExecutionResult res = agent.runStep(
-                new Task("t1", "p1", null, "Test", "Desc", TaskStatus.CREATED, TaskPriority.NORMAL, null, null, null, null, 0, null, java.time.Instant.now(), null),
+                new Task("t1", "p1", null, "Test", "Desc", TaskStatus.CREATED, TaskPriority.NORMAL, null, null, null, null, null, 0, null, java.time.Instant.now(), null),
                 null,
                 "Instructions",
                 List.of(),
@@ -356,7 +356,7 @@ class AiExecutionSubsystemIntegrationTest {
 
         CodeAgent agent = new CodeAgent(provider, new PromptContextBuilder(), null, 0, 5);
         CodeAgent.AgentExecutionResult res = agent.runStep(
-                new Task("t1", "p1", null, "Test", "Desc", TaskStatus.CREATED, TaskPriority.NORMAL, null, null, null, null, 0, null, java.time.Instant.now(), null),
+                new Task("t1", "p1", null, "Test", "Desc", TaskStatus.CREATED, TaskPriority.NORMAL, null, null, null, null, null, 0, null, java.time.Instant.now(), null),
                 null,
                 "Instructions",
                 List.of(),

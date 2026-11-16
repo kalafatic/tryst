@@ -16,6 +16,8 @@
         <maven.compiler.release>21</maven.compiler.release>
         <tycho.version>4.0.8</tycho.version>
         <eclipse-repo.url>https://download.eclipse.org/releases/2024-03</eclipse-repo.url>
+        <argLine>--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.xml/com.sun.org.apache.xerces.internal.parsers=ALL-UNNAMED --add-opens=java.xml/com.sun.org.apache.xerces.internal.impl=ALL-UNNAMED</argLine>
+        <tycho.buildArgLine>-Djdk.xml.maxGeneralEntitySizeLimit=2000000 -Djdk.xml.maxEntityCountLimit=2000000</tycho.buildArgLine>
     </properties>
 
     <modules>
@@ -67,6 +69,37 @@
                             <arch>x86_64</arch>
                         </environment>
                     </environments>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.11.0</version>
+                <configuration>
+                    <source>21</source>
+                    <target>21</target>
+                    <encoding>UTF-8</encoding>
+                    <compilerArgs>
+                        <arg>--add-opens=java.base/java.lang=ALL-UNNAMED</arg>
+                        <arg>--add-opens=java.base/java.net=ALL-UNNAMED</arg>
+                        <arg>--add-opens=java.base/java.util=ALL-UNNAMED</arg>
+                        <arg>--add-opens=java.base/java.util.concurrent=ALL-UNNAMED</arg>
+                        <arg>--add-opens=java.base/sun.nio.ch=ALL-UNNAMED</arg>
+                        <arg>--add-opens=java.xml/com.sun.org.apache.xerces.internal.parsers=ALL-UNNAMED</arg>
+                        <arg>--add-opens=java.xml/com.sun.org.apache.xerces.internal.impl=ALL-UNNAMED</arg>
+                        <arg>-Djdk.xml.maxGeneralEntitySizeLimit=2000000</arg>
+                        <arg>-Djdk.xml.maxEntityCountLimit=2000000</arg>
+                    </compilerArgs>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.eclipse.tycho</groupId>
+                <artifactId>tycho-extras</artifactId>
+                <version>${tycho.version}</version>
+                <configuration>
+                    <compilerArguments>
+                        <JVMArgs>-Djdk.xml.maxGeneralEntitySizeLimit=2000000 -Djdk.xml.maxEntityCountLimit=2000000</JVMArgs>
+                    </compilerArguments>
                 </configuration>
             </plugin>
         </plugins>
