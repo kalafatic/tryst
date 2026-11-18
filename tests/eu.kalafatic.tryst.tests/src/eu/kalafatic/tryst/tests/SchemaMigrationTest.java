@@ -28,7 +28,7 @@ class SchemaMigrationTest {
             assertEquals(0, migrationService.getCurrentVersion());
 
             migrationService.migrate();
-            assertEquals(14, migrationService.getCurrentVersion());
+            assertEquals(20, migrationService.getCurrentVersion());
 
             // Verify all expected tables exist
             Connection conn = dbManager.getConnection();
@@ -69,6 +69,18 @@ class SchemaMigrationTest {
             assertTrue(tables.contains("workflow_executions"));
             assertTrue(tables.contains("task_schedules"));
             assertTrue(tables.contains("repository_mirrors"));
+            assertTrue(tables.contains("connected_applications"));
+            assertTrue(tables.contains("connected_application_state"));
+
+            // V16: evo_executions.granted_scopes (TEIP 1.1 MCP authorization record)
+            try (java.sql.Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery("PRAGMA table_info(evo_executions)")) {
+                Set<String> evoExecColumns = new HashSet<>();
+                while (rs.next()) {
+                    evoExecColumns.add(rs.getString("name").toLowerCase());
+                }
+                assertTrue(evoExecColumns.contains("granted_scopes"));
+            }
         }
     }
 }

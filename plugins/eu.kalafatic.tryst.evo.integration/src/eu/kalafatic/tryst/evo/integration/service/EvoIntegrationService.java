@@ -17,7 +17,7 @@ import java.util.*;
 import java.util.concurrent.*;
 
 /**
- * Cohesive service coordinating TEIP 1.0 EVO integration lifecycle, execution tracking,
+ * Cohesive service coordinating TEIP 1.1 EVO integration lifecycle, execution tracking,
  * event replay, reconciliation after restart, and idempotency guarantees.
  */
 public class EvoIntegrationService {
@@ -58,6 +58,15 @@ public class EvoIntegrationService {
         TrystLog.info(EvoIntegrationService.class, "Updated EVO integration configuration: endpoint=" + endpoint + ", enabled=" + enabled);
     }
 
+    /**
+     * Persists a modified configuration object (used by the connected-application registry).
+     */
+    public void saveConfiguration(EvoConfiguration config) {
+        if (config != null) {
+            configurationRepository.save(config);
+        }
+    }
+
     public TeipHealthResponse checkHealth() throws Exception {
         EvoConfiguration config = getConfiguration();
         return client.checkHealth(config.getEndpoint(), config.getAuthToken());
@@ -76,7 +85,7 @@ public class EvoIntegrationService {
             String model,
             String instruction,
             List<String> contextReferences,
-            List<String> mcpToolScopes,
+            List<String> grantedToolScopes,
             String idempotencyKey
     ) throws Exception {
         EvoConfiguration config = getConfiguration();
@@ -94,11 +103,16 @@ public class EvoIntegrationService {
         }
 
         EvoExecution execution = EvoExecution.create(trystTaskId, trystSessionId, capability, aiMode, idempotencyKey);
+        if (grantedToolScopes != null && !grantedToolScopes.isEmpty()) {
+            // Persisted on the execution record: authorization source of truth for the
+            // TRYST MCP tool plane (TEIP 1.1 §8.4).
+            execution.setGrantedScopes(String.join(",", grantedToolScopes));
+        }
         executionRepository.saveExecution(execution);
 
         TeipExecutionRequest req = new TeipExecutionRequest(
                 "TEIP",
-                "1.0",
+                "1.1",
                 UUID.randomUUID().toString(),
                 UUID.randomUUID().toString(),
                 idempotencyKey,
@@ -109,7 +123,7 @@ public class EvoIntegrationService {
                 model,
                 instruction,
                 contextReferences != null ? contextReferences : List.of(),
-                mcpToolScopes != null ? mcpToolScopes : List.of(),
+                grantedToolScopes != null ? grantedToolScopes : List.of(),
                 Map.of()
         );
 
@@ -153,6 +167,17 @@ public class EvoIntegrationService {
 
     public Optional<EvoExecution> getExecution(String localExecutionId) {
         return executionRepository.findExecutionById(localExecutionId);
+    }
+
+    /**
+     * Resolves the local execution record from the remote EVO execution id. Used by the
+     * TRYST MCP tool plane to derive the caller's granted scopes (TEIP 1.1 §8.4).
+     */
+    public Optional<EvoExecution> findExecutionByEvoExecutionId(String evoExecutionId) {
+        if (evoExecutionId == null || evoExecutionId.isBlank()) {
+            return Optional.empty();
+        }
+        return executionRepository.findExecutionByEvoExecutionId(evoExecutionId);
     }
 
     public List<EvoExecution> getExecutionsForTask(String trystTaskId) {
@@ -238,7 +263,7 @@ public class EvoIntegrationService {
                 );
                 executionRepository.saveEvent(domainEvt);
             }
-            exec.setLastSequence(eventsResp.latestSequence());
+            exec.setLastSequence(eventsResp.nextSequence());
 
             // 3. If finished, retrieve structured result and stop poller
             if (externalStatus == EvoExecution.ExecutionStatus.COMPLETED) {

@@ -30,9 +30,15 @@ class UiServiceResolutionTest {
     void tearDown() {
         if (coordinator != null) {
             try {
-                coordinator.transitionTo(ApplicationLifecycleStage.APPLICATION_SHUTDOWN);
-                coordinator.transitionTo(ApplicationLifecycleStage.SERVICE_DISPOSAL);
-                coordinator.transitionTo(ApplicationLifecycleStage.APPLICATION_TERMINATED);
+                // Consecutive monotonic transitions only: validateTransition rejects
+                // skipped stages (e.g. READY -> SHUTDOWN), which would leave the OSGi
+                // service registrations leaking into subsequent tests.
+                while (coordinator.getCurrentStage().ordinal()
+                        < ApplicationLifecycleStage.APPLICATION_TERMINATED.ordinal()) {
+                    ApplicationLifecycleStage next = ApplicationLifecycleStage.values()[
+                            coordinator.getCurrentStage().ordinal() + 1];
+                    coordinator.transitionTo(next);
+                }
             } catch (Exception ignored) {
             }
             coordinator = null;

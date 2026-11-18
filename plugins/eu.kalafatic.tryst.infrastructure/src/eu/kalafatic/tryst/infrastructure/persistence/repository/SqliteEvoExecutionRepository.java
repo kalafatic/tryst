@@ -34,9 +34,9 @@ public class SqliteEvoExecutionRepository implements EvoExecutionRepository {
             INSERT INTO evo_executions (
                 id, tryst_task_id, tryst_session_id, evo_execution_id, evo_session_id,
                 capability, ai_mode, status, phase, progress, last_sequence,
-                idempotency_key, summary, error, created_at, updated_at
+                idempotency_key, summary, error, granted_scopes, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 tryst_task_id = excluded.tryst_task_id,
                 tryst_session_id = excluded.tryst_session_id,
@@ -51,6 +51,7 @@ public class SqliteEvoExecutionRepository implements EvoExecutionRepository {
                 idempotency_key = excluded.idempotency_key,
                 summary = excluded.summary,
                 error = excluded.error,
+                granted_scopes = excluded.granted_scopes,
                 updated_at = excluded.updated_at;
         """;
 
@@ -71,8 +72,9 @@ public class SqliteEvoExecutionRepository implements EvoExecutionRepository {
                 pstmt.setString(12, execution.getIdempotencyKey());
                 pstmt.setString(13, execution.getSummary());
                 pstmt.setString(14, execution.getError());
-                pstmt.setString(15, execution.getCreatedAt().toString());
-                pstmt.setString(16, execution.getUpdatedAt().toString());
+                pstmt.setString(15, execution.getGrantedScopes());
+                pstmt.setString(16, execution.getCreatedAt().toString());
+                pstmt.setString(17, execution.getUpdatedAt().toString());
                 pstmt.executeUpdate();
             } catch (SQLException e) {
                 throw new TrystInfrastructureException("Failed to save EVO execution: " + execution.getId(), e);
@@ -226,7 +228,7 @@ public class SqliteEvoExecutionRepository implements EvoExecutionRepository {
     }
 
     private EvoExecution mapResultSetToExecution(ResultSet rs) throws SQLException {
-        return new EvoExecution(
+        EvoExecution execution = new EvoExecution(
                 rs.getString("id"),
                 rs.getString("tryst_task_id"),
                 rs.getString("tryst_session_id"),
@@ -244,6 +246,8 @@ public class SqliteEvoExecutionRepository implements EvoExecutionRepository {
                 Instant.parse(rs.getString("created_at")),
                 Instant.parse(rs.getString("updated_at"))
         );
+        execution.setGrantedScopes(rs.getString("granted_scopes"));
+        return execution;
     }
 
     private EvoExecutionEvent mapResultSetToEvent(ResultSet rs) throws SQLException {

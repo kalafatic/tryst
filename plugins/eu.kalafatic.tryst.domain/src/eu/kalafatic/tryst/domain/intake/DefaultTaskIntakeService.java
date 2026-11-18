@@ -9,6 +9,7 @@ import eu.kalafatic.tryst.domain.model.Project;
 import eu.kalafatic.tryst.domain.model.Task;
 import eu.kalafatic.tryst.domain.model.TaskInstruction;
 import eu.kalafatic.tryst.domain.model.TaskPriority;
+import eu.kalafatic.tryst.domain.model.TaskStatus;
 import eu.kalafatic.tryst.domain.model.Workspace;
 import eu.kalafatic.tryst.domain.repository.ProjectRepository;
 import eu.kalafatic.tryst.domain.repository.TaskInstructionRepository;
@@ -219,20 +220,29 @@ public class DefaultTaskIntakeService implements TaskIntakeService {
             }
         }
 
-        // 2. Submit task via TaskOrchestrator
+        // 2. Create the task, then allocate the isolated workspace BEFORE the task is
+        //    enqueued so the dispatch loop can never claim a task whose workspace does not
+        //    exist yet (Phase 3 finalization WP-B race fix).
         if (taskOrchestrator == null) {
             throw new TrystDomainException("TaskOrchestrator is unavailable; cannot submit intake");
         }
 
-        Task task = taskOrchestrator.submitTask(
+        Task task = new Task(
+                UUID.randomUUID().toString(),
                 projectId,
                 null,
                 finalTitle,
                 finalDescription,
-                finalPriority,
-                effectiveUser,
+                TaskStatus.CREATED,
+                finalPriority != null ? finalPriority : TaskPriority.NORMAL,
                 null,
-                effectiveContext
+                null,
+                null,
+                null,
+                0,
+                null,
+                java.time.Instant.now(),
+                null
         );
 
         // 3. Allocate isolated workspace with repository URL and branch if available
@@ -249,6 +259,8 @@ public class DefaultTaskIntakeService implements TaskIntakeService {
             }
             TrystLog.info(DefaultTaskIntakeService.class, "Allocated workspace for intake task " + task.getId() + " at " + ws.getRootPath());
         }
+
+        taskOrchestrator.submitTask(task, effectiveUser, effectiveContext);
 
         // 4. Persist original request and instructions
         List<TaskInstruction> instructions = new ArrayList<>();

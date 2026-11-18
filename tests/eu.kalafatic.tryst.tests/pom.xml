@@ -14,4 +14,19 @@
     <artifactId>eu.kalafatic.tryst.tests</artifactId>
     <packaging>eclipse-test-plugin</packaging>
     <name>TRYST - Tests</name>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.eclipse.tycho</groupId>
+                <artifactId>tycho-surefire-plugin</artifactId>
+                <version>${tycho.version}</version>
+                <configuration>
+                    <useUIHarness>false</useUIHarness>
+                    <useUIThread>false</useUIThread>
+                    <appArgLine>-Dosgi.clean=true</appArgLine>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 </project>

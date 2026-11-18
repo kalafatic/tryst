@@ -184,6 +184,25 @@ public class TaskOrchestrator {
                 null
         );
 
+        return submitTask(task, userId, context);
+    }
+
+    /**
+     * Submits a pre-created task. Enables intake flows that must allocate the task's
+     * isolated workspace BEFORE the dispatch loop can claim the task (removes the
+     * submit-then-allocate race, Phase 3 finalization WP-B).
+     */
+    public Task submitTask(Task task, String userId, eu.kalafatic.tryst.domain.security.SecurityContext context) {
+        if (task == null) {
+            throw new TrystDomainException("Task must not be null");
+        }
+
+        if (task.getProjectId() != null && projectRepository != null) {
+            projectRepository.findById(task.getProjectId()).ifPresent(p -> {
+                permissionManager.validateUserProjectAccess(userId, p, context);
+            });
+        }
+
         taskRepository.saveTask(task);
         taskQueue.enqueue(task);
 

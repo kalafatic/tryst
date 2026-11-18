@@ -292,16 +292,18 @@ public final class EvoHttpHandlers {
 
     public static class McpHttpHandler implements HttpHandler {
         private final McpServer mcpServer;
+        private final EvoIntegrationService evoIntegrationService;
 
-        public McpHttpHandler(McpServer mcpServer) {
+        public McpHttpHandler(McpServer mcpServer, EvoIntegrationService evoIntegrationService) {
             this.mcpServer = Objects.requireNonNull(mcpServer, "mcpServer must not be null");
+            this.evoIntegrationService = Objects.requireNonNull(evoIntegrationService, "evoIntegrationService must not be null");
         }
 
         @Override
         public void handle(HttpExchange exchange) throws IOException {
             exchange.getResponseHeaders().set("Content-Type", "application/json");
             exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
-            exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Execution-Id");
+            exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Execution-Id, X-Correlation-Id");
             exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "POST, OPTIONS");
 
             String method = exchange.getRequestMethod().toUpperCase();
@@ -319,12 +321,102 @@ public final class EvoHttpHandlers {
                 return;
             }
 
+            // TEIP 1.1 §8.2: Authorization: Bearer <tryst-mcp-token> is REQUIRED and ENFORCED.
+            // The shared token is the configured EVO integration authToken. When no token is
+            // configured, only loopback callers are admitted (explicit development fallback).
+            String authHeader = exchange.getRequestHeaders().getFirst("Authorization");
+            String bearer = parseBearer(authHeader);
+            EvoConfiguration config = evoIntegrationService.getConfiguration();
+            String expectedToken = config != null ? config.getAuthToken() : "";
+            if (expectedToken != null && !expectedToken.isBlank()) {
+                if (bearer == null || !constantTimeEquals(bearer, expectedToken)) {
+                    writeJsonRpcError(exchange, null, -32000, "Authentication failed: invalid or missing bearer token");
+                    return;
+                }
+            } else {
+                java.net.InetAddress remote = exchange.getRemoteAddress().getAddress();
+                if (remote == null || !remote.isLoopbackAddress()) {
+                    writeJsonRpcError(exchange, null, -32000, "Authentication failed: no MCP token configured; only loopback callers are admitted in development mode");
+                    return;
+                }
+            }
+
+            // TEIP 1.1 §8.2: X-Execution-Id is REQUIRED. Scopes are derived from the
+            // creating execution's persisted record (evo_executions.granted_scopes).
+            String executionId = exchange.getRequestHeaders().getFirst("X-Execution-Id");
+            if (executionId == null || executionId.isBlank()) {
+                writeJsonRpcError(exchange, null, -32000, "Missing execution context: X-Execution-Id header required");
+                return;
+            }
+            EvoExecution execution = evoIntegrationService.findExecutionByEvoExecutionId(executionId).orElse(null);
+            if (execution == null) {
+                writeJsonRpcError(exchange, null, -32000, "Unknown execution: " + executionId);
+                return;
+            }
+            EvoExecution.ExecutionStatus status = execution.getStatus();
+            if (status == EvoExecution.ExecutionStatus.COMPLETED
+                    || status == EvoExecution.ExecutionStatus.FAILED
+                    || status == EvoExecution.ExecutionStatus.CANCELLED) {
+                writeJsonRpcError(exchange, null, -32000, "Execution is not active: " + executionId + " (" + status + ")");
+                return;
+            }
+
+            Set<String> scopes = parseScopes(execution.getGrantedScopes());
+
             String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-            // Default granted scopes for integration calls
-            Set<String> scopes = Set.of("read:workspace", "read:task", "write:workspace", "execute:build");
-            String respJson = mcpServer.handleJsonRpcRequest(body, "evo-client", "default-proj", null, scopes);
+            String respJson = mcpServer.handleJsonRpcRequest(
+                    body,
+                    executionId,
+                    "evo-client",
+                    "default-proj",
+                    execution.getTrystTaskId(),
+                    scopes
+            );
 
             byte[] bytes = respJson.getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(bytes);
+            }
+        }
+
+        private static String parseBearer(String authorizationHeader) {
+            if (authorizationHeader == null) return null;
+            String trimmed = authorizationHeader.trim();
+            if (trimmed.regionMatches(true, 0, "Bearer ", 0, 7)) {
+                String token = trimmed.substring(7).trim();
+                return token.isBlank() ? null : token;
+            }
+            return null;
+        }
+
+        private static boolean constantTimeEquals(String a, String b) {
+            if (a.length() != b.length()) return false;
+            int result = 0;
+            for (int i = 0; i < a.length(); i++) {
+                result |= a.charAt(i) ^ b.charAt(i);
+            }
+            return result == 0;
+        }
+
+        private static Set<String> parseScopes(String grantedScopes) {
+            if (grantedScopes == null || grantedScopes.isBlank()) {
+                return Set.of();
+            }
+            Set<String> scopes = new java.util.LinkedHashSet<>();
+            for (String scope : grantedScopes.split(",")) {
+                String s = scope.trim();
+                if (!s.isBlank()) {
+                    scopes.add(s);
+                }
+            }
+            return scopes;
+        }
+
+        private static void writeJsonRpcError(HttpExchange exchange, String id, int code, String message) throws IOException {
+            String body = String.format("{\"jsonrpc\":\"2.0\",\"id\":%s,\"error\":{\"code\":%d,\"message\":\"%s\"}}",
+                    id != null ? id : "null", code, TeipClient.escapeJson(message));
+            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(200, bytes.length);
             try (OutputStream os = exchange.getResponseBody()) {
                 os.write(bytes);

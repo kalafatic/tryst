@@ -45,12 +45,12 @@ class EvoPersistenceAndRecoveryTest {
 
     @Test
     void testConfigurationPersistenceAndRetrieval() {
-        EvoConfiguration config = new EvoConfiguration("default", "http://127.0.0.1:39080", "secret-key", true, 45, 5, Instant.now());
+        EvoConfiguration config = new EvoConfiguration("default", "http://127.0.0.1:28080", "secret-key", true, 45, 5, Instant.now());
         configRepo.save(config);
 
         Optional<EvoConfiguration> retrieved = configRepo.getConfiguration();
         assertTrue(retrieved.isPresent());
-        assertEquals("http://127.0.0.1:39080", retrieved.get().getEndpoint());
+        assertEquals("http://127.0.0.1:28080", retrieved.get().getEndpoint());
         assertEquals("secret-key", retrieved.get().getAuthToken());
         assertTrue(retrieved.get().isEnabled());
         assertEquals(45, retrieved.get().getTimeoutSeconds());

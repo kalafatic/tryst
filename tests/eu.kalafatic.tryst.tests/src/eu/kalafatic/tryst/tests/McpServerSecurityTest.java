@@ -48,8 +48,12 @@ class McpServerSecurityTest {
 
     @Test
     void testToolsListDiscovery() {
+        String initReq = "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\"}}";
+        String initResp = mcpServer.handleJsonRpcRequest(initReq, "exec-1", "caller", "proj-1", "task-1", Set.of());
+        assertTrue(initResp.contains("\"protocolVersion\":\"2024-11-05\""));
+
         String req = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{}}";
-        String resp = mcpServer.handleJsonRpcRequest(req, "caller", "proj-1", "task-1", Set.of("read:workspace"));
+        String resp = mcpServer.handleJsonRpcRequest(req, "exec-1", "caller", "proj-1", "task-1", Set.of("read:workspace"));
         assertNotNull(resp);
         assertTrue(resp.contains("list_workspace_files"));
         assertTrue(resp.contains("read_workspace_file"));
@@ -57,7 +61,26 @@ class McpServerSecurityTest {
     }
 
     @Test
+    void testToolsListWithoutInitializeRejected() {
+        String req = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{}}";
+        String resp = mcpServer.handleJsonRpcRequest(req, "exec-unknown", "caller", "proj-1", "task-1", Set.of("read:workspace"));
+        assertNotNull(resp);
+        assertTrue(resp.contains("-32002"));
+        assertTrue(resp.contains("Not initialized"));
+    }
+
+    @Test
+    void testInitializeWithWrongProtocolVersionRejected() {
+        String req = "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-06-01\"}}";
+        String resp = mcpServer.handleJsonRpcRequest(req, "exec-1", "caller", "proj-1", "task-1", Set.of());
+        assertNotNull(resp);
+        assertTrue(resp.contains("Unsupported MCP protocol version"));
+    }
+
+    @Test
     void testAuthorizedReadFile() {
+        mcpServer.handleJsonRpcRequest("{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\"}}",
+                "exec-1", "caller", "proj-1", "task-1", Set.of());
         String req = """
         {
             "jsonrpc": "2.0",
@@ -72,7 +95,7 @@ class McpServerSecurityTest {
             }
         }
         """;
-        String resp = mcpServer.handleJsonRpcRequest(req, "caller", "proj-1", "task-1", Set.of("read:workspace"));
+        String resp = mcpServer.handleJsonRpcRequest(req, "exec-1", "caller", "proj-1", "task-1", Set.of("read:workspace"));
         assertNotNull(resp);
         assertTrue(resp.contains("public class Main"));
         assertTrue(resp.contains("\"isError\":false"));
@@ -80,6 +103,8 @@ class McpServerSecurityTest {
 
     @Test
     void testPathTraversalForbidden() {
+        mcpServer.handleJsonRpcRequest("{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\"}}",
+                "exec-1", "caller", "proj-1", "task-1", Set.of());
         String req = """
         {
             "jsonrpc": "2.0",
@@ -94,7 +119,7 @@ class McpServerSecurityTest {
             }
         }
         """;
-        String resp = mcpServer.handleJsonRpcRequest(req, "caller", "proj-1", "task-1", Set.of("read:workspace"));
+        String resp = mcpServer.handleJsonRpcRequest(req, "exec-1", "caller", "proj-1", "task-1", Set.of("read:workspace"));
         assertNotNull(resp);
         assertTrue(resp.contains("\"isError\":true"));
         assertTrue(resp.contains("denied") || resp.contains("escape") || resp.contains("outside"));
@@ -102,6 +127,8 @@ class McpServerSecurityTest {
 
     @Test
     void testMissingScopeRejected() {
+        mcpServer.handleJsonRpcRequest("{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\"}}",
+                "exec-1", "caller", "proj-1", "task-1", Set.of());
         String req = """
         {
             "jsonrpc": "2.0",
@@ -117,7 +144,7 @@ class McpServerSecurityTest {
         }
         """;
         // Caller provides empty scopes
-        String resp = mcpServer.handleJsonRpcRequest(req, "caller", "proj-1", "task-1", Set.of());
+        String resp = mcpServer.handleJsonRpcRequest(req, "exec-1", "caller", "proj-1", "task-1", Set.of());
         assertNotNull(resp);
         assertTrue(resp.contains("error"));
         assertTrue(resp.contains("Permission denied") || resp.contains("required scope"));

@@ -137,7 +137,7 @@ public class TrystStudioIntegrationTest {
     }
 
     @Test
-    public void testLiveInstructionsAndCommentPersistence() {
+    public void testLiveInstructionsAndCommentPersistence(@TempDir Path tempDir) {
         Task task = orchestrator.submitTask(
                 null, null, "Interactive Instruction Task", "Testing user instruction queuing",
                 TaskPriority.NORMAL, "test-user", null
@@ -150,6 +150,17 @@ public class TrystStudioIntegrationTest {
         List<TaskInstruction> instructions = taskInstructionRepository.findByTaskId(task.getId());
         assertFalse(instructions.isEmpty());
         assertTrue(instructions.stream().anyMatch(i -> i.getContent().contains("preserve public API methods")));
+
+        // Review comments reference code_reviews(id) (FK enforced) — create the parent
+        // review first so the comment persists through the real repository.
+        eu.kalafatic.tryst.domain.model.Project project = new eu.kalafatic.tryst.domain.model.Project(
+                "proj-studio", "test-user", "Studio Test Project", tempDir, true);
+        projectRepository.save(project);
+        codeReviewRepository.save(new eu.kalafatic.tryst.domain.review.CodeReview(
+                "review-test-1", "proj-studio", task.getId(), "main",
+                eu.kalafatic.tryst.domain.review.CodeReview.ReviewStatus.PENDING,
+                "", "", "", null, null, null, null, null, "PENDING", "",
+                Instant.now(), Instant.now()));
 
         // Add code comment
         ReviewComment comment = new ReviewComment(

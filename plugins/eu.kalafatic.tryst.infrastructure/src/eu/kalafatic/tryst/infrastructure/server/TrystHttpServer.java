@@ -4694,10 +4694,10 @@ public class TrystHttpServer implements TrystHttpService {
                     <div id="evoTab" class="container" style="display: none;">
                         <div class="sidebar">
                             <div style="padding: 16px; border-bottom: 1px solid var(--border);">
-                                <div class="section-title">TEIP 1.0 EVO Configuration</div>
+                                <div class="section-title">TEIP 1.1 EVO Configuration</div>
                                 <div style="margin-bottom: 8px;">
                                     <label style="font-size: 11px; color: var(--muted);">Endpoint:</label>
-                                    <input id="evoEndpointInput" type="text" class="input-ctrl" style="width: 100%; font-size: 12px;" value="http://localhost:39080" />
+                                    <input id="evoEndpointInput" type="text" class="input-ctrl" style="width: 100%; font-size: 12px;" value="http://localhost:28080" />
                                 </div>
                                 <div style="margin-bottom: 8px;">
                                     <label style="font-size: 11px; color: var(--muted);">Bearer Auth Token:</label>

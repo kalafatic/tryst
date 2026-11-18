@@ -51,9 +51,35 @@ public class AiContextManager {
             String newUserPrompt,
             Project project
     ) {
+        return assembleConversationContext(systemInstructions, history, newUserPrompt,
+                project, null);
+    }
+
+    /**
+     * Conversation assembly with an optional external platform-context
+     * section (EVO Cognitive Services). The external section is bounded
+     * (max 12000 chars) and injected after the system instructions; the
+     * local history window shrinks first so the total stays inside the
+     * existing budget. Domain remains EVO-agnostic: the section is a plain
+     * string fetched by the caller (EvoMcpClient in evo.integration).
+     */
+    public List<AiInferenceService.ChatMessage> assembleConversationContext(
+            String systemInstructions,
+            List<ConversationMessage> history,
+            String newUserPrompt,
+            Project project,
+            String externalContextSection
+    ) {
         List<AiInferenceService.ChatMessage> messages = new ArrayList<>();
         if (systemInstructions != null && !systemInstructions.isBlank()) {
             messages.add(AiInferenceService.ChatMessage.system(systemInstructions));
+        }
+
+        String boundedExternal = null;
+        if (externalContextSection != null && !externalContextSection.isBlank()) {
+            boundedExternal = externalContextSection.length() > 12000
+                    ? externalContextSection.substring(0, 12000) + "\n[truncated]"
+                    : externalContextSection;
         }
 
         // Project summary context if project is present
@@ -64,9 +90,18 @@ public class AiContextManager {
             }
         }
 
+        if (boundedExternal != null) {
+            messages.add(AiInferenceService.ChatMessage.system(
+                    "Platform context (EVO Cognitive Services):\n" + boundedExternal));
+        }
+
         if (history != null) {
-            // Keep recent messages within budget (approx. 4 chars per token)
+            // Keep recent messages within budget (approx. 4 chars per token);
+            // the external context section shrinks the local window first.
             int charBudget = maxTokens * 3;
+            if (boundedExternal != null) {
+                charBudget -= Math.min(charBudget, boundedExternal.length());
+            }
             List<AiInferenceService.ChatMessage> historyMessages = new ArrayList<>();
             int accumulatedChars = 0;
             for (int i = history.size() - 1; i >= 0; i--) {

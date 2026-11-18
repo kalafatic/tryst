@@ -36,6 +36,14 @@ public class Task {
 
     public Task(String id, String projectId, String sessionId, String title, String description,
                 TaskStatus status, TaskPriority priority, String agentId, String agentType,
+                String workerId, String reviewId, int reworkCount,
+                String failureReason, Instant createdAt, Instant completedAt) {
+        this(id, projectId, sessionId, title, description, status, priority, agentId, agentType,
+                workerId, null, reviewId, reworkCount, failureReason, createdAt, completedAt);
+    }
+
+    public Task(String id, String projectId, String sessionId, String title, String description,
+                TaskStatus status, TaskPriority priority, String agentId, String agentType,
                 String workerId, String executionResultId, String reviewId, int reworkCount,
                 String failureReason, Instant createdAt, Instant completedAt) {
         if (title == null || title.trim().isEmpty()) {

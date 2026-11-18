@@ -33,6 +33,7 @@ public class EvoExecution {
     private String idempotencyKey;
     private String summary;
     private String error;
+    private String grantedScopes; // Comma-separated MCP tool scopes granted at creation (TEIP 1.1 §8.4)
     private final Instant createdAt;
     private Instant updatedAt;
 
@@ -68,6 +69,7 @@ public class EvoExecution {
         this.idempotencyKey = idempotencyKey;
         this.summary = summary != null ? summary : "";
         this.error = error != null ? error : "";
+        this.grantedScopes = "";
         this.createdAt = createdAt != null ? createdAt : Instant.now();
         this.updatedAt = updatedAt != null ? updatedAt : this.createdAt;
     }
@@ -180,6 +182,19 @@ public class EvoExecution {
 
     public void setError(String error) {
         this.error = error != null ? error : "";
+        this.updatedAt = Instant.now();
+    }
+
+    /**
+     * Comma-separated MCP tool scopes granted when the execution was created (TEIP 1.1 §8.4).
+     * The TRYST MCP tool plane derives authorization from this persisted record.
+     */
+    public String getGrantedScopes() {
+        return grantedScopes;
+    }
+
+    public void setGrantedScopes(String grantedScopes) {
+        this.grantedScopes = grantedScopes != null ? grantedScopes : "";
         this.updatedAt = Instant.now();
     }
 

@@ -14,7 +14,7 @@ import java.util.UUID;
 import java.util.function.Consumer;
 
 /**
- * ExternalAiDelegator bridge implementing TEIP 1.0 delegation for TaskWorker.
+ * ExternalAiDelegator bridge implementing TEIP 1.1 delegation for TaskWorker.
  */
 public class EvoAiDelegator implements ExternalAiDelegator {
 
@@ -41,7 +41,7 @@ public class EvoAiDelegator implements ExternalAiDelegator {
     ) {
         try {
             if (logConsumer != null) {
-                logConsumer.accept("[TEIP 1.0] Initiating autonomous execution with EVO Darwin Engine...\n");
+                logConsumer.accept("[TEIP 1.1] Initiating autonomous execution with EVO Darwin Engine...\n");
             }
             String idemKey = "task-" + task.getId() + "-rework-" + task.getReworkCount() + "-" + UUID.randomUUID().toString().substring(0, 8);
             EvoExecution exec = evoIntegrationService.createExecution(
@@ -57,7 +57,7 @@ public class EvoAiDelegator implements ExternalAiDelegator {
             );
 
             if (logConsumer != null) {
-                logConsumer.accept("[TEIP 1.0] Created EVO execution: " + exec.getEvoExecutionId() + " (status: " + exec.getStatus() + ")\n");
+                logConsumer.accept("[TEIP 1.1] Created EVO execution: " + exec.getEvoExecutionId() + " (status: " + exec.getStatus() + ")\n");
             }
 
             // Wait for remote execution completion with bounded polling
@@ -76,7 +76,7 @@ public class EvoAiDelegator implements ExternalAiDelegator {
                         } catch (Exception ignored) {}
                         String summary = res != null ? res.summary() : current.getSummary();
                         if (logConsumer != null) {
-                            logConsumer.accept("[TEIP 1.0] EVO execution completed. Summary: " + summary + "\n");
+                            logConsumer.accept("[TEIP 1.1] EVO execution completed. Summary: " + summary + "\n");
                         }
                         return DelegationResult.ok(summary != null && !summary.isBlank() ? summary : "EVO execution completed successfully.");
                     } else if (current.getStatus() == EvoExecution.ExecutionStatus.FAILED) {

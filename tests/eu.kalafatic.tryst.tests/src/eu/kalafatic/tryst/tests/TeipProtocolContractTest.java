@@ -16,7 +16,7 @@ class TeipProtocolContractTest {
     void testExecutionRequestSerialization() {
         TeipExecutionRequest req = new TeipExecutionRequest(
                 "TEIP",
-                "1.0",
+                "1.1",
                 "req-1",
                 "corr-1",
                 "idem-1",
@@ -34,11 +34,60 @@ class TeipProtocolContractTest {
         String json = TeipClient.serializeExecutionRequest(req);
         assertNotNull(json);
         assertTrue(json.contains("\"protocol\":\"TEIP\""));
-        assertTrue(json.contains("\"version\":\"1.0\""));
+        assertTrue(json.contains("\"version\":\"1.1\""));
         assertTrue(json.contains("\"idempotencyKey\":\"idem-1\""));
         assertTrue(json.contains("\"capability\":\"CODE_IMPLEMENTATION\""));
-        assertTrue(json.contains("\"src/Auth.java\""));
+        // TEIP 1.1 canonical field names
+        assertTrue(json.contains("\"mode\":\"DEFAULT\""));
+        assertTrue(json.contains("\"grantedToolScopes\":[\"read:workspace\""));
+        assertFalse(json.contains("\"aiMode\""));
+        assertFalse(json.contains("\"mcpToolScopes\""));
+        // contextReferences serialized as objects {type, path}
+        assertTrue(json.contains("\"contextReferences\":[{\"type\":\"FILE\",\"path\":\"src/Auth.java\"}]"));
         assertTrue(json.contains("\"read:workspace\""));
+    }
+
+    @Test
+    void testErrorEnvelopeParsing() {
+        String json = """
+        {
+            "protocol": "TEIP",
+            "version": "1.1",
+            "code": "VALIDATION_FAILED",
+            "message": "Missing required field: instruction",
+            "requestId": "req-1003",
+            "correlationId": "corr-5001",
+            "retryable": false,
+            "timestamp": "2026-11-06T18:00:00Z",
+            "details": {"field": "instruction"}
+        }
+        """;
+        TeipError error = TeipClient.parseErrorResponse(json);
+        assertNotNull(error);
+        assertEquals("VALIDATION_FAILED", error.code());
+        assertEquals("Missing required field: instruction", error.message());
+        assertEquals("req-1003", error.requestId());
+        assertFalse(error.retryable());
+    }
+
+    @Test
+    void testEventsCursorCanonicalNextSequence() throws Exception {
+        String json = """
+        {
+            "protocol": "TEIP",
+            "version": "1.1",
+            "executionId": "exec-1",
+            "events": [
+                {"eventId": "evt-1", "executionId": "exec-1", "sequence": 1, "type": "EXECUTION_STARTED",
+                 "timestamp": "2026-11-06T18:00:00Z", "correlationId": "corr-1", "data": {}}
+            ],
+            "hasMore": false,
+            "nextSequence": 2
+        }
+        """;
+        TeipEventsResponse resp = TeipClient.parseEventsResponse(json, "exec-1");
+        assertEquals(2L, resp.nextSequence());
+        assertEquals(1, resp.events().size());
     }
 
     @Test

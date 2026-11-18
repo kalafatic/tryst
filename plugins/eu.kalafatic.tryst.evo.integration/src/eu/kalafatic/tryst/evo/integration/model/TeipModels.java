@@ -4,7 +4,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * TEIP 1.0 JSON Wire Records and Models conforming to normative TEIP-1.0.md.
+ * TEIP 1.1 JSON Wire Records and Models conforming to the canonical TEIP-1.1 specification
+ * (EVO repository, docs/protocol/TEIP-1.1.md).
  */
 public final class TeipModels {
 
@@ -54,11 +55,11 @@ public final class TeipModels {
             String timestamp,
             TeipCaller caller,
             String capability,
-            String aiMode,
+            String mode,
             String model,
             String instruction,
             List<String> contextReferences,
-            List<String> mcpToolScopes,
+            List<String> grantedToolScopes,
             Map<String, Object> parameters
     ) {}
 
@@ -93,7 +94,7 @@ public final class TeipModels {
             String executionId,
             List<TeipEvent> events,
             boolean hasMore,
-            long latestSequence
+            long nextSequence
     ) {}
 
     public record TeipExecutionMetrics(

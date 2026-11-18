@@ -4,7 +4,7 @@ import java.time.Instant;
 import java.util.Objects;
 
 /**
- * Domain entity representing configuration for connecting to an external EVOLUTION (EVO) engine via TEIP 1.0.
+ * Domain entity representing configuration for connecting to an external EVOLUTION (EVO) engine via TEIP 1.1.
  */
 public class EvoConfiguration {
 
@@ -26,7 +26,7 @@ public class EvoConfiguration {
             Instant updatedAt
     ) {
         this.id = Objects.requireNonNull(id, "id must not be null");
-        this.endpoint = endpoint != null ? endpoint.trim() : "http://localhost:39080";
+        this.endpoint = endpoint != null && !endpoint.isBlank() ? endpoint.trim() : "http://localhost:28080";
         this.authToken = authToken != null ? authToken : "";
         this.enabled = enabled;
         this.timeoutSeconds = timeoutSeconds > 0 ? timeoutSeconds : 60;
@@ -37,7 +37,7 @@ public class EvoConfiguration {
     public static EvoConfiguration createDefault() {
         return new EvoConfiguration(
                 "default",
-                "http://localhost:39080",
+                "http://localhost:28080",
                 "",
                 false,
                 60,

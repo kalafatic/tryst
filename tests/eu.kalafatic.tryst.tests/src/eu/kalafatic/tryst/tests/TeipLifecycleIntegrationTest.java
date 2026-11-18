@@ -67,7 +67,7 @@ class TeipLifecycleIntegrationTest {
 
         @Override
         public EvoConfiguration getConfiguration() {
-            return new EvoConfiguration("default", "http://localhost:39080", "token", enabled, 60, 3, null);
+            return new EvoConfiguration("default", "http://localhost:28080", "token", enabled, 60, 3, null);
         }
     }
 
@@ -76,7 +76,7 @@ class TeipLifecycleIntegrationTest {
         MockEvoConfigRepo(boolean enabled) { this.enabled = enabled; }
         @Override public void save(EvoConfiguration configuration) {}
         @Override public java.util.Optional<EvoConfiguration> getConfiguration() {
-            return java.util.Optional.of(new EvoConfiguration("default", "http://localhost:39080", "token", enabled, 60, 3, null));
+            return java.util.Optional.of(new EvoConfiguration("default", "http://localhost:28080", "token", enabled, 60, 3, null));
         }
     }
 

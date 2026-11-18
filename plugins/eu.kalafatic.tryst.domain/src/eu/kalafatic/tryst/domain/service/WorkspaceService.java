@@ -79,6 +79,14 @@ public class WorkspaceService {
                             WorkspaceRepository workspaceRepository,
                             ProjectRepository projectRepository,
                             TaskRepository taskRepository,
+                            PermissionManager permissionManager) {
+        this(initialWorkspacePath, workspaceRepository, projectRepository, taskRepository, permissionManager, null);
+    }
+
+    public WorkspaceService(Path initialWorkspacePath,
+                            WorkspaceRepository workspaceRepository,
+                            ProjectRepository projectRepository,
+                            TaskRepository taskRepository,
                             PermissionManager permissionManager,
                             EventBus eventBus) {
         this.defaultWorkspacePath = Objects.requireNonNull(initialWorkspacePath, "initialWorkspacePath must not be null");

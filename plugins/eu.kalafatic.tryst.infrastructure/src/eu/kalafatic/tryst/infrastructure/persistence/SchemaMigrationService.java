@@ -773,6 +773,113 @@ public class SchemaMigrationService {
         );
         migrations.add(new Migration(14, "Workflows, advanced scheduling, execution pool and repository mirrors", v14Statements));
 
+        // V16: TEIP 1.1 — persisted granted MCP tool scopes on executions (authorization
+        // source of truth for the TRYST MCP tool plane, TEIP 1.1 §8.4).
+        List<String> v16Statements = List.of(
+                "ALTER TABLE evo_executions ADD COLUMN granted_scopes TEXT NOT NULL DEFAULT '';"
+        );
+        migrations.add(new Migration(16, "TEIP 1.1 granted MCP tool scopes on EVO executions", v16Statements));
+
+        // V17: Connected-application registry (Phase 3, A-14) — persisted application
+        // descriptors and the selected application id.
+        List<String> v17Statements = List.of(
+                """
+                CREATE TABLE IF NOT EXISTS connected_applications (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    application_type TEXT NOT NULL,
+                    capabilities TEXT NOT NULL DEFAULT '',
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    status TEXT NOT NULL DEFAULT 'UNKNOWN',
+                    status_message TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_connected_apps_type ON connected_applications(application_type);",
+                """
+                CREATE TABLE IF NOT EXISTS connected_application_state (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+                """
+        );
+        migrations.add(new Migration(17, "Connected-application registry descriptors and selection", v17Statements));
+
+        // V18: DStudio Harness Platform connection configuration (Phase 4, WP-4-FINAL.2).
+        // Non-secret provider configuration persisted so the DStudio connector survives
+        // restarts; the TEIP auth token is intentionally NOT persisted (runtime-only,
+        // system property / environment).
+        List<String> v18Statements = List.of(
+                """
+                CREATE TABLE IF NOT EXISTS dstudio_configurations (
+                    id TEXT PRIMARY KEY,
+                    endpoint TEXT NOT NULL,
+                    harness TEXT NOT NULL DEFAULT '',
+                    model TEXT NOT NULL DEFAULT '',
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    timeout_seconds INTEGER NOT NULL DEFAULT 1800,
+                    updated_at TEXT NOT NULL
+                );
+                """
+        );
+        migrations.add(new Migration(18, "DStudio Harness Platform connection configuration", v18Statements));
+
+        // V19: Studio subsystem tables referenced by DefaultStudioService
+        // (alternatives, development plans). Completes the schema for the studio
+        // proposal/plan persistence in the existing forward-only migration chain.
+        List<String> v19Statements = List.of(
+                """
+                CREATE TABLE IF NOT EXISTS studio_alternatives (
+                    id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    advantages TEXT NOT NULL DEFAULT '',
+                    disadvantages TEXT NOT NULL DEFAULT '',
+                    affected_files TEXT NOT NULL DEFAULT '',
+                    risks TEXT NOT NULL DEFAULT '',
+                    compatibility_impact TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'PROPOSED',
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+                );
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_studio_alternatives_task ON studio_alternatives(task_id);",
+                """
+                CREATE TABLE IF NOT EXISTS studio_plans (
+                    id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    step_order INTEGER NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'PENDING',
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+                );
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_studio_plans_task ON studio_plans(task_id);"
+        );
+        migrations.add(new Migration(19, "Studio alternatives and development plan tables", v19Statements));
+
+        // V20: DCode coding harness connection configuration (Phase 6, WP-6.6).
+        // Non-secret provider configuration persisted so the DCode connector survives
+        // restarts; the DCode bearer token is intentionally NOT persisted (runtime-only,
+        // system property / environment).
+        List<String> v20Statements = List.of(
+                """
+                CREATE TABLE IF NOT EXISTS dcode_configurations (
+                    id TEXT PRIMARY KEY,
+                    endpoint TEXT NOT NULL,
+                    provider_id TEXT NOT NULL DEFAULT '',
+                    model TEXT NOT NULL DEFAULT '',
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    timeout_seconds INTEGER NOT NULL DEFAULT 1800,
+                    updated_at TEXT NOT NULL
+                );
+                """
+        );
+        migrations.add(new Migration(20, "DCode coding harness connection configuration", v20Statements));
+
         return migrations;
     }
 }

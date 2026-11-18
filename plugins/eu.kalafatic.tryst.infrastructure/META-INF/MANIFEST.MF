@@ -15,9 +15,12 @@ Require-Bundle: org.eclipse.osgi,
  org.osgi.service.component.annotations;bundle-version="1.4.0"
 Export-Package: eu.kalafatic.tryst.infrastructure.ai,
  eu.kalafatic.tryst.infrastructure.build,
+ eu.kalafatic.tryst.infrastructure.cli,
+ eu.kalafatic.tryst.infrastructure.dcode,
  eu.kalafatic.tryst.infrastructure.github,
  eu.kalafatic.tryst.infrastructure.persistence,
  eu.kalafatic.tryst.infrastructure.persistence.repository,
+ eu.kalafatic.tryst.infrastructure.sandbox,
  eu.kalafatic.tryst.infrastructure.server,
  eu.kalafatic.tryst.infrastructure.vcs,
  org.sqlite

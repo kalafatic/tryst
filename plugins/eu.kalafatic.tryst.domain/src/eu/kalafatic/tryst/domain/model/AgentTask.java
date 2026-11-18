@@ -44,6 +44,12 @@ public class AgentTask {
 
     public AgentTask(String id, String projectId, String sessionId, String title, String description,
                       TaskStatus status, TaskPriority priority, String agentId, String agentType,
+                      Instant createdAt, Instant completedAt) {
+        this(id, projectId, sessionId, title, description, status, priority, agentId, agentType, null, null, null, 0, null, createdAt, completedAt);
+    }
+
+    public AgentTask(String id, String projectId, String sessionId, String title, String description,
+                      TaskStatus status, TaskPriority priority, String agentId, String agentType,
                       String executionResultId, Instant createdAt, Instant completedAt) {
         this(id, projectId, sessionId, title, description, status, priority, agentId, agentType, null, executionResultId, null, 0, null, createdAt, completedAt);
     }

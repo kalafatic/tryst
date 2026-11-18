@@ -685,7 +685,7 @@ public class TaskWorker implements Callable<ExecutionResult> {
         String prompt = promptBuilder.toString();
 
         if (externalAiDelegator != null && externalAiDelegator.isAvailableForTask(task)) {
-            log.append("[Worker ").append(context.getWorkerId()).append("] Delegating implementation step to External AI (EVO TEIP 1.0)\n");
+            log.append("[Worker ").append(context.getWorkerId()).append("] Delegating implementation step to External AI (EVO TEIP 1.1)\n");
             eu.kalafatic.tryst.domain.ai.ExternalAiDelegator.DelegationResult delRes =
                     externalAiDelegator.delegateImplementation(task, ws, instructions, prompt, chunk -> log.append(chunk));
             if (delRes.handled()) {

@@ -110,6 +110,9 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
     private BuildAndTestService buildAndTestService;
     private CodeReviewService codeReviewService;
     private SandboxProvider sandboxProvider;
+    private eu.kalafatic.tryst.domain.harness.ConnectedApplicationRegistry connectedApplicationRegistry;
+    private eu.kalafatic.tryst.evo.integration.service.EvoIntegrationService evoIntegrationService;
+    private eu.kalafatic.tryst.evo.integration.mcp.McpServer mcpServer;
     private SessionTaskOrchestrator sessionTaskOrchestrator;
     private AutonomousDevelopmentService autonomousDevelopmentService;
     private eu.kalafatic.tryst.domain.ai.AiModelRegistryService aiModelRegistryService;
@@ -275,12 +278,12 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
         this.taskQueue = new eu.kalafatic.tryst.domain.service.TaskQueue(this.taskRepository, this.taskLifecycleManager);
 
         // 5. Initialize Core domain & async services
-        this.workspaceService = new WorkspaceService(configuration.defaultWorkspaceDirectory(),
-                workspaceRepository, projectRepository, taskRepository, this.permissionManager, this.eventBus);
         this.asyncExecutionService = new ManagedAsyncExecutionService();
 
         // 6. Initialize Security, Tools & AI Infrastructure
         this.permissionManager = new PermissionManager(this.auditEventRepository);
+        this.workspaceService = new WorkspaceService(configuration.defaultWorkspaceDirectory(),
+                workspaceRepository, projectRepository, taskRepository, this.permissionManager, this.eventBus);
         this.authenticationService = new eu.kalafatic.tryst.domain.security.AuthenticationService(
                 this.userRepository, this.userSessionRepository, this.permissionManager);
         // Provision initial administrator if secret is provided via environment or system property;
@@ -324,6 +327,27 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
             TrystLog.warn(ApplicationLifecycleCoordinator.class, "Initial AI model discovery deferred: " + e.getMessage());
             if (serverReadinessService != null) {
                 serverReadinessService.markDegraded("AiProvider", e.getMessage(), java.util.Map.of("provider", "ollama-default"));
+            }
+        }
+        // Phase 6: ENR is the default family inference engine. The ENR provider is
+        // registered alongside the Ollama provider (alternative engines remain usable);
+        // model discovery is best-effort so a missing ENR runtime never disables TRYST.
+        try {
+            eu.kalafatic.tryst.infrastructure.ai.EnrProvider enrProvider =
+                    new eu.kalafatic.tryst.infrastructure.ai.EnrProvider();
+            this.aiModelRegistryService.registerProvider(
+                    eu.kalafatic.tryst.infrastructure.ai.EnrProvider.PROVIDER_ID,
+                    "ENR Neural Runtime", "ENR", enrProvider.getEndpoint(), true);
+            this.aiModelRegistryService.discoverModelsFromProvider(
+                    eu.kalafatic.tryst.infrastructure.ai.EnrProvider.PROVIDER_ID,
+                    enrProvider).join();
+            if (serverReadinessService != null) {
+                serverReadinessService.markHealthy("AiProvider", java.util.Map.of("provider", "enr-default"));
+            }
+        } catch (Exception e) {
+            TrystLog.warn(ApplicationLifecycleCoordinator.class, "ENR model discovery deferred (ENR runtime not reachable): " + e.getMessage());
+            if (serverReadinessService != null) {
+                serverReadinessService.markDegraded("AiProvider", e.getMessage(), java.util.Map.of("provider", "enr-default"));
             }
         }
         this.gitService = new GitService();
@@ -434,26 +458,63 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
                 this.permissionManager
         );
 
-        // TEIP 1.0 EVO Integration Repositories & Services
+        // TEIP 1.1 EVO Integration Repositories & Services
         eu.kalafatic.tryst.domain.repository.EvoConfigurationRepository evoConfigRepo =
                 new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteEvoConfigurationRepository(databaseManager);
         eu.kalafatic.tryst.domain.repository.EvoExecutionRepository evoExecRepo =
                 new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteEvoExecutionRepository(databaseManager);
-        eu.kalafatic.tryst.evo.integration.service.EvoIntegrationService evoService =
+        this.evoIntegrationService =
                 new eu.kalafatic.tryst.evo.integration.service.EvoIntegrationService(evoConfigRepo, evoExecRepo, null);
-        evoService.reconcileUnfinishedExecutions();
-        this.taskOrchestrator.setExternalAiDelegator(new eu.kalafatic.tryst.evo.integration.service.EvoAiDelegator(evoService));
+        this.evoIntegrationService.reconcileUnfinishedExecutions();
+
+        // Connected-application registry (Phase 3, A-14): product-local application
+        // descriptors, coding-harness adapters, connection testing and selection.
+        eu.kalafatic.tryst.domain.harness.ConnectedApplicationRepository connectedAppRepo =
+                new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteConnectedApplicationRepository(databaseManager);
+        eu.kalafatic.tryst.domain.harness.ConnectedApplicationRegistry connectedApplicationRegistry =
+                new eu.kalafatic.tryst.domain.harness.DefaultConnectedApplicationRegistry(connectedAppRepo);
+        eu.kalafatic.tryst.evo.integration.service.EvoCodingHarnessAdapter evoHarnessAdapter =
+                new eu.kalafatic.tryst.evo.integration.service.EvoCodingHarnessAdapter(this.evoIntegrationService);
+        connectedApplicationRegistry.registerAdapter(evoHarnessAdapter);
+        connectedApplicationRegistry.registerAdapter(new eu.kalafatic.tryst.infrastructure.cli.OpenCodeCodingHarnessAdapter());
+        // Phase 4: DStudio Harness Platform connector (TEIP 1.1) — family harness provider.
+        // Connection configuration is persisted via the dedicated repository (migration V18);
+        // the TEIP auth token is runtime-only and never persisted.
+        eu.kalafatic.tryst.domain.repository.DStudioConfigurationRepository dstudioConfigRepo =
+                new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteDStudioConfigurationRepository(databaseManager);
+        connectedApplicationRegistry.registerAdapter(
+                new eu.kalafatic.tryst.evo.integration.service.DStudioCodingHarnessAdapter(dstudioConfigRepo));
+        // Phase 6: DCode is the default family coding harness. Connection configuration is
+        // persisted via the dedicated repository (migration V20); the DCode bearer token is
+        // runtime-only and never persisted.
+        eu.kalafatic.tryst.domain.repository.DCodeConfigurationRepository dcodeConfigRepo =
+                new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteDCodeConfigurationRepository(databaseManager);
+        connectedApplicationRegistry.registerAdapter(
+                new eu.kalafatic.tryst.infrastructure.dcode.DCodeCodingHarnessAdapter(dcodeConfigRepo));
+        // Preserve historical behavior: EVO delegation was active whenever the EVO
+        // configuration was enabled. Since Phase 6 DCode is the family default harness —
+        // when nothing has been explicitly selected, DCode is selected; an explicit EVO
+        // selection (or any other operator choice) is always respected.
+        if (connectedApplicationRegistry.getSelectedApplicationId().isEmpty()) {
+            connectedApplicationRegistry.selectApplication(
+                    eu.kalafatic.tryst.infrastructure.dcode.DCodeCodingHarnessAdapter.APPLICATION_ID);
+        }
+
+        // ExternalAiDelegator over the registry: TaskWorker's existing seam now routes the
+        // implementation step through the selected connected coding harness.
+        this.taskOrchestrator.setExternalAiDelegator(
+                new eu.kalafatic.tryst.domain.harness.HarnessAiDelegator(connectedApplicationRegistry));
+        this.connectedApplicationRegistry = connectedApplicationRegistry;
 
         // Scoped MCP Server
-        eu.kalafatic.tryst.evo.integration.mcp.McpServer mcpServer =
-                new eu.kalafatic.tryst.evo.integration.mcp.McpServer(this.permissionManager);
-        mcpServer.registerTool(new eu.kalafatic.tryst.evo.integration.mcp.ScopedMcpTools.GetProjectMetadataTool(this.projectRepository));
-        mcpServer.registerTool(new eu.kalafatic.tryst.evo.integration.mcp.ScopedMcpTools.ListWorkspaceFilesTool(this.workspaceRepository, this.permissionManager));
-        mcpServer.registerTool(new eu.kalafatic.tryst.evo.integration.mcp.ScopedMcpTools.ReadWorkspaceFileTool(this.workspaceRepository, this.permissionManager));
-        mcpServer.registerTool(new eu.kalafatic.tryst.evo.integration.mcp.ScopedMcpTools.SearchWorkspaceCodeTool(this.workspaceRepository, this.permissionManager));
-        mcpServer.registerTool(new eu.kalafatic.tryst.evo.integration.mcp.ScopedMcpTools.GetTaskContextTool(this.taskRepository, this.taskInstructionRepository));
-        mcpServer.registerTool(new eu.kalafatic.tryst.evo.integration.mcp.ScopedMcpTools.ProposePatchTool(this.workspaceRepository, this.permissionManager));
-        mcpServer.registerTool(new eu.kalafatic.tryst.evo.integration.mcp.ScopedMcpTools.RunBuildAndTestTool(this.workspaceRepository, this.buildAndTestService));
+        this.mcpServer = new eu.kalafatic.tryst.evo.integration.mcp.McpServer(this.permissionManager);
+        this.mcpServer.registerTool(new eu.kalafatic.tryst.evo.integration.mcp.ScopedMcpTools.GetProjectMetadataTool(this.projectRepository));
+        this.mcpServer.registerTool(new eu.kalafatic.tryst.evo.integration.mcp.ScopedMcpTools.ListWorkspaceFilesTool(this.workspaceRepository, this.permissionManager));
+        this.mcpServer.registerTool(new eu.kalafatic.tryst.evo.integration.mcp.ScopedMcpTools.ReadWorkspaceFileTool(this.workspaceRepository, this.permissionManager));
+        this.mcpServer.registerTool(new eu.kalafatic.tryst.evo.integration.mcp.ScopedMcpTools.SearchWorkspaceCodeTool(this.workspaceRepository, this.permissionManager));
+        this.mcpServer.registerTool(new eu.kalafatic.tryst.evo.integration.mcp.ScopedMcpTools.GetTaskContextTool(this.taskRepository, this.taskInstructionRepository));
+        this.mcpServer.registerTool(new eu.kalafatic.tryst.evo.integration.mcp.ScopedMcpTools.ProposePatchTool(this.workspaceRepository, this.permissionManager));
+        this.mcpServer.registerTool(new eu.kalafatic.tryst.evo.integration.mcp.ScopedMcpTools.RunBuildAndTestTool(this.workspaceRepository, this.buildAndTestService));
 
         // Phase 4 Observability & Operational Services
         this.serverMonitoringService = new eu.kalafatic.tryst.domain.service.ServerMonitoringService(configuration.defaultWorkspaceDirectory());
@@ -569,9 +630,8 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
                 server.setWorkflowDependencies(wfDefRepo, wfExecRepo, wfEngine, schedRepo, schedService);
             }
 
-            // Register TEIP EVO Integration and MCP routes
-            server.registerHandler("/api/integration/evo", new eu.kalafatic.tryst.evo.integration.service.EvoHttpHandlers.EvoIntegrationHandler(evoService, this.permissionManager));
-            server.registerHandler("/api/mcp", new eu.kalafatic.tryst.evo.integration.service.EvoHttpHandlers.McpHttpHandler(mcpServer));
+            // Register TEIP EVO Integration, MCP and connected-application routes
+            registerIntegrationHttpHandlers(server);
 
             this.httpService = server;
             this.httpService.start();
@@ -616,8 +676,8 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
             registerService(eu.kalafatic.tryst.domain.intake.TaskIntakeService.class, this.taskIntakeService);
             registerService(eu.kalafatic.tryst.domain.repository.EvoConfigurationRepository.class, evoConfigRepo);
             registerService(eu.kalafatic.tryst.domain.repository.EvoExecutionRepository.class, evoExecRepo);
-            registerService(eu.kalafatic.tryst.evo.integration.service.EvoIntegrationService.class, evoService);
-            registerService(eu.kalafatic.tryst.evo.integration.mcp.McpServer.class, mcpServer);
+            registerService(eu.kalafatic.tryst.evo.integration.service.EvoIntegrationService.class, this.evoIntegrationService);
+            registerService(eu.kalafatic.tryst.evo.integration.mcp.McpServer.class, this.mcpServer);
             registerService(WorkspaceService.class, this.workspaceService);
             registerService(AsyncExecutionService.class, this.asyncExecutionService);
             registerService(PermissionManager.class, this.permissionManager);
@@ -1225,7 +1285,36 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
             server.setWorkflowDependencies(wfDefRepo, wfExecRepo, wfEngine, schedRepo, schedService);
         }
 
+        // WP-D (Phase 3 finalization): the TEIP/MCP/connected-application routes must be
+        // re-registered whenever a NEW server instance is created (initial start and every
+        // restartHttpService() cycle). Services that are not yet initialized are skipped.
+        registerIntegrationHttpHandlers(server);
+
         this.httpService = server;
+    }
+
+    /**
+     * Registers the TEIP EVO integration, MCP and connected-application management
+     * routes on the given server instance using the existing handler lifecycle.
+     * The connected-applications route enforces WP-3.10 authorization
+     * (Bearer token -> MANAGE_AGENTS permission).
+     */
+    private void registerIntegrationHttpHandlers(eu.kalafatic.tryst.infrastructure.server.TrystHttpServer server) {
+        if (this.evoIntegrationService != null) {
+            server.registerHandler("/api/integration/evo",
+                    new eu.kalafatic.tryst.evo.integration.service.EvoHttpHandlers.EvoIntegrationHandler(
+                            this.evoIntegrationService, this.permissionManager));
+        }
+        if (this.mcpServer != null && this.evoIntegrationService != null) {
+            server.registerHandler("/api/mcp",
+                    new eu.kalafatic.tryst.evo.integration.service.EvoHttpHandlers.McpHttpHandler(
+                            this.mcpServer, this.evoIntegrationService));
+        }
+        if (connectedApplicationRegistry != null) {
+            server.registerHandler("/api/integration/applications",
+                    new eu.kalafatic.tryst.application.http.ConnectedApplicationsHttpHandler(
+                            connectedApplicationRegistry, this.authenticationService, this.permissionManager));
+        }
     }
 
     public List<ServiceRegistration<?>> getServiceRegistrations() {
@@ -1234,18 +1323,24 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
 
     private SandboxProvider lookupSandboxProvider(BundleContext context) {
         try {
-            var ref = context.getServiceReference(SandboxProvider.class);
-            if (ref != null) {
-                var provider = context.getService(ref);
-                if (provider != null) {
-                    TrystLog.info(ApplicationLifecycleCoordinator.class, "SandboxProvider " + provider.getClass().getSimpleName() + " wired successfully");
-                    return provider;
+            if (context != null) {
+                var ref = context.getServiceReference(SandboxProvider.class);
+                if (ref != null) {
+                    var provider = context.getService(ref);
+                    if (provider != null) {
+                        TrystLog.info(ApplicationLifecycleCoordinator.class, "SandboxProvider " + provider.getClass().getSimpleName() + " wired successfully");
+                        return provider;
+                    }
                 }
             }
         } catch (Exception e) {
-            TrystLog.warn(ApplicationLifecycleCoordinator.class, "Failed to wire SandboxProvider: " + e.getMessage());
+            TrystLog.warn(ApplicationLifecycleCoordinator.class, "Failed to wire SandboxProvider via OSGi: " + e.getMessage());
         }
-        TrystLog.warn(ApplicationLifecycleCoordinator.class, "No SandboxProvider available; sandbox-based task execution will be disabled");
-        return null;
+        // SandboxProvider SPI wiring (Phase 3, WP-3.6): fall back to the built-in
+        // process-isolation provider so the SPI is never an unused abstraction.
+        eu.kalafatic.tryst.infrastructure.sandbox.DefaultProcessSandboxProvider fallback =
+                new eu.kalafatic.tryst.infrastructure.sandbox.DefaultProcessSandboxProvider();
+        TrystLog.info(ApplicationLifecycleCoordinator.class, "SandboxProvider wired to built-in " + fallback.getName());
+        return fallback;
     }
 }

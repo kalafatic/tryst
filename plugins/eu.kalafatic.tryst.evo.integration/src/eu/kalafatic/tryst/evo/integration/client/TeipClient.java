@@ -14,7 +14,7 @@ import java.time.Instant;
 import java.util.*;
 
 /**
- * Pure Java 21 HTTP Client implementing normative TEIP 1.0 client specification.
+ * Pure Java 21 HTTP Client implementing the canonical TEIP 1.1 client specification.
  * Connects to EVO endpoints:
  * - GET  /teip/v1/health
  * - GET  /teip/v1/capabilities
@@ -50,7 +50,7 @@ public class TeipClient {
         if (resp.statusCode() == 200) {
             return parseHealthResponse(resp.body());
         }
-        throw new TrystInfrastructureException("EVO health check failed with status " + resp.statusCode() + ": " + resp.body());
+        throw errorFor("EVO health check", resp);
     }
 
     public TeipCapabilitiesResponse getCapabilities(String endpoint, String authToken) throws IOException, InterruptedException {
@@ -63,7 +63,7 @@ public class TeipClient {
         if (resp.statusCode() == 200) {
             return parseCapabilitiesResponse(resp.body());
         }
-        throw new TrystInfrastructureException("EVO capabilities retrieval failed with status " + resp.statusCode() + ": " + resp.body());
+        throw errorFor("EVO capabilities retrieval", resp);
     }
 
     public TeipExecutionResponse createExecution(String endpoint, String authToken, TeipExecutionRequest request) throws IOException, InterruptedException {
@@ -79,10 +79,12 @@ public class TeipClient {
         }
 
         HttpResponse<String> resp = sendWithRetry(b.build());
-        if (resp.statusCode() == 200 || resp.statusCode() == 201) {
+        // TEIP 1.1 §4.3: 202 Accepted (new execution), 200 OK (idempotent duplicate);
+        // clients MUST accept 200/201/202.
+        if (resp.statusCode() == 200 || resp.statusCode() == 201 || resp.statusCode() == 202) {
             return parseExecutionResponse(resp.body());
         }
-        throw new TrystInfrastructureException("EVO execution creation failed with status " + resp.statusCode() + ": " + resp.body());
+        throw errorFor("EVO execution creation", resp);
     }
 
     public TeipExecutionStatus getExecutionStatus(String endpoint, String authToken, String executionId) throws IOException, InterruptedException {
@@ -95,7 +97,7 @@ public class TeipClient {
         if (resp.statusCode() == 200) {
             return parseExecutionStatus(resp.body());
         }
-        throw new TrystInfrastructureException("EVO execution status retrieval failed with status " + resp.statusCode() + ": " + resp.body());
+        throw errorFor("EVO execution status retrieval", resp);
     }
 
     public TeipEventsResponse getExecutionEvents(String endpoint, String authToken, String executionId, long afterSequence, int limit) throws IOException, InterruptedException {
@@ -109,7 +111,7 @@ public class TeipClient {
         if (resp.statusCode() == 200) {
             return parseEventsResponse(resp.body(), executionId);
         }
-        throw new TrystInfrastructureException("EVO execution events retrieval failed with status " + resp.statusCode() + ": " + resp.body());
+        throw errorFor("EVO execution events retrieval", resp);
     }
 
     public TeipExecutionResult getExecutionResult(String endpoint, String authToken, String executionId) throws IOException, InterruptedException {
@@ -122,7 +124,7 @@ public class TeipClient {
         if (resp.statusCode() == 200) {
             return parseExecutionResult(resp.body());
         }
-        throw new TrystInfrastructureException("EVO execution result retrieval failed with status " + resp.statusCode() + ": " + resp.body());
+        throw errorFor("EVO execution result retrieval", resp);
     }
 
     public TeipCancelResponse cancelExecution(String endpoint, String authToken, String executionId) throws IOException, InterruptedException {
@@ -136,7 +138,7 @@ public class TeipClient {
         if (resp.statusCode() == 200) {
             return parseCancelResponse(resp.body());
         }
-        throw new TrystInfrastructureException("EVO execution cancellation failed with status " + resp.statusCode() + ": " + resp.body());
+        throw errorFor("EVO execution cancellation", resp);
     }
 
     private HttpRequest.Builder createRequestBuilder(String url, String authToken) {
@@ -177,13 +179,42 @@ public class TeipClient {
 
     private String normalizeEndpoint(String endpoint) {
         if (endpoint == null || endpoint.isBlank()) {
-            return "http://localhost:39080";
+            // TEIP 1.1 §9: canonical default EVO endpoint is http://localhost:28080
+            return "http://localhost:28080";
         }
         String ep = endpoint.trim();
         while (ep.endsWith("/")) {
             ep = ep.substring(0, ep.length() - 1);
         }
         return ep;
+    }
+
+    /**
+     * Parses the canonical TEIP 1.1 top-level error envelope (§5) from a non-2xx body.
+     * Returns null when the body is not a TEIP error envelope.
+     */
+    public static TeipError parseErrorResponse(String json) {
+        if (json == null || json.isBlank()) return null;
+        String code = extractJsonString(json, "code");
+        String message = extractJsonString(json, "message");
+        if (code == null && message == null) return null;
+        return new TeipError(
+                code,
+                message,
+                extractJsonString(json, "requestId"),
+                extractJsonString(json, "correlationId"),
+                json.contains("\"retryable\":true") || json.contains("\"retryable\": true"),
+                Map.of()
+        );
+    }
+
+    private static TrystInfrastructureException errorFor(String operation, HttpResponse<String> resp) {
+        TeipError teipError = parseErrorResponse(resp.body());
+        if (teipError != null && teipError.code() != null) {
+            return new TrystInfrastructureException(
+                    operation + " failed (HTTP " + resp.statusCode() + ", " + teipError.code() + "): " + teipError.message());
+        }
+        return new TrystInfrastructureException(operation + " failed with status " + resp.statusCode() + ": " + resp.body());
     }
 
     // JSON Parsing and Serialization Helpers
@@ -360,7 +391,10 @@ public class TeipClient {
         );
     }
 
-    private TeipEventsResponse parseEventsResponse(String json, String execId) {
+    /**
+     * Parses the canonical TEIP 1.1 events response body (§4.5). Public for contract tests.
+     */
+    public static TeipEventsResponse parseEventsResponse(String json, String execId) {
         List<TeipEvent> events = new ArrayList<>();
         int eventsIdx = json.indexOf("\"events\"");
         if (eventsIdx >= 0) {
@@ -383,8 +417,13 @@ public class TeipClient {
             }
         }
         boolean hasMore = json.contains("\"hasMore\":true") || json.contains("\"hasMore\": true");
-        long latestSeq = extractJsonLong(json, "latestSequence", 0);
-        return new TeipEventsResponse(execId, events, hasMore, latestSeq);
+        // TEIP 1.1 §4.5: canonical cursor is nextSequence (last returned sequence + 1).
+        // latestSequence is accepted as a deprecated alias.
+        long nextSeq = extractJsonLong(json, "nextSequence", -1);
+        if (nextSeq < 0) {
+            nextSeq = extractJsonLong(json, "latestSequence", 0);
+        }
+        return new TeipEventsResponse(execId, events, hasMore, nextSeq);
     }
 
     private TeipExecutionResult parseExecutionResult(String json) {
@@ -429,28 +468,30 @@ public class TeipClient {
         sb.append("\"taskId\":\"").append(escapeJson(req.caller().taskId())).append("\"");
         sb.append("},");
         sb.append("\"capability\":\"").append(escapeJson(req.capability())).append("\",");
-        sb.append("\"aiMode\":\"").append(escapeJson(req.aiMode())).append("\",");
+        // TEIP 1.1: `mode` is canonical (`aiMode` is a deprecated alias)
+        sb.append("\"mode\":\"").append(escapeJson(req.mode())).append("\",");
         if (req.model() != null) {
             sb.append("\"model\":\"").append(escapeJson(req.model())).append("\",");
         }
         sb.append("\"instruction\":\"").append(escapeJson(req.instruction())).append("\",");
 
-        // contextReferences
+        // contextReferences: canonical objects {type, path, description}; bare strings
+        // accepted as path shorthand by receivers.
         sb.append("\"contextReferences\":[");
         if (req.contextReferences() != null) {
             for (int i = 0; i < req.contextReferences().size(); i++) {
                 if (i > 0) sb.append(",");
-                sb.append("\"").append(escapeJson(req.contextReferences().get(i))).append("\"");
+                sb.append("{\"type\":\"FILE\",\"path\":\"").append(escapeJson(req.contextReferences().get(i))).append("\"}");
             }
         }
         sb.append("],");
 
-        // mcpToolScopes
-        sb.append("\"mcpToolScopes\":[");
-        if (req.mcpToolScopes() != null) {
-            for (int i = 0; i < req.mcpToolScopes().size(); i++) {
+        // TEIP 1.1: grantedToolScopes is canonical (mcpToolScopes is a deprecated alias)
+        sb.append("\"grantedToolScopes\":[");
+        if (req.grantedToolScopes() != null) {
+            for (int i = 0; i < req.grantedToolScopes().size(); i++) {
                 if (i > 0) sb.append(",");
-                sb.append("\"").append(escapeJson(req.mcpToolScopes().get(i))).append("\"");
+                sb.append("\"").append(escapeJson(req.grantedToolScopes().get(i))).append("\"");
             }
         }
         sb.append("]");

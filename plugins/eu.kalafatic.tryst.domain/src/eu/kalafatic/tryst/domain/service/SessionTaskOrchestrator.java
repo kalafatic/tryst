@@ -30,6 +30,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
 /**
@@ -60,6 +61,40 @@ public class SessionTaskOrchestrator {
             PermissionManager permissionManager,
             EventBus eventBus,
             WorkspaceService workspaceService,
+            AiContextManager contextManager
+    ) {
+        this(sessionRepository, taskRepository, messageRepository, executionResultRepository,
+                toolRegistry, permissionManager, eventBus, workspaceService, contextManager, NO_SANDBOX_PROVIDER);
+    }
+
+    private static final SandboxProvider NO_SANDBOX_PROVIDER = new SandboxProvider() {
+        @Override
+        public SandboxResult execute(String executionId, Path workspaceDir, List<String> command,
+                                     Map<String, String> additionalEnv, Duration timeout,
+                                     BooleanSupplier cancellationSupplier, Consumer<String> stdoutConsumer) {
+            return new SandboxResult(1, "", "Sandbox provider not configured", 0, false, false);
+        }
+
+        @Override
+        public boolean isAvailable() {
+            return false;
+        }
+
+        @Override
+        public String getName() {
+            return "none";
+        }
+    };
+
+    public SessionTaskOrchestrator(
+            SessionRepository sessionRepository,
+            TaskRepository taskRepository,
+            ConversationMessageRepository messageRepository,
+            ExecutionResultRepository executionResultRepository,
+            ToolRegistry toolRegistry,
+            PermissionManager permissionManager,
+            EventBus eventBus,
+            WorkspaceService workspaceService,
             AiContextManager contextManager,
             SandboxProvider sandboxProvider
     ) {
@@ -72,7 +107,7 @@ public class SessionTaskOrchestrator {
         this.eventBus = Objects.requireNonNull(eventBus, "eventBus must not be null");
         this.workspaceService = Objects.requireNonNull(workspaceService, "workspaceService must not be null");
         this.contextManager = Objects.requireNonNull(contextManager, "contextManager must not be null");
-        this.sandboxProvider = Objects.requireNonNull(sandboxProvider, "sandboxProvider must not be null");
+        this.sandboxProvider = sandboxProvider != null ? sandboxProvider : NO_SANDBOX_PROVIDER;
     }
 
     public Session createSession(String projectId, String sessionName) {
@@ -256,14 +291,28 @@ public class SessionTaskOrchestrator {
     ) {
         return CompletableFuture.supplyAsync(() -> {
             StringBuilder executionLog = new StringBuilder();
-            
+
             try {
                 Workspace workspace = workspaceService.getWorkspaceForTask(task.getId());
                 Path workspaceDir = workspace != null ? workspace.getRootPath() : workspaceService.getDefaultWorkspacePath().resolve("sandboxes").resolve(task.getId());
+
+                // OPENCODE agent type: execute the OpenCode CLI non-interactively inside the
+                // task workspace (the SandboxProvider isolates the process and bounds
+                // timeout/cancellation).
+                List<String> openCodeCommand = new ArrayList<>();
+                openCodeCommand.add("opencode");
+                openCodeCommand.add("run");
+                String prompt = task.getTitle() != null ? task.getTitle() : "";
+                if (task.getDescription() != null && !task.getDescription().isBlank()) {
+                    prompt = prompt + ". " + task.getDescription();
+                }
+                openCodeCommand.add(prompt);
+                openCodeCommand.add("--print-logs");
+
                 SandboxProvider.SandboxResult result = sandboxProvider.execute(
                         task.getId(),
                         workspaceDir,
-                        List.of(),
+                        openCodeCommand,
                         Map.of(),
                         Duration.ofMinutes(30),
                         () -> cancelled,

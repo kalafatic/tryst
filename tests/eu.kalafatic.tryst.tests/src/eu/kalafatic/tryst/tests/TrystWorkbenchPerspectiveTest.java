@@ -171,7 +171,7 @@ public class TrystWorkbenchPerspectiveTest {
         StandardEditorPagesBootstrap.initializeStandardPages();
         List<TrystEditorPageDescriptor> descriptors = reg.getDescriptors();
 
-        assertEquals(15, descriptors.size(), "Standard bootstrap must register exactly 15 pages");
+        assertEquals(16, descriptors.size(), "Standard bootstrap must register exactly 16 pages");
 
         // Verify natural ordering
         for (int i = 0; i < descriptors.size() - 1; i++) {
