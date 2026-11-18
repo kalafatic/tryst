@@ -2,17 +2,31 @@ Manifest-Version: 1.0
 Bundle-ManifestVersion: 2
 Bundle-Name: TRYST Application
 Bundle-SymbolicName: eu.kalafatic.tryst.application;singleton:=true
-Bundle-Version: 0.1.0.qualifier
+Bundle-Version: 2.6.11.qualifier
 Bundle-Activator: eu.kalafatic.tryst.application.TrystApplicationPlugin
 Bundle-RequiredExecutionEnvironment: JavaSE-21
 Require-Bundle: org.eclipse.core.runtime,
  org.eclipse.ui,
  org.eclipse.equinox.app,
  org.eclipse.osgi,
- eu.kalafatic.tryst.core;bundle-version="0.1.0",
- eu.kalafatic.tryst.domain;bundle-version="0.1.0",
- eu.kalafatic.tryst.infrastructure;bundle-version="0.1.0",
- eu.kalafatic.tryst.evo.integration;bundle-version="0.1.0";resolution:=optional
+ eu.kalafatic.tryst.core;bundle-version="2.6.11",
+ eu.kalafatic.tryst.domain;bundle-version="2.6.11",
+ eu.kalafatic.tryst.infrastructure;bundle-version="2.6.11",
+ eu.kalafatic.tryst.evo.integration;bundle-version="2.6.11";resolution:=optional
+Import-Package: org.eclipse.core.commands,
+ org.eclipse.core.expressions,
+ org.eclipse.equinox.p2.core,
+ org.eclipse.equinox.p2.metadata,
+ org.eclipse.equinox.p2.operations,
+ org.eclipse.equinox.p2.repository,
+ org.eclipse.equinox.p2.repository.artifact,
+ org.eclipse.equinox.p2.repository.metadata,
+ org.eclipse.equinox.p2.ui,
+ org.eclipse.ui.commands,
+ org.eclipse.ui.help,
+ org.eclipse.ui.menus,
+ org.eclipse.ui.services,
+ org.osgi.util.tracker
 Export-Package: eu.kalafatic.tryst.application,
  eu.kalafatic.tryst.application.http,
  eu.kalafatic.tryst.application.lifecycle

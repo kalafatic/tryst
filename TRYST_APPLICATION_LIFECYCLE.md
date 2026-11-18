@@ -37,11 +37,12 @@ TRYST establishes an explicit, predictable, deterministic lifecycle sequence for
 ## Lifecycle Stages and Actions
 
 1. **`APPLICATION_START`**: Initial state upon OSGi bundle activation and application bootstrap.
-2. **`PLATFORM_INITIALIZATION`**: Triggered in `TrystApplication.start(IApplicationContext)`. Validates platform environment and display prerequisites.
+2. **`PLATFORM_INITIALIZATION`**: Triggered during `ApplicationWorkbenchAdvisor.initialize(IWorkbenchConfigurer)` in standard RCP mode (after the Workbench created the splash handler so the milestone is visible on the splash) or by `TrystServerApplication.runHeadless(...)` in headless mode. Validates platform environment and display prerequisites.
 3. **`CONFIGURATION_INITIALIZATION`**: Authoritative configuration baseline (`ApplicationConfiguration`) initialized with safe defaults and paths.
-4. **`CORE_SERVICE_INITIALIZATION`**: Triggered during `ApplicationWorkbenchAdvisor.initialize(IWorkbenchConfigurer)`.
+4. **`CORE_SERVICE_INITIALIZATION`**: Triggered during `ApplicationWorkbenchAdvisor.initialize(IWorkbenchConfigurer)` in standard RCP mode.
    - Instantiates application and domain services (`WorkspaceService`, `ManagedAsyncExecutionService`).
    - Registers services in the OSGi Service Registry via `BundleContext.registerService()`.
+   - Publishes sub-milestone progress notifications (`Loading application modules...`, `Starting embedded services...`) that the splash handler renders as live startup progress.
 5. **`APPLICATION_READY`**: Core services and workbench window configurations are prepared.
 6. **`WORKBENCH_RUNNING`**: Triggered in `ApplicationWorkbenchAdvisor.postStartup()`. Workbench event loop is running and user interactions are serviced.
 7. **`APPLICATION_SHUTDOWN`**: Triggered in `ApplicationWorkbenchAdvisor.preShutdown()`. Workbench shutdown begins; long-running operations are requested to stop.
@@ -55,4 +56,5 @@ TRYST establishes an explicit, predictable, deterministic lifecycle sequence for
 
 - Lifecycle transitions are strictly monotonic and sequential. Illegal backward or skipped transitions throw `TrystApplicationException`.
 - Every transition is logged with severity, timestamp, and calling component using `TrystLog` (Eclipse Platform `ILog`).
-- Critical startup errors abort initialization cleanly and log full diagnostics without swallowing original causes.
+- Critical startup errors abort initialization cleanly: `ApplicationWorkbenchAdvisor.initialize()` catches fatal core initialization failures, closes the splash screen, and calls `IWorkbenchConfigurer.emergencyClose()` so the application never continues with half-initialized services or a frozen splash screen.
+- The splash handler receives every transition plus the sub-milestone `notifyStartupProgress(...)` notifications and reports them as real, delta-based progress (see TRYST_SPLASH_SCREEN_IMPLEMENTATION.md).

@@ -51,9 +51,10 @@ public class ApplicationWorkbenchAdvisor extends WorkbenchAdvisor {
         super.initialize(configurer);
         configurer.setSaveAndRestore(true);
 
-        // In the standard TRYST product, TrystApplication initializes Core services & servers before Display creation.
-        // If launched via a generic Eclipse Workbench runner or IDE test where TrystApplication did not run,
-        // safely complete platform and core initialization now so services are NEVER left unregistered!
+        // The Workbench creates the splash handler before invoking this advisor, so the
+        // deterministic TRYST lifecycle startup runs here: every milestone transition is
+        // reported as real progress on the splash screen while the services come up before
+        // the first workbench window opens.
         if (coordinator == null) {
             ApplicationLifecycleCoordinator resolved = resolveCoordinator();
             if (resolved != null) {
@@ -61,27 +62,39 @@ public class ApplicationWorkbenchAdvisor extends WorkbenchAdvisor {
             }
         }
 
-        if (coordinator != null && coordinator.getCurrentStage().ordinal() < ApplicationLifecycleStage.APPLICATION_READY.ordinal()) {
-            TrystLog.warn(ApplicationWorkbenchAdvisor.class,
-                    "Detected generic Eclipse Workbench launch without prior TrystApplication execution. Running fallback Core service initialization...");
-            if (coordinator.getCurrentStage().ordinal() < ApplicationLifecycleStage.PLATFORM_INITIALIZATION.ordinal()) {
-                coordinator.transitionTo(ApplicationLifecycleStage.PLATFORM_INITIALIZATION);
-            }
-            if (coordinator.getCurrentStage().ordinal() < ApplicationLifecycleStage.CONFIGURATION_INITIALIZATION.ordinal()) {
-                coordinator.transitionTo(ApplicationLifecycleStage.CONFIGURATION_INITIALIZATION);
-            }
-            if (coordinator.getCurrentStage().ordinal() < ApplicationLifecycleStage.CORE_SERVICE_INITIALIZATION.ordinal()) {
-                coordinator.transitionTo(ApplicationLifecycleStage.CORE_SERVICE_INITIALIZATION);
-            }
-            coordinator.transitionTo(ApplicationLifecycleStage.APPLICATION_READY);
-            if (!coordinator.isHttpServerRunning()) {
+        if (coordinator != null) {
+            try {
+                if (coordinator.getCurrentStage().ordinal() < ApplicationLifecycleStage.PLATFORM_INITIALIZATION.ordinal()) {
+                    coordinator.transitionTo(ApplicationLifecycleStage.PLATFORM_INITIALIZATION);
+                }
+                if (coordinator.getCurrentStage().ordinal() < ApplicationLifecycleStage.CONFIGURATION_INITIALIZATION.ordinal()) {
+                    coordinator.transitionTo(ApplicationLifecycleStage.CONFIGURATION_INITIALIZATION);
+                }
+                if (coordinator.getCurrentStage().ordinal() < ApplicationLifecycleStage.CORE_SERVICE_INITIALIZATION.ordinal()) {
+                    coordinator.transitionTo(ApplicationLifecycleStage.CORE_SERVICE_INITIALIZATION);
+                }
+                if (coordinator.getCurrentStage().ordinal() < ApplicationLifecycleStage.APPLICATION_READY.ordinal()) {
+                    coordinator.transitionTo(ApplicationLifecycleStage.APPLICATION_READY);
+                }
+                if (!coordinator.isHttpServerRunning()) {
+                    try {
+                        coordinator.startHttpServer();
+                    } catch (Exception e) {
+                        TrystLog.error(ApplicationWorkbenchAdvisor.class, "Failed to start HTTP server during initialization: " + e.getMessage(), e);
+                    }
+                }
+                TrystLog.info(ApplicationWorkbenchAdvisor.class, "TRYST core initialization complete. Application is READY.");
+            } catch (Throwable t) {
+                // WorkbenchAdvisor.initialize() runs inside StartupThreading, which swallows
+                // exceptions. A failed core initialization must never leave the application in
+                // a half-initialized state with a frozen splash screen.
+                TrystLog.error(ApplicationWorkbenchAdvisor.class, "Fatal error during TRYST core initialization: " + t.getMessage(), t);
+                eu.kalafatic.tryst.application.splash.TrystSplashHandler.closeSplashIfVisible();
                 try {
-                    coordinator.startHttpServer();
-                } catch (Exception e) {
-                    TrystLog.error(ApplicationWorkbenchAdvisor.class, "Failed to start HTTP server during fallback initialization: " + e.getMessage(), e);
+                    configurer.emergencyClose();
+                } catch (Throwable ignored) {
                 }
             }
-            TrystLog.info(ApplicationWorkbenchAdvisor.class, "Fallback Core service initialization complete. Application is READY.");
         }
     }
 
@@ -89,14 +102,14 @@ public class ApplicationWorkbenchAdvisor extends WorkbenchAdvisor {
     public void postStartup() {
         super.postStartup();
         if (coordinator != null) {
-            coordinator.transitionTo(ApplicationLifecycleStage.WORKBENCH_RUNNING);
+            safeTransition(ApplicationLifecycleStage.WORKBENCH_RUNNING);
         }
     }
 
     @Override
     public boolean preShutdown() {
         if (coordinator != null) {
-            coordinator.transitionTo(ApplicationLifecycleStage.APPLICATION_SHUTDOWN);
+            safeTransition(ApplicationLifecycleStage.APPLICATION_SHUTDOWN);
         }
         return super.preShutdown();
     }
@@ -104,10 +117,19 @@ public class ApplicationWorkbenchAdvisor extends WorkbenchAdvisor {
     @Override
     public void postShutdown() {
         if (coordinator != null) {
-            coordinator.transitionTo(ApplicationLifecycleStage.SERVICE_DISPOSAL);
-            coordinator.transitionTo(ApplicationLifecycleStage.APPLICATION_TERMINATED);
+            safeTransition(ApplicationLifecycleStage.SERVICE_DISPOSAL);
+            safeTransition(ApplicationLifecycleStage.APPLICATION_TERMINATED);
         }
         super.postShutdown();
+    }
+
+    private void safeTransition(ApplicationLifecycleStage target) {
+        try {
+            coordinator.transitionTo(target);
+        } catch (Throwable t) {
+            TrystLog.error(ApplicationWorkbenchAdvisor.class,
+                    "Lifecycle transition to " + target + " failed: " + t.getMessage(), t);
+        }
     }
 
     @Override

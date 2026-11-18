@@ -97,7 +97,7 @@ class TeipProtocolContractTest {
             "status": "UP",
             "protocol": "TEIP",
             "version": "1.0",
-            "engineVersion": "0.1.0",
+            "engineVersion": "2.6.11",
             "nodeId": "evo-node-1",
             "uptimeSeconds": 12345,
             "timestamp": "2026-11-06T18:00:00Z",

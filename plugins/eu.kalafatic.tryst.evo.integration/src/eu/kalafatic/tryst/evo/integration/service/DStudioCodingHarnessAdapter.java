@@ -41,6 +41,8 @@ public class DStudioCodingHarnessAdapter implements CodingHarnessAdapter {
 
     private final TeipClient teipClient = new TeipClient();
     private final DStudioConfigurationRepository configurationRepository;
+    private final eu.kalafatic.tryst.domain.ai.ExecutionConfigurationService
+            executionConfigurationService;
     private volatile String endpoint = DEFAULT_ENDPOINT;
     private volatile String authToken = "";
     private volatile String harness = "";
@@ -55,7 +57,27 @@ public class DStudioCodingHarnessAdapter implements CodingHarnessAdapter {
 
     public DStudioCodingHarnessAdapter(
             DStudioConfigurationRepository configurationRepository) {
+        this(configurationRepository, null);
+    }
+
+    public DStudioCodingHarnessAdapter(
+            DStudioConfigurationRepository configurationRepository,
+            eu.kalafatic.tryst.domain.ai.ExecutionConfigurationService
+                    executionConfigurationService) {
         this.configurationRepository = configurationRepository;
+        this.executionConfigurationService = executionConfigurationService;
+    }
+
+    /**
+     * Resolves the effective execution environment for a task: task-level overrides
+     * (GLOBAL → PROJECT → TASK) win over the adapter defaults; DStudio validates
+     * compatibility on its side and never silently switches.
+     */
+    private eu.kalafatic.tryst.domain.ai.ExecutionConfiguration taskConfiguration(Task task) {
+        if (executionConfigurationService == null || task == null || task.getId() == null) {
+            return null;
+        }
+        return executionConfigurationService.resolve(task.getProjectId(), task.getId());
     }
 
     private synchronized void hydrateFromPersistence() {
@@ -199,10 +221,34 @@ public class DStudioCodingHarnessAdapter implements CodingHarnessAdapter {
         Duration effectiveTimeout = timeout == null ? Duration.ofSeconds(timeoutSeconds)
                 : Duration.ofSeconds(Math.min(timeout.toSeconds(), timeoutSeconds));
         try {
+            eu.kalafatic.tryst.domain.ai.ExecutionConfiguration taskConfig =
+                    taskConfiguration(task);
+            String effectiveModel = model;
+            String effectiveHarness = harness;
+            String effectiveProvider = "";
+            String effectiveAgent = "";
+            if (taskConfig != null) {
+                if (taskConfig.harnessId() != null && !taskConfig.harnessId().isBlank()) {
+                    effectiveHarness = taskConfig.harnessId();
+                }
+                if (taskConfig.modelId() != null && !taskConfig.modelId().isBlank()) {
+                    effectiveModel = taskConfig.modelId();
+                }
+                effectiveProvider = taskConfig.providerId() == null ? ""
+                        : taskConfig.providerId();
+                effectiveAgent = taskConfig.agentProfileId() == null ? ""
+                        : taskConfig.agentProfileId();
+            }
             Map<String, Object> parameters = new LinkedHashMap<>();
             parameters.put("workingDirectory", workspace.getRootPath().toString());
-            if (harness != null && !harness.isBlank()) {
-                parameters.put("harness", harness);
+            if (effectiveHarness != null && !effectiveHarness.isBlank()) {
+                parameters.put("harness", effectiveHarness);
+            }
+            if (!effectiveProvider.isBlank()) {
+                parameters.put("provider", effectiveProvider);
+            }
+            if (!effectiveAgent.isBlank()) {
+                parameters.put("agent", effectiveAgent);
             }
             parameters.put("timeoutSeconds", String.valueOf(
                     Math.min(effectiveTimeout.toSeconds(), 3600)));
@@ -218,7 +264,7 @@ public class DStudioCodingHarnessAdapter implements CodingHarnessAdapter {
                             task == null ? "" : task.getId(),
                             task == null ? "" : task.getId()),
                     "CODE_IMPLEMENTATION", "DEFAULT",
-                    model == null || model.isBlank() ? null : model,
+                    effectiveModel == null || effectiveModel.isBlank() ? null : effectiveModel,
                     prompt != null && !prompt.isBlank() ? prompt : instructions,
                     List.of(), List.of("read:workspace", "write:workspace",
                             "execute:build"),

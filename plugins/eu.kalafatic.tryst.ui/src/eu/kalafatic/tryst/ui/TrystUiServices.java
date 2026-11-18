@@ -169,6 +169,12 @@ public final class TrystUiServices {
         return getService(eu.kalafatic.tryst.domain.service.TaskOrchestrator.class);
     }
 
+    public static eu.kalafatic.tryst.domain.contextual.ContextualActionRegistry
+            getContextualActionRegistry() {
+        var coord = eu.kalafatic.tryst.application.TrystApplication.getCoordinator();
+        return coord == null ? null : coord.getContextualActionRegistry();
+    }
+
     public static AutonomousDevelopmentService getAutonomousDevelopmentService() {
         return getService(AutonomousDevelopmentService.class);
     }
@@ -193,6 +199,35 @@ public final class TrystUiServices {
             }
         }
         return getService(eu.kalafatic.tryst.domain.ai.AiModelRegistryService.class);
+    }
+
+    public static eu.kalafatic.tryst.domain.ai.AiProviderRegistry getAiProviderRegistry() {
+        var appCoord = eu.kalafatic.tryst.application.TrystApplication.getCoordinator();
+        if (appCoord != null) {
+            var reg = appCoord.getAiProviderRegistry();
+            if (reg != null) {
+                return reg;
+            }
+        }
+        return getService(eu.kalafatic.tryst.domain.ai.AiProviderRegistry.class);
+    }
+
+    public static eu.kalafatic.tryst.domain.ai.ExecutionConfigurationService
+            getExecutionConfigurationService() {
+        var appCoord = eu.kalafatic.tryst.application.TrystApplication.getCoordinator();
+        if (appCoord != null) {
+            var service = appCoord.getExecutionConfigurationService();
+            if (service != null) {
+                return service;
+            }
+        }
+        return getService(eu.kalafatic.tryst.domain.ai.ExecutionConfigurationService.class);
+    }
+
+    public static eu.kalafatic.tryst.domain.harness.ConnectedApplicationRegistry
+            getConnectedApplicationRegistry() {
+        var appCoord = eu.kalafatic.tryst.application.TrystApplication.getCoordinator();
+        return appCoord == null ? null : appCoord.getConnectedApplicationRegistry();
     }
 
     public static EventBus getEventBus() {

@@ -29,7 +29,8 @@ public class DCodeCodingHarnessAdapter implements CodingHarnessAdapter {
     public static final String APPLICATION_NAME = "DCode - Darwin Code";
     public static final String APPLICATION_TYPE = "DCODE";
 
-    public static final String DEFAULT_ENDPOINT = "http://localhost:48080";
+    /** Family port convention: DCode primary port is 58080 (DStudio 48080 block). */
+    public static final String DEFAULT_ENDPOINT = "http://localhost:58080";
     public static final String CONFIG_ENDPOINT = "endpoint";
     public static final String CONFIG_AUTH_TOKEN = "authToken";
     public static final String CONFIG_PROVIDER_ID = "providerId";

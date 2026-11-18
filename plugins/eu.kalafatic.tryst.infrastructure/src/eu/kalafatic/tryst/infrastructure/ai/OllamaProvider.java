@@ -12,6 +12,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
@@ -90,6 +91,82 @@ public class OllamaProvider implements AIProvider {
                         throw new TrystInfrastructureException("Failed to fetch models from Ollama: HTTP " + res.statusCode());
                     }
                     return parseModelsJson(res.body());
+                });
+    }
+
+    @Override
+    public CompletableFuture<Boolean> loadModel(String model) {
+        return postKeepAlive(model, -1);
+    }
+
+    @Override
+    public CompletableFuture<Boolean> unloadModel(String model) {
+        return postKeepAlive(model, 0);
+    }
+
+    private CompletableFuture<Boolean> postKeepAlive(String model, int keepAliveSeconds) {
+        Objects.requireNonNull(model, "model must not be null");
+        String payload = "{\"model\":\"" + escapeJson(model)
+                + "\",\"prompt\":\"\",\"keep_alive\":" + keepAliveSeconds + "}";
+        HttpRequest req = HttpRequest.newBuilder()
+                .uri(URI.create(endpoint + "/api/generate"))
+                .timeout(timeout)
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(payload))
+                .build();
+        return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString())
+                .thenApply(res -> res.statusCode() == 200)
+                .exceptionally(t -> {
+                    TrystLog.warn(OllamaProvider.class, "Ollama keep-alive request failed for " + model
+                            + ": " + t.getMessage());
+                    return false;
+                });
+    }
+
+    @Override
+    public CompletableFuture<Boolean> deleteModel(String model) {
+        Objects.requireNonNull(model, "model must not be null");
+        String payload = "{\"model\":\"" + escapeJson(model) + "\"}";
+        HttpRequest req = HttpRequest.newBuilder()
+                .uri(URI.create(endpoint + "/api/delete"))
+                .timeout(timeout)
+                .header("Content-Type", "application/json")
+                .method("DELETE", HttpRequest.BodyPublishers.ofString(payload))
+                .build();
+        return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString())
+                .thenApply(res -> {
+                    if (res.statusCode() != 200) {
+                        TrystLog.warn(OllamaProvider.class, "Ollama delete failed HTTP "
+                                + res.statusCode() + " for " + model + ": " + res.body());
+                        return false;
+                    }
+                    return true;
+                })
+                .exceptionally(t -> {
+                    TrystLog.warn(OllamaProvider.class, "Ollama delete failed for " + model
+                            + ": " + t.getMessage());
+                    return false;
+                });
+    }
+
+    @Override
+    public CompletableFuture<Optional<String>> showModel(String model) {
+        Objects.requireNonNull(model, "model must not be null");
+        String payload = "{\"model\":\"" + escapeJson(model) + "\"}";
+        HttpRequest req = HttpRequest.newBuilder()
+                .uri(URI.create(endpoint + "/api/show"))
+                .timeout(timeout)
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(payload))
+                .build();
+        return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString())
+                .thenApply(res -> res.statusCode() == 200
+                        ? Optional.of(res.body())
+                        : Optional.<String>empty())
+                .exceptionally(t -> {
+                    TrystLog.warn(OllamaProvider.class, "Ollama show failed for " + model
+                            + ": " + t.getMessage());
+                    return Optional.empty();
                 });
     }
 

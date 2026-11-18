@@ -6,6 +6,11 @@
             <unit id="org.eclipse.rcp.feature.group" version="0.0.0"/>
             <unit id="org.eclipse.equinox.p2.core.feature.feature.group" version="0.0.0"/>
             <unit id="org.eclipse.e4.rcp.feature.group" version="0.0.0"/>
+            <unit id="org.eclipse.help.feature.group" version="0.0.0"/>
+            <unit id="org.eclipse.equinox.p2.rcp.feature.feature.group" version="0.0.0"/>
+            <unit id="org.eclipse.equinox.p2.user.ui.feature.group" version="0.0.0"/>
+            <unit id="org.eclipse.equinox.p2.artifact.repository" version="0.0.0"/>
+            <unit id="org.eclipse.ui.console" version="0.0.0"/>
             <unit id="org.eclipse.osgi.compatibility.state" version="0.0.0"/>
             <unit id="junit-jupiter-api" version="0.0.0"/>
             <unit id="junit-jupiter-engine" version="0.0.0"/>

@@ -28,7 +28,7 @@ class SchemaMigrationTest {
             assertEquals(0, migrationService.getCurrentVersion());
 
             migrationService.migrate();
-            assertEquals(20, migrationService.getCurrentVersion());
+            assertEquals(eu.kalafatic.tryst.infrastructure.persistence.SchemaMigrationService.LATEST_VERSION, migrationService.getCurrentVersion());
 
             // Verify all expected tables exist
             Connection conn = dbManager.getConnection();

@@ -33,9 +33,15 @@ class ApplicationLifecycleTest {
 
         assertEquals(ApplicationLifecycleStage.APPLICATION_TERMINATED, coordinator.getCurrentStage());
 
+        // The CORE_SERVICE_INITIALIZATION stage publishes two sub-milestone progress
+        // notifications (Loading application modules..., Starting embedded services...)
+        // that reuse the current stage; the stage sequence therefore contains the core
+        // stage once per milestone plus the transition itself.
         assertEquals(List.of(
                 ApplicationLifecycleStage.PLATFORM_INITIALIZATION,
                 ApplicationLifecycleStage.CONFIGURATION_INITIALIZATION,
+                ApplicationLifecycleStage.CORE_SERVICE_INITIALIZATION,
+                ApplicationLifecycleStage.CORE_SERVICE_INITIALIZATION,
                 ApplicationLifecycleStage.CORE_SERVICE_INITIALIZATION,
                 ApplicationLifecycleStage.APPLICATION_READY,
                 ApplicationLifecycleStage.WORKBENCH_RUNNING,

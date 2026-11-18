@@ -79,6 +79,8 @@ public class AdministrationAndOperationalManagementTest {
     private String devToken;
     private int boundPort;
 
+    private AiControllerStub aiController;
+
     private String savedDevMode;
 
     @BeforeEach
@@ -163,6 +165,27 @@ public class AdministrationAndOperationalManagementTest {
         httpServer.setDataRetentionService(dataRetentionService);
         httpServer.setTaskOrchestrator(taskOrchestrator);
         httpServer.setManagedServiceController(managedServiceController);
+
+        // AI environment management surface (providers, models, sessions, LLM lifecycle)
+        eu.kalafatic.tryst.domain.ai.AiModelRegistryService modelCatalog =
+                new eu.kalafatic.tryst.domain.ai.AiModelRegistryService("codellama");
+        eu.kalafatic.tryst.domain.ai.AiProviderRegistry providerRegistry =
+                new eu.kalafatic.tryst.domain.ai.DefaultAiProviderRegistry(
+                        new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteAiProviderRepository(
+                                dbManager, new eu.kalafatic.tryst.infrastructure.persistence.SecretCodec(tempDir)),
+                        modelCatalog);
+        providerRegistry.registerProvider("cloud-1", "Cloud Provider", "OPENAI_COMPATIBLE",
+                "https://api.example.com/v1", true, new FakeAiProvider("cloud-1"));
+        eu.kalafatic.tryst.domain.ai.ExecutionConfigurationService executionConfigService =
+                new eu.kalafatic.tryst.domain.ai.DefaultExecutionConfigurationService(
+                        new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteExecutionConfigurationRepository(dbManager));
+        eu.kalafatic.tryst.domain.harness.ConnectedApplicationRegistry harnessRegistry =
+                new eu.kalafatic.tryst.domain.harness.DefaultConnectedApplicationRegistry(null);
+        aiController = new AiControllerStub();
+        httpServer.setAiModelRegistryService(modelCatalog);
+        httpServer.setAiManagementServices(providerRegistry, harnessRegistry,
+                executionConfigService, aiController);
+
         httpServer.start();
         boundPort = httpServer.getPort();
     }
@@ -313,5 +336,131 @@ public class AdministrationAndOperationalManagementTest {
         HttpResponse auditRes = sendRequest("GET", "/api/admin/audit", adminToken, null, null);
         assertEquals(200, auditRes.statusCode());
         assertTrue(auditRes.body().contains("USER_ROLE_CHANGE"));
+    }
+
+    @Test
+    void testAiEnvironmentAdministrationEndpoints() throws Exception {
+        // Overview exposes providers, models and sessions plus the AI service state
+        HttpResponse overview = sendRequest("GET", "/api/admin/ai", adminToken, null, null);
+        assertEquals(200, overview.statusCode());
+        assertTrue(overview.body().contains("aiServiceRunning"));
+        assertTrue(overview.body().contains("providers"));
+        assertTrue(overview.body().contains("sessions"));
+
+        // Scan discovers models of the fake provider into the shared catalog
+        HttpResponse scan = sendRequest("POST", "/api/admin/ai/scan", adminToken,
+                "{\"providerId\": \"cloud-1\"}", null);
+        assertEquals(200, scan.statusCode());
+        assertTrue(scan.body().contains("\"success\": true"));
+        HttpResponse models = sendRequest("GET", "/api/admin/ai/models", adminToken, null, null);
+        assertTrue(models.body().contains("model-a"));
+
+        // Save + list + load a named execution environment session
+        HttpResponse saveSession = sendRequest("POST", "/api/admin/ai/sessions/action", adminToken,
+                "{\"action\": \"save\", \"name\": \"env-1\", \"harnessId\": \"h1\", \"providerId\": \"cloud-1\", \"modelId\": \"model-a\", \"agentProfileId\": \"agent-1\"}", null);
+        assertEquals(200, saveSession.statusCode());
+        assertTrue(saveSession.body().contains("\"success\": true"));
+        HttpResponse sessions = sendRequest("GET", "/api/admin/ai/sessions", adminToken, null, null);
+        assertTrue(sessions.body().contains("env-1"));
+        HttpResponse loadSession = sendRequest("POST", "/api/admin/ai/sessions/action", adminToken,
+                "{\"action\": \"load\", \"name\": \"env-1\"}", null);
+        assertTrue(loadSession.body().contains("model-a"));
+        HttpResponse applySession = sendRequest("POST", "/api/admin/ai/sessions/action", adminToken,
+                "{\"action\": \"apply\", \"name\": \"env-1\"}", null);
+        assertTrue(applySession.body().contains("\"success\": true"));
+        HttpResponse removeSession = sendRequest("POST", "/api/admin/ai/sessions/action", adminToken,
+                "{\"action\": \"remove\", \"name\": \"env-1\"}", null);
+        assertTrue(removeSession.body().contains("\"success\": true"));
+
+        // LLM lifecycle start/stop
+        HttpResponse start = sendRequest("POST", "/api/admin/ai/llm/action", adminToken,
+                "{\"action\": \"start\"}", null);
+        assertTrue(start.body().contains("\"success\": true"));
+        assertTrue(aiController.isRunning());
+        HttpResponse stop = sendRequest("POST", "/api/admin/ai/llm/action", adminToken,
+                "{\"action\": \"stop\"}", null);
+        assertFalse(aiController.isRunning());
+
+        // Model catalog removal then provider removal
+        HttpResponse removeModel = sendRequest("POST", "/api/admin/ai/models/action", adminToken,
+                "{\"action\": \"remove\", \"modelId\": \"cloud-1:model-a\"}", null);
+        assertTrue(removeModel.body().contains("\"success\": true"));
+        assertFalse(sendRequest("GET", "/api/admin/ai/models", adminToken, null, null)
+                .body().contains("model-a"));
+        HttpResponse removeProvider = sendRequest("POST", "/api/admin/ai/providers/action", adminToken,
+                "{\"action\": \"remove\", \"providerId\": \"cloud-1\"}", null);
+        assertTrue(removeProvider.body().contains("\"success\": true"));
+        assertFalse(sendRequest("GET", "/api/admin/ai/providers", adminToken, null, null)
+                .body().contains("cloud-1"));
+
+        // Harness administration surface
+        HttpResponse harnesses = sendRequest("GET", "/api/admin/harnesses", adminToken, null, null);
+        assertEquals(200, harnesses.statusCode());
+        assertTrue(harnesses.body().contains("harnesses"));
+        HttpResponse harnessSelect = sendRequest("POST", "/api/admin/harnesses/action", adminToken,
+                "{\"action\": \"select\", \"applicationId\": \"h1\"}", null);
+        assertTrue(harnessSelect.body().contains("\"success\": true"));
+    }
+
+    private static final class AiControllerStub
+            implements eu.kalafatic.tryst.infrastructure.server.AiServiceController {
+
+        private volatile boolean running;
+
+        boolean isRunning() {
+            return running;
+        }
+
+        @Override
+        public boolean isAiServiceRunning() {
+            return running;
+        }
+
+        @Override
+        public void startAiService() {
+            running = true;
+        }
+
+        @Override
+        public void stopAiService() {
+            running = false;
+        }
+    }
+
+    private static final class FakeAiProvider implements eu.kalafatic.tryst.domain.ai.AIProvider {
+
+        private final String providerId;
+
+        FakeAiProvider(String providerId) {
+            this.providerId = providerId;
+        }
+
+        @Override
+        public String getProviderId() {
+            return providerId;
+        }
+
+        @Override
+        public java.util.concurrent.CompletableFuture<Boolean> checkConnection() {
+            return java.util.concurrent.CompletableFuture.completedFuture(true);
+        }
+
+        @Override
+        public java.util.concurrent.CompletableFuture<List<ProviderModelMetadata>> listAvailableModels() {
+            return java.util.concurrent.CompletableFuture.completedFuture(
+                    List.of(new ProviderModelMetadata("model-a", 0, "", "", "", "")));
+        }
+
+        @Override
+        public java.util.concurrent.CompletableFuture<InferenceResponse> generateResponse(InferenceRequest request) {
+            return java.util.concurrent.CompletableFuture.completedFuture(
+                    new InferenceResponse("ok", "stop", 1, 0, 1));
+        }
+
+        @Override
+        public java.util.concurrent.CompletableFuture<Void> streamResponse(InferenceRequest request,
+                java.util.function.Consumer<String> chunkConsumer) {
+            return java.util.concurrent.CompletableFuture.completedFuture(null);
+        }
     }
 }

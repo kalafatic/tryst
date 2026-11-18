@@ -88,3 +88,46 @@ The central editor delegates page instantiation to `TrystEditorPageRegistry`:
 - Structured substring search (message, correlation ID, task ID).
 - Pause/resume live streaming with bounded in-memory circular buffers.
 - Synchronized with the SWT UI thread using batched async execution.
+
+The main perspective also hosts the native Eclipse `org.eclipse.ui.console.ConsoleView`
+(`org.eclipse.ui.console` bundle ships with the TRYST product) into which `TrystLog`
+mirrors a "TRYST Console" `MessageConsole`.
+
+---
+
+## 7. Main Menu Architecture
+
+The TRYST main menu bar is provided by `eu.kalafatic.tryst.application.ApplicationActionBarAdvisor`
+(`org.eclipse.ui.application.ActionBarAdvisor`) using the native Eclipse RCP action/command
+infrastructure. No menu is simulated in HTML or custom SWT controls.
+
+| Menu | Contents | Mechanism |
+|---|---|---|
+| File | New Task..., Open TRYST Web Client, Refresh System Status, Exit | TRYST actions + `ActionFactory.QUIT` |
+| Edit | Undo, Redo, Cut, Copy, Paste, Select All, Preferences | Standard `ActionFactory` commands with focus-based enablement |
+| Navigate | Back, Forward, TRYST Navigator, TRYST Console, Open Central Workspace, Open TRYST Web Client | `ActionFactory.BACK/FORWARD` + TRYST view/editor-page actions |
+| Project / Tasks / Database / TEIP / Web / Observability | Existing TRYST domain functionality | TRYST actions (unchanged) |
+| Window | Open Perspective, Show View, Reset Perspective, Customize Perspective..., Preferences | TRYST actions, `ActionFactory.SHOW_VIEW_MENU`, `ActionFactory.RESET_PERSPECTIVE`, native command `org.eclipse.ui.window.customizePerspective` |
+| Help | Help Contents, About TRYST, Installation Details, Check for Updates, About Installation | `eu.kalafatic.tryst.application.help.TrystHelpMenuSupport` |
+
+Help menu details:
+- **About TRYST** executes the native `org.eclipse.ui.help.aboutAction` command (Eclipse About
+  dialog) using the product branding properties (`aboutImage`, `aboutText` with
+  `about.mappings`, `windowImages`) from `eu.kalafatic.tryst.application`.
+- **Installation Details** opens the native `org.eclipse.ui.help.installationDialog` command
+  (standard Eclipse Installation Details dialog).
+- **Help Contents** uses `IWorkbenchHelpSystem.displayHelp()` when TOC content is registered
+  (`org.eclipse.help.toc`); otherwise it reports explicitly that TRYST documentation is not yet
+  available. The help system ships via `org.eclipse.help.feature`.
+- **Check for Updates** performs a real p2 `UpdateOperation` against the update repositories of
+  the provisioning profile (feature `org.eclipse.equinox.p2.rcp.feature`). When no update
+  repositories are configured, or the p2 UI is missing, the action reports this explicitly and
+  never fakes an update check.
+- **About Installation** reports the real installation location, configuration/instance areas,
+  Java runtime, Eclipse platform version and installed bundle count.
+
+Menu actions that would be dead in the TRYST context (document save/import/export, IDE resource
+navigation) are intentionally not presented; unsupported platform actions such as Back/Forward
+are contributed through standard `ActionFactory` instances so their enabled state reflects the
+real workbench state.
+

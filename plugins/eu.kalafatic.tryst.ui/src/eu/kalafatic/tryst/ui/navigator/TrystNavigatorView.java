@@ -532,10 +532,142 @@ public class TrystNavigatorView extends ViewPart implements WorkspaceChangeListe
             default -> {}
         }
 
+        addContextualActionsSubmenu(manager, node);
+
         manager.add(new Separator());
         manager.add(refreshAction);
         manager.add(expandAllAction);
         manager.add(collapseAllAction);
+    }
+
+    /**
+     * Unified contextual actions (Darwin Family Contextual Action Contract v1.0):
+     * the same action ids and domain operations as the web interface, resolved and
+     * executed through the single TRYST registry.
+     */
+    private void addContextualActionsSubmenu(IMenuManager manager, NavigatorNode node) {
+        eu.kalafatic.tryst.domain.contextual.ContextualActionRegistry registry =
+                eu.kalafatic.tryst.ui.TrystUiServices.getContextualActionRegistry();
+        if (registry == null) {
+            return;
+        }
+        String objectType = null;
+        eu.kalafatic.tryst.domain.contextual.ContextualSelection selection = null;
+        switch (node.getType()) {
+            case TASK, TASK_RUNNING, TASK_COMPLETED, TASK_FAILED, TASK_CANCELLED -> {
+                if (node.getDomainObject() instanceof Task task) {
+                    objectType = "task";
+                    selection = eu.kalafatic.tryst.domain.contextual.ContextualSelection
+                            .builder("TRYST", "RCP", "task")
+                            .object(task.getId(), task.getTitle())
+                            .state("status", task.getStatus().name())
+                            .permissions(java.util.Set.of())
+                            .build();
+                } else if (node.getDomainObject() instanceof AgentTask agentTask) {
+                    objectType = "task";
+                    selection = eu.kalafatic.tryst.domain.contextual.ContextualSelection
+                            .builder("TRYST", "RCP", "task")
+                            .object(agentTask.getId(), agentTask.getTitle() == null ? ""
+                                    : agentTask.getTitle())
+                            .permissions(java.util.Set.of())
+                            .build();
+                }
+            }
+            case SESSION -> {
+                if (node.getDomainObject() instanceof Session session) {
+                    objectType = "session";
+                    selection = eu.kalafatic.tryst.domain.contextual.ContextualSelection
+                            .builder("TRYST", "RCP", "session")
+                            .object(session.getId(), session.getName())
+                            .permissions(java.util.Set.of())
+                            .build();
+                }
+            }
+            case PROJECT -> {
+                if (node.getDomainObject() instanceof Project project) {
+                    objectType = "project";
+                    selection = eu.kalafatic.tryst.domain.contextual.ContextualSelection
+                            .builder("TRYST", "RCP", "project")
+                            .object(project.getId(), project.getName())
+                            .permissions(java.util.Set.of())
+                            .build();
+                }
+            }
+            case GIT_REPO -> {
+                if (node.getDomainObject() instanceof Project project
+                        && project.getLocation() != null) {
+                    objectType = "repository";
+                    selection = eu.kalafatic.tryst.domain.contextual.ContextualSelection
+                            .builder("TRYST", "RCP", "repository")
+                            .object(project.getId(), project.getName())
+                            .state("path", project.getLocation().toString())
+                            .permissions(java.util.Set.of(
+                                    eu.kalafatic.tryst.domain.model.Permission
+                                            .COMMIT_APPROVED_CHANGES.name(),
+                                    eu.kalafatic.tryst.domain.model.Permission
+                                            .MANAGE_GITHUB_CREDENTIALS.name()))
+                            .build();
+                }
+            }
+            default -> {
+            }
+        }
+        if (selection == null) {
+            return;
+        }
+        java.util.List<eu.kalafatic.tryst.domain.contextual.ContextualAction> actions =
+                registry.resolve(selection);
+        if (actions.isEmpty()) {
+            return;
+        }
+        MenuManager submenu = new MenuManager("More Actions", null, "ctx.more");
+        String currentGroup = null;
+        final eu.kalafatic.tryst.domain.contextual.ContextualSelection capturedSelection =
+                selection;
+        for (eu.kalafatic.tryst.domain.contextual.ContextualAction action : actions) {
+            String group = action.descriptor().group();
+            if (!group.equals(currentGroup)) {
+                if (currentGroup != null) {
+                    submenu.add(new Separator());
+                }
+                currentGroup = group;
+            }
+            Action jfaceAction = new Action(action.descriptor().label()) {
+                @Override
+                public void run() {
+                    if (action.descriptor().confirmation()
+                            == eu.kalafatic.tryst.domain.contextual.ContextualActionDescriptor
+                                    .Confirmation.CONFIRM
+                            || action.descriptor().confirmation()
+                                    == eu.kalafatic.tryst.domain.contextual.ContextualActionDescriptor
+                                            .Confirmation.DANGEROUS) {
+                        boolean confirmed = MessageDialog.openConfirm(getSite().getShell(),
+                                action.descriptor().label(),
+                                "Apply '" + action.descriptor().label() + "' to "
+                                        + (capturedSelection.objectLabel().isBlank()
+                                                ? capturedSelection.objectId()
+                                                : capturedSelection.objectLabel()) + "?");
+                        if (!confirmed) {
+                            return;
+                        }
+                    }
+                    eu.kalafatic.tryst.domain.contextual.ContextualExecutionResult result =
+                            registry.executeResolved(action, capturedSelection);
+                    if (result.ok()) {
+                        refreshAsync();
+                    } else {
+                        MessageDialog.openError(getSite().getShell(),
+                                action.descriptor().label(), result.message());
+                    }
+                }
+            };
+            jfaceAction.setId(action.actionId());
+            jfaceAction.setEnabled(action.enabled());
+            jfaceAction.setToolTipText(action.descriptor().description()
+                    + (action.enabled() ? "" : " — " + action.disabledReason()));
+            submenu.add(jfaceAction);
+        }
+        manager.add(submenu);
     }
 
     private void showNodeDetails(NavigatorNode node) {

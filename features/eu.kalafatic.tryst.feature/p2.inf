@@ -1,0 +1,14 @@
+# p2 customization point for the product feature.
+#
+# NOTE: p2.inf instruction bodies support only ${#xx} character encoding and
+# no runtime variable substitution; therefore update repositories are NOT
+# hardcoded here. The product registers its local update repository
+# (<install>/updates) at startup through the standard p2 repository manager
+# API, and remote HTTP/HTTPS update repositories are managed by the user
+# through the standard Eclipse "Manage Software Sites" dialog.
+#
+# A vendor-hosted update site can be published later by adding a static
+# instruction here, for example:
+# instructions.install = \
+#   org.eclipse.equinox.p2.touchpoint.eclipse.addRepository(type:0,location:https${#58}//updates.example.com/product/repository,enabled:true,name:Product Updates);\
+#   org.eclipse.equinox.p2.touchpoint.eclipse.addRepository(type:1,location:https${#58}//updates.example.com/product/repository,enabled:true,name:Product Updates);

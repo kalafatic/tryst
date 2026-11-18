@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <?pde version="3.5"?>
 
-<product name="TRYST – AI Development Environment" uid="eu.kalafatic.tryst.product.id" id="eu.kalafatic.tryst.application.product" application="eu.kalafatic.tryst.application.application" version="0.1.0.qualifier" type="features" includeLaunchers="true" autoMountHierarchy="true">
+<product name="TRYST – AI Development Environment" uid="eu.kalafatic.tryst.product.id" id="eu.kalafatic.tryst.application.product" application="eu.kalafatic.tryst.application.application" version="2.6.11.qualifier" type="features" includeLaunchers="true" autoMountHierarchy="true">
 
    <configIni use="default">
    </configIni>
@@ -36,6 +36,9 @@
       <feature id="eu.kalafatic.tryst.feature"/>
       <feature id="org.eclipse.rcp"/>
       <feature id="org.eclipse.equinox.p2.core.feature"/>
+      <feature id="org.eclipse.equinox.p2.rcp.feature"/>
+      <feature id="org.eclipse.equinox.p2.user.ui"/>
+      <feature id="org.eclipse.help"/>
       <feature id="org.eclipse.e4.rcp"/>
    </features>
 

@@ -19,6 +19,9 @@ import java.util.Objects;
  */
 public class SchemaMigrationService {
 
+    /** Latest schema version of the forward-only migration chain (V1..V21). */
+    public static final int LATEST_VERSION = 21;
+
     public record Migration(int version, String description, List<String> sqlStatements) {}
 
     private final SqliteDatabaseManager databaseManager;
@@ -879,6 +882,48 @@ public class SchemaMigrationService {
                 """
         );
         migrations.add(new Migration(20, "DCode coding harness connection configuration", v20Statements));
+
+        // V21: Unified multi-harness / multi-provider / multi-agent control platform:
+        // evolves the existing V4 provider catalog (ai_providers) with default model and
+        // encrypted configuration, adds provider state (default selection), scope-based
+        // execution configurations (GLOBAL/PROJECT/TASK), immutable per-task execution
+        // snapshots, and the agents table extension for reusable agent profiles. Secrets
+        // (API keys) are stored AES/GCM-encrypted via SecretCodec, never as plaintext.
+        List<String> v21Statements = List.of(
+                "ALTER TABLE ai_providers ADD COLUMN default_model TEXT NOT NULL DEFAULT '';",
+                "ALTER TABLE ai_providers ADD COLUMN config_json TEXT NOT NULL DEFAULT '{}';",
+                """
+                CREATE TABLE IF NOT EXISTS ai_provider_state (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+                """,
+                """
+                CREATE TABLE IF NOT EXISTS execution_configurations (
+                    scope TEXT NOT NULL,
+                    scope_key TEXT NOT NULL,
+                    config_json TEXT NOT NULL DEFAULT '{}',
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (scope, scope_key)
+                );
+                """,
+                """
+                CREATE TABLE IF NOT EXISTS task_execution_snapshots (
+                    task_id TEXT PRIMARY KEY,
+                    config_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL
+                );
+                """,
+                "ALTER TABLE agents ADD COLUMN role TEXT NOT NULL DEFAULT '';",
+                "ALTER TABLE agents ADD COLUMN description TEXT NOT NULL DEFAULT '';",
+                "ALTER TABLE agents ADD COLUMN tool_permissions TEXT NOT NULL DEFAULT '[]';",
+                "ALTER TABLE agents ADD COLUMN restrictions TEXT NOT NULL DEFAULT '[]';",
+                "ALTER TABLE agents ADD COLUMN preferred_harness TEXT NOT NULL DEFAULT '';",
+                "ALTER TABLE agents ADD COLUMN preferred_provider TEXT NOT NULL DEFAULT '';",
+                "ALTER TABLE agents ADD COLUMN preferred_model TEXT NOT NULL DEFAULT '';",
+                "ALTER TABLE agents ADD COLUMN execution_parameters_json TEXT NOT NULL DEFAULT '{}';"
+        );
+        migrations.add(new Migration(21, "Unified AI execution environment configuration (providers, execution configurations, snapshots, agent profiles)", v21Statements));
 
         return migrations;
     }

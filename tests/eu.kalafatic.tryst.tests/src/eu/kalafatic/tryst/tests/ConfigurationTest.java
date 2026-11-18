@@ -31,7 +31,7 @@ class ConfigurationTest {
     void testConfigurationValidation() {
         assertThrows(TrystApplicationException.class, () -> new ApplicationConfiguration(
                 "   ",
-                "0.1.0",
+                "2.6.11",
                 Path.of("/tmp"),
                 Path.of("/tmp/.tryst"),
                 Path.of("/tmp/.tryst/workspace")
@@ -39,7 +39,7 @@ class ConfigurationTest {
 
         assertThrows(NullPointerException.class, () -> new ApplicationConfiguration(
                 null,
-                "0.1.0",
+                "2.6.11",
                 Path.of("/tmp"),
                 Path.of("/tmp/.tryst"),
                 Path.of("/tmp/.tryst/workspace")

@@ -1,7 +1,6 @@
 package eu.kalafatic.tryst.application;
 
 import eu.kalafatic.tryst.application.lifecycle.ApplicationLifecycleCoordinator;
-import eu.kalafatic.tryst.core.lifecycle.ApplicationLifecycleStage;
 import eu.kalafatic.tryst.core.log.TrystLog;
 import org.eclipse.equinox.app.IApplication;
 import org.eclipse.equinox.app.IApplicationContext;
@@ -86,30 +85,14 @@ public class TrystApplication implements IApplication {
         TrystLog.info(TrystApplication.class, "=======================================================");
         TrystLog.info(TrystApplication.class, " TRYST APPLICATION ENTRY POINT [AppId: eu.kalafatic.tryst.application.application]");
         TrystLog.info(TrystApplication.class, " Launch ID    : " + launchId);
-        TrystLog.info(TrystApplication.class, " Startup Mode : STANDARD ECLIPSE RCP (Core Services & Servers start BEFORE Display)");
+        TrystLog.info(TrystApplication.class, " Startup Mode : STANDARD ECLIPSE RCP");
         TrystLog.info(TrystApplication.class, "=======================================================");
 
         try {
-            if (coordinator.getCurrentStage().ordinal() < ApplicationLifecycleStage.PLATFORM_INITIALIZATION.ordinal()) {
-                coordinator.transitionTo(ApplicationLifecycleStage.PLATFORM_INITIALIZATION);
-            }
-            if (coordinator.getCurrentStage().ordinal() < ApplicationLifecycleStage.CONFIGURATION_INITIALIZATION.ordinal()) {
-                coordinator.transitionTo(ApplicationLifecycleStage.CONFIGURATION_INITIALIZATION);
-            }
-            if (coordinator.getCurrentStage().ordinal() < ApplicationLifecycleStage.CORE_SERVICE_INITIALIZATION.ordinal()) {
-                coordinator.transitionTo(ApplicationLifecycleStage.CORE_SERVICE_INITIALIZATION);
-            }
-            if (coordinator.getCurrentStage().ordinal() < ApplicationLifecycleStage.APPLICATION_READY.ordinal()) {
-                coordinator.transitionTo(ApplicationLifecycleStage.APPLICATION_READY);
-            }
-
-            // Ensure embedded HTTP server is started directly on the configured host & port
-            if (!coordinator.isHttpServerRunning()) {
-                coordinator.startHttpServer();
-            }
-
-            TrystLog.info(TrystApplication.class, "TRYST Core Initialization complete. Ready for SWT Display creation.");
-
+            // The splash handler is created by the Workbench during its initialization, before
+            // WorkbenchAdvisor.initialize() runs. The lifecycle coordinator startup stages are
+            // therefore advanced from ApplicationWorkbenchAdvisor.initialize() so that every
+            // startup milestone is reported as real progress on the splash screen.
             Display display = PlatformUI.createDisplay();
             try {
                 int returnCode = PlatformUI.createAndRunWorkbench(display, new ApplicationWorkbenchAdvisor(coordinator));
@@ -122,6 +105,7 @@ public class TrystApplication implements IApplication {
             }
         } catch (Throwable t) {
             TrystLog.error(TrystApplication.class, "Fatal error during TRYST startup: " + t.getMessage(), t);
+            eu.kalafatic.tryst.application.splash.TrystSplashHandler.closeSplashIfVisible();
             throw t;
         } finally {
             if (coordinator != null && coordinator.isHttpServerRunning()) {

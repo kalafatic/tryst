@@ -2,7 +2,7 @@ Manifest-Version: 1.0
 Bundle-ManifestVersion: 2
 Bundle-Name: TRYST UI
 Bundle-SymbolicName: eu.kalafatic.tryst.ui;singleton:=true
-Bundle-Version: 0.1.0.qualifier
+Bundle-Version: 2.6.11.qualifier
 Bundle-Activator: eu.kalafatic.tryst.ui.TrystUiPlugin
 Bundle-ActivationPolicy: lazy
 Bundle-RequiredExecutionEnvironment: JavaSE-21
@@ -11,10 +11,10 @@ Require-Bundle: org.eclipse.core.runtime,
  org.eclipse.jface,
  org.eclipse.ui.workbench,
  org.eclipse.osgi,
- eu.kalafatic.tryst.core;bundle-version="0.1.0",
- eu.kalafatic.tryst.domain;bundle-version="0.1.0",
- eu.kalafatic.tryst.infrastructure;bundle-version="0.1.0",
- eu.kalafatic.tryst.application;bundle-version="0.1.0"
+ eu.kalafatic.tryst.core;bundle-version="2.6.11",
+ eu.kalafatic.tryst.domain;bundle-version="2.6.11",
+ eu.kalafatic.tryst.infrastructure;bundle-version="2.6.11",
+ eu.kalafatic.tryst.application;bundle-version="2.6.11"
 Export-Package: eu.kalafatic.tryst.ui,
  eu.kalafatic.tryst.ui.context,
  eu.kalafatic.tryst.ui.controller,

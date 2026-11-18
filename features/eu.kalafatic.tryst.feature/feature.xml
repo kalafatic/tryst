@@ -2,7 +2,7 @@
 <feature
       id="eu.kalafatic.tryst.feature"
       label="TRYST Feature"
-      version="0.1.0.qualifier"
+      version="2.6.11.qualifier"
       provider-name="eu.kalafatic">
 
    <description>
@@ -54,6 +54,13 @@
 
    <plugin
          id="eu.kalafatic.tryst.ui"
+         download-size="0"
+         install-size="0"
+         version="0.0.0"
+         unpack="false"/>
+
+   <plugin
+         id="org.eclipse.ui.console"
          download-size="0"
          install-size="0"
          version="0.0.0"

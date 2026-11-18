@@ -1,0 +1,4 @@
+0=${tryst.product.version}
+1=${tryst.build.id}
+2=${java.version}
+3=${tryst.eclipse.version}

@@ -47,7 +47,7 @@ public record ApplicationConfiguration(
     public static final String DEFAULT_CANONICAL_URL = "http://localhost/tryst";
     public static final String PROPERTY_DEV_MODE = "tryst.dev.mode";
     public static final String DEFAULT_APP_NAME = "TRYST – AI Development Environment";
-    public static final String DEFAULT_VERSION = "0.1.0";
+    public static final String DEFAULT_VERSION = "2.6.11";
     public static final String DEFAULT_OLLAMA_ENDPOINT = "http://localhost:11434";
     public static final String DEFAULT_MODEL = "codellama";
     public static final int DEFAULT_REQUEST_TIMEOUT_SECONDS = 60;

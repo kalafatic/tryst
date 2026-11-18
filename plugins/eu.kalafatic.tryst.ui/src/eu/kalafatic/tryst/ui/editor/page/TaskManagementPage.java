@@ -50,6 +50,7 @@ public class TaskManagementPage extends AbstractTrystEditorPage {
     private Button btnRunTask;
     private Button btnCancelTask;
     private Button btnCopyTaskId;
+    private Button btnExecEnv;
 
     public TaskManagementPage(TrystWorkbenchEditor editor) {
         super(ID, "Task Management", editor);
@@ -104,6 +105,11 @@ public class TaskManagementPage extends AbstractTrystEditorPage {
         btnCopyTaskId.setEnabled(false);
         btnCopyTaskId.addListener(SWT.Selection, e -> copySelectedTaskId());
 
+        Button btnExecEnv = new Button(topBar, SWT.PUSH);
+        btnExecEnv.setText("⚙ Execution Environment...");
+        btnExecEnv.setEnabled(false);
+        btnExecEnv.addListener(SWT.Selection, e -> onConfigureExecutionEnvironment());
+
         // Search Filter Bar
         Composite searchBar = new Composite(parent, SWT.NONE);
         searchBar.setLayout(new GridLayout(2, false));
@@ -137,6 +143,7 @@ public class TaskManagementPage extends AbstractTrystEditorPage {
             boolean hasSel = !sel.isEmpty();
             btnRunTask.setEnabled(hasSel);
             btnCopyTaskId.setEnabled(hasSel);
+            btnExecEnv.setEnabled(hasSel);
 
             if (hasSel && sel.getFirstElement() instanceof AgentTask task) {
                 btnCancelTask.setEnabled(task.getStatus() == ExecutionStatus.RUNNING || task.getStatus() == ExecutionStatus.CLAIMED);
@@ -212,6 +219,28 @@ public class TaskManagementPage extends AbstractTrystEditorPage {
                 cb.dispose();
             }
         }
+    }
+
+    /**
+     * Opens the per-task execution environment selection (harness/provider/model/agent);
+     * saves the selection as a TASK-scope override. Running executions are never modified:
+     * the override applies to the next execution of the task.
+     */
+    private void onConfigureExecutionEnvironment() {
+        IStructuredSelection sel = (IStructuredSelection) taskViewer.getSelection();
+        if (sel.isEmpty() || !(sel.getFirstElement() instanceof AgentTask task)) {
+            return;
+        }
+        if (task.getStatus() == ExecutionStatus.RUNNING || task.getStatus() == ExecutionStatus.CLAIMED) {
+            MessageDialog.openInformation(getControl().getShell(), "Execution Environment",
+                    "The task is currently running. The execution environment can be "
+                            + "configured before the task is executed; it never modifies "
+                            + "a running execution.");
+            return;
+        }
+        TaskExecutionEnvironmentDialog dialog = new TaskExecutionEnvironmentDialog(
+                getControl().getShell(), task.getId(), task.getProjectId());
+        dialog.open();
     }
 
     private void onCancelSelectedTask() {

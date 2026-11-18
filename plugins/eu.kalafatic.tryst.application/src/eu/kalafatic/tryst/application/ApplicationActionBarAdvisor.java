@@ -32,23 +32,37 @@ import java.sql.Statement;
 import java.util.List;
 
 /**
- * Workbench action bar configuration defining standard TRYST top menus:
- * File, Edit, Project, Database, TEIP, Web, Observability, Window, Help.
+ * Workbench action bar configuration defining the standard Eclipse TRYST top menus:
+ * File, Edit, Navigate, Project, Tasks, Database, TEIP, Web, Observability, Window, Help.
  */
 public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
 
     private final ApplicationLifecycleCoordinator coordinator;
 
     private IWorkbenchAction exitAction;
-    private IWorkbenchAction aboutAction;
     private IWorkbenchAction preferencesAction;
     private IWorkbenchAction resetPerspectiveAction;
-    private IWorkbenchAction editActionSetAction;
     private IWorkbenchAction showViewMenuAction;
+
+    // Standard Edit Actions
+    private IWorkbenchAction undoAction;
+    private IWorkbenchAction redoAction;
+    private IWorkbenchAction cutAction;
+    private IWorkbenchAction copyAction;
+    private IWorkbenchAction pasteAction;
+    private IWorkbenchAction selectAllAction;
+
+    // Standard Navigate Actions
+    private IWorkbenchAction backAction;
+    private IWorkbenchAction forwardAction;
 
     private Action openWebBrowserAction;
     private Action openMainPerspectiveAction;
     private Action openAdminPerspectiveAction;
+    private Action newTaskAction;
+    private Action openNavigatorViewAction;
+    private Action openConsoleViewAction;
+    private Action openCentralWorkspaceAction;
 
     // Database Actions
     private Action openDbExplorerAction;
@@ -118,20 +132,92 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
         exitAction = ActionFactory.QUIT.create(window);
         register(exitAction);
 
-        aboutAction = ActionFactory.ABOUT.create(window);
-        register(aboutAction);
-
         preferencesAction = ActionFactory.PREFERENCES.create(window);
         register(preferencesAction);
 
         resetPerspectiveAction = ActionFactory.RESET_PERSPECTIVE.create(window);
         register(resetPerspectiveAction);
 
-        editActionSetAction = ActionFactory.EDIT_ACTION_SETS.create(window);
-        register(editActionSetAction);
-
         showViewMenuAction = ActionFactory.SHOW_VIEW_MENU.create(window);
         register(showViewMenuAction);
+
+        // --- Standard Edit Actions (Eclipse command infrastructure; enablement follows focus) ---
+        undoAction = ActionFactory.UNDO.create(window);
+        register(undoAction);
+        redoAction = ActionFactory.REDO.create(window);
+        register(redoAction);
+        cutAction = ActionFactory.CUT.create(window);
+        register(cutAction);
+        copyAction = ActionFactory.COPY.create(window);
+        register(copyAction);
+        pasteAction = ActionFactory.PASTE.create(window);
+        register(pasteAction);
+        selectAllAction = ActionFactory.SELECT_ALL.create(window);
+        register(selectAllAction);
+
+        // --- Standard Navigate Actions (workbench navigation history) ---
+        backAction = ActionFactory.BACK.create(window);
+        register(backAction);
+        forwardAction = ActionFactory.FORWARD.create(window);
+        register(forwardAction);
+
+        newTaskAction = new Action("New &Task...") {
+            @Override
+            public void run() {
+                var coord = resolveCoordinator();
+                if (coord == null || coord.getWorkspaceService() == null) {
+                    MessageDialog.openWarning(window.getShell(), "New Task",
+                            "WorkspaceService is not available yet. Try again after startup completes.");
+                    return;
+                }
+                InputDialog dialog = new InputDialog(window.getShell(), "Create Development Task",
+                        "Task title:", "Implement Autonomous Change", null);
+                if (dialog.open() == InputDialog.OK && dialog.getValue() != null && !dialog.getValue().isBlank()) {
+                    try {
+                        coord.getWorkspaceService().createTask(dialog.getValue().trim(), "User-created task");
+                    } catch (Exception e) {
+                        TrystLog.error(ApplicationActionBarAdvisor.class, "Failed to create task: " + e.getMessage(), e);
+                        MessageDialog.openError(window.getShell(), "New Task",
+                                "Failed to create task:\n\n" + e.getMessage());
+                    }
+                }
+            }
+        };
+        newTaskAction.setId("eu.kalafatic.tryst.application.action.newTask");
+        register(newTaskAction);
+
+        openNavigatorViewAction = new Action("TRYST &Navigator") {
+            @Override
+            public void run() {
+                try {
+                    window.getActivePage().showView("eu.kalafatic.tryst.ui.navigator.view");
+                } catch (Exception ignored) {
+                }
+            }
+        };
+        openNavigatorViewAction.setId("eu.kalafatic.tryst.application.action.showNavigator");
+        register(openNavigatorViewAction);
+
+        openConsoleViewAction = new Action("TRYST &Console") {
+            @Override
+            public void run() {
+                try {
+                    window.getActivePage().showView("eu.kalafatic.tryst.ui.view.consoleOutput");
+                } catch (Exception ignored) {
+                }
+            }
+        };
+        openConsoleViewAction.setId("eu.kalafatic.tryst.application.action.showConsole");
+        register(openConsoleViewAction);
+
+        openCentralWorkspaceAction = new Action("Open &Central Workspace") {
+            @Override
+            public void run() {
+                switchEditorPage(window, "eu.kalafatic.tryst.ui.editor.page.studio");
+            }
+        };
+        openCentralWorkspaceAction.setId("eu.kalafatic.tryst.application.action.openCentralWorkspace");
+        register(openCentralWorkspaceAction);
 
         openWebBrowserAction = new Action("Open TRYST Web Client") {
             @Override
@@ -543,13 +629,49 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
 
     @Override
     protected void fillMenuBar(IMenuManager menuBar) {
+        IWorkbenchWindow window = getActionBarConfigurer().getWindowConfigurer().getWindow();
+
+        // --- Standard File Menu (only actions that are functional in TRYST) ---
         MenuManager fileMenu = new MenuManager("&File", IWorkbenchActionConstants.M_FILE);
         fileMenu.add(new GroupMarker(IWorkbenchActionConstants.FILE_START));
+        fileMenu.add(newTaskAction);
+        fileMenu.add(new Separator());
         fileMenu.add(openWebBrowserAction);
+        fileMenu.add(refreshAllAction);
         fileMenu.add(new Separator());
         fileMenu.add(new GroupMarker(IWorkbenchActionConstants.MB_ADDITIONS));
+        fileMenu.add(new Separator());
         fileMenu.add(exitAction);
         menuBar.add(fileMenu);
+
+        // --- Standard Edit Menu (Eclipse command infrastructure) ---
+        MenuManager editMenu = new MenuManager("&Edit", IWorkbenchActionConstants.M_EDIT);
+        editMenu.add(undoAction);
+        editMenu.add(redoAction);
+        editMenu.add(new Separator());
+        editMenu.add(cutAction);
+        editMenu.add(copyAction);
+        editMenu.add(pasteAction);
+        editMenu.add(new Separator());
+        editMenu.add(selectAllAction);
+        editMenu.add(new Separator());
+        editMenu.add(new GroupMarker(IWorkbenchActionConstants.MB_ADDITIONS));
+        editMenu.add(new Separator());
+        editMenu.add(preferencesAction);
+        menuBar.add(editMenu);
+
+        // --- Standard Navigate Menu (only navigation that is functional in TRYST) ---
+        MenuManager navigateMenu = new MenuManager("&Navigate", "navigate");
+        navigateMenu.add(backAction);
+        navigateMenu.add(forwardAction);
+        navigateMenu.add(new Separator());
+        navigateMenu.add(openNavigatorViewAction);
+        navigateMenu.add(openConsoleViewAction);
+        navigateMenu.add(new Separator());
+        navigateMenu.add(openCentralWorkspaceAction);
+        navigateMenu.add(openWebBrowserAction);
+        navigateMenu.add(new GroupMarker(IWorkbenchActionConstants.MB_ADDITIONS));
+        menuBar.add(navigateMenu);
 
         MenuManager projectMenu = new MenuManager("&Project", "project");
         projectMenu.add(new GroupMarker(IWorkbenchActionConstants.MB_ADDITIONS));
@@ -560,7 +682,6 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
         tasksMenu.add(new Action("Open in Studio...") {
             @Override
             public void run() {
-                var window = getActionBarConfigurer().getWindowConfigurer().getWindow();
                 switchEditorPage(window, "eu.kalafatic.tryst.ui.editor.page.studio");
             }
         });
@@ -609,40 +730,36 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
         obsMenu.add(new GroupMarker(IWorkbenchActionConstants.MB_ADDITIONS));
         menuBar.add(obsMenu);
 
+        // --- Standard Window Menu ---
         MenuManager windowMenu = new MenuManager("&Window", IWorkbenchActionConstants.M_WINDOW);
         MenuManager perspMenu = new MenuManager("Open &Perspective", "openPerspective");
         perspMenu.add(openMainPerspectiveAction);
         perspMenu.add(openAdminPerspectiveAction);
         windowMenu.add(perspMenu);
-        MenuManager showViewMenu = new MenuManager("Show &View", "showView");
-        showViewMenu.add(new Action("TRYST Navigator") {
-            @Override
-            public void run() {
-                try {
-                    getActionBarConfigurer().getWindowConfigurer().getWindow().getActivePage().showView("eu.kalafatic.tryst.ui.navigator.view");
-                } catch (Exception ignored) {}
-            }
-        });
-        showViewMenu.add(new Action("TRYST Console") {
-            @Override
-            public void run() {
-                try {
-                    getActionBarConfigurer().getWindowConfigurer().getWindow().getActivePage().showView("eu.kalafatic.tryst.ui.view.consoleOutput");
-                } catch (Exception ignored) {}
-            }
-        });
-        windowMenu.add(showViewMenu);
+        windowMenu.add(showViewMenuAction);
         windowMenu.add(new Separator());
         windowMenu.add(resetPerspectiveAction);
-        windowMenu.add(editActionSetAction);
+        windowMenu.add(eu.kalafatic.tryst.application.help.TrystHelpMenuSupport.createCustomizePerspectiveItem(window));
         windowMenu.add(new Separator());
         windowMenu.add(preferencesAction);
         windowMenu.add(new GroupMarker(IWorkbenchActionConstants.MB_ADDITIONS));
         menuBar.add(windowMenu);
 
+        // --- Standard Help Menu (native Eclipse dialogs and p2 update support) ---
         MenuManager helpMenu = new MenuManager("&Help", IWorkbenchActionConstants.M_HELP);
         helpMenu.add(new GroupMarker(IWorkbenchActionConstants.HELP_START));
-        helpMenu.add(aboutAction);
+        helpMenu.add(eu.kalafatic.tryst.application.help.TrystHelpMenuSupport.createHelpContentsAction(window));
+        helpMenu.add(new Separator());
+        helpMenu.add(eu.kalafatic.tryst.application.help.TrystHelpMenuSupport.createAboutAction(window));
+        helpMenu.add(eu.kalafatic.tryst.application.help.TrystHelpMenuSupport.createInstallationDetailsItem(window));
+        helpMenu.add(new Separator());
+        // Check for Updates and Install New Software... are contributed by the
+        // standard Eclipse p2 UI (org.eclipse.equinox.p2.ui.sdk) into the
+        // additions group below.
+        helpMenu.add(eu.kalafatic.tryst.application.help.TrystHelpMenuSupport.createInstallNewSoftwareItem(window));
+        helpMenu.add(eu.kalafatic.tryst.application.help.TrystHelpMenuSupport.createManageSoftwareSitesAction(window));
+        helpMenu.add(new Separator());
+        helpMenu.add(eu.kalafatic.tryst.application.help.TrystHelpMenuSupport.createAboutInstallationAction(window));
         helpMenu.add(new GroupMarker(IWorkbenchActionConstants.MB_ADDITIONS));
         menuBar.add(helpMenu);
     }

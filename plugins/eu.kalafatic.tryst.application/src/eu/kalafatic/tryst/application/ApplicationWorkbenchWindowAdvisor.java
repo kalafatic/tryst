@@ -1,6 +1,7 @@
 package eu.kalafatic.tryst.application;
 
 import eu.kalafatic.tryst.application.lifecycle.ApplicationLifecycleCoordinator;
+import eu.kalafatic.tryst.core.lifecycle.ApplicationLifecycleStage;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.ui.application.ActionBarAdvisor;
 import org.eclipse.ui.application.IActionBarConfigurer;
@@ -37,5 +38,15 @@ public class ApplicationWorkbenchWindowAdvisor extends WorkbenchWindowAdvisor {
         configurer.setShowProgressIndicator(true);
         configurer.setShowPerspectiveBar(true);
         configurer.setTitle("TRYST – AI Development Environment");
+    }
+
+    @Override
+    public void postWindowCreate() {
+        // The first workbench window is being created: report the final startup milestone
+        // to the splash screen before the workbench is declared running.
+        if (coordinator != null
+                && coordinator.getCurrentStage().ordinal() < ApplicationLifecycleStage.WORKBENCH_RUNNING.ordinal()) {
+            coordinator.notifyStartupProgress("Initializing workbench...");
+        }
     }
 }

@@ -107,6 +107,56 @@ public class AiModelRegistryService implements ModelRegistry {
         return List.copyOf(providers.values());
     }
 
+    public Optional<AiProviderInfo> findProvider(String providerId) {
+        if (providerId == null || providerId.isBlank()) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(providers.get(providerId));
+    }
+
+    public ProviderHealth getProviderHealth(String providerId) {
+        return findProvider(providerId).map(AiProviderInfo::health).orElse(ProviderHealth.UNKNOWN);
+    }
+
+    /**
+     * Removes a single published model from the catalog and notifies listeners.
+     */
+    public void removeModel(String modelId) {
+        if (modelId == null) {
+            return;
+        }
+        if (models.remove(modelId) != null) {
+            notifyListeners();
+        }
+    }
+
+    /**
+     * Removes every published model that belongs to the given provider.
+     */
+    public void removeModelsForProvider(String providerId) {
+        if (providerId == null) {
+            return;
+        }
+        boolean removed = models.values().removeIf(m -> providerId.equals(m.providerId()));
+        if (removed) {
+            notifyListeners();
+        }
+    }
+
+    /**
+     * Removes a provider and all of its published models from the catalog.
+     */
+    public void removeProvider(String providerId) {
+        if (providerId == null) {
+            return;
+        }
+        providers.remove(providerId);
+        boolean removed = models.values().removeIf(m -> providerId.equals(m.providerId()));
+        if (removed) {
+            notifyListeners();
+        }
+    }
+
     public String getDefaultModel() {
         return defaultModelId;
     }
@@ -137,8 +187,10 @@ public class AiModelRegistryService implements ModelRegistry {
 
             updateProviderHealth(providerId, ProviderHealth.ONLINE);
             return provider.listAvailableModels().thenAccept(metas -> {
+                Set<String> liveIds = new HashSet<>();
                 for (AIProvider.ProviderModelMetadata meta : metas) {
                     String id = providerId + ":" + meta.name();
+                    liveIds.add(id);
                     PublishedModel pm = new PublishedModel(
                             id,
                             providerId,
@@ -152,6 +204,13 @@ public class AiModelRegistryService implements ModelRegistry {
                     );
                     models.put(id, pm);
                 }
+                models.values().stream()
+                        .filter(m -> providerId.equals(m.providerId()) && !liveIds.contains(m.id())
+                                && m.available())
+                        .forEach(m -> models.put(m.id(), new PublishedModel(
+                                m.id(), m.providerId(), m.modelIdentifier(), m.displayName(),
+                                m.contextLimit(), false, m.published(), m.minRole(), Instant.now()
+                        )));
                 notifyListeners();
             }).exceptionally(t -> {
                 TrystLog.warn(AiModelRegistryService.class, "Failed listing models from " + providerId + ": " + t.getMessage());

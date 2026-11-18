@@ -74,6 +74,10 @@ public class TrystHttpServer implements TrystHttpService {
     private SqliteBackupService backupService;
     private AgentRepository agentRepository;
     private eu.kalafatic.tryst.domain.ai.AiModelRegistryService aiModelRegistryService;
+    private eu.kalafatic.tryst.domain.ai.AiProviderRegistry aiProviderRegistry;
+    private eu.kalafatic.tryst.domain.harness.ConnectedApplicationRegistry connectedApplicationRegistry;
+    private eu.kalafatic.tryst.domain.ai.ExecutionConfigurationService executionConfigurationService;
+    private AiServiceController aiServiceController;
     private TaskOrchestrator taskOrchestrator;
     private eu.kalafatic.tryst.domain.github.GitHubService gitHubService;
     private eu.kalafatic.tryst.domain.github.GitHubCredentialRepository gitHubCredentialRepository;
@@ -178,6 +182,22 @@ public class TrystHttpServer implements TrystHttpService {
 
     public void setAiModelRegistryService(eu.kalafatic.tryst.domain.ai.AiModelRegistryService aiModelRegistryService) {
         this.aiModelRegistryService = aiModelRegistryService;
+    }
+
+    /**
+     * Wires the AI environment management surface: provider/harness registries, the
+     * execution configuration service (sessions) and the AI service lifecycle
+     * controller. All optional; endpoints degrade gracefully when not wired.
+     */
+    public void setAiManagementServices(
+            eu.kalafatic.tryst.domain.ai.AiProviderRegistry aiProviderRegistry,
+            eu.kalafatic.tryst.domain.harness.ConnectedApplicationRegistry connectedApplicationRegistry,
+            eu.kalafatic.tryst.domain.ai.ExecutionConfigurationService executionConfigurationService,
+            AiServiceController aiServiceController) {
+        this.aiProviderRegistry = aiProviderRegistry;
+        this.connectedApplicationRegistry = connectedApplicationRegistry;
+        this.executionConfigurationService = executionConfigurationService;
+        this.aiServiceController = aiServiceController;
     }
 
     public void setTaskOrchestrator(TaskOrchestrator taskOrchestrator) {
@@ -3150,16 +3170,13 @@ public class TrystHttpServer implements TrystHttpService {
 
             // 9. AI Infrastructure: /api/admin/ai
             if (sub.startsWith("ai")) {
-                AiMonitoringService.AiHealthStatus ai = aiMonitoringService != null ? aiMonitoringService.checkHealth() : null;
-                String json = String.format("{\"available\": %b, \"endpoint\": \"%s\", \"model\": \"%s\", \"totalRequests\": %d, \"successCount\": %d, \"failCount\": %d, \"avgLatencyMs\": %f}",
-                        ai != null && ai.endpointAvailable(),
-                        ai != null ? ai.endpoint() : "",
-                        ai != null ? ai.activeModel() : "",
-                        ai != null ? ai.totalRequests() : 0,
-                        ai != null ? ai.successfulRequests() : 0,
-                        ai != null ? ai.failedRequests() : 0,
-                        ai != null ? ai.averageLatencyMs() : 0.0);
-                sendJsonResponse(exchange, 200, json);
+                handleAdminAi(exchange, sub, userId);
+                return;
+            }
+
+            // 9b. Connected harness administration: /api/admin/harnesses
+            if (sub.startsWith("harnesses")) {
+                handleAdminHarnesses(exchange, sub, userId);
                 return;
             }
 
@@ -3186,6 +3203,523 @@ public class TrystHttpServer implements TrystHttpService {
 
             sendJsonResponse(exchange, 404, "{\"error\": \"Admin endpoint not found\"}");
             }
+        }
+
+        // ------------------------------------------------------------------
+        // AI environment management: providers, models, LLM lifecycle, sessions
+        // ------------------------------------------------------------------
+
+        private void handleAdminAi(HttpExchange exchange, String sub, String userId) throws IOException {
+            boolean isPost = "POST".equalsIgnoreCase(exchange.getRequestMethod());
+            String body = isPost ? new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8) : "";
+
+            // 1. AI overview: /api/admin/ai
+            if (sub.equals("ai")) {
+                AiMonitoringService.AiHealthStatus ai = aiMonitoringService != null
+                        ? aiMonitoringService.checkHealth() : null;
+                boolean aiRunning = aiServiceController != null && aiServiceController.isAiServiceRunning();
+                StringBuilder sb = new StringBuilder();
+                sb.append("{\"aiServiceRunning\": ").append(aiRunning);
+                sb.append(String.format(", \"available\": %b, \"endpoint\": \"%s\", \"model\": \"%s\", \"totalRequests\": %d, \"successCount\": %d, \"failCount\": %d, \"avgLatencyMs\": %f",
+                        ai != null && ai.endpointAvailable(),
+                        ai != null ? ai.endpoint() : "",
+                        ai != null ? ai.activeModel() : "",
+                        ai != null ? ai.totalRequests() : 0,
+                        ai != null ? ai.successfulRequests() : 0,
+                        ai != null ? ai.failedRequests() : 0,
+                        ai != null ? ai.averageLatencyMs() : 0.0));
+                sb.append(", \"providers\": ").append(providersJson());
+                sb.append(", \"models\": ").append(modelsJson());
+                sb.append(", \"sessions\": ").append(sessionsJson());
+                sb.append("}");
+                sendJsonResponse(exchange, 200, sb.toString());
+                return;
+            }
+
+            // 2. Provider list: /api/admin/ai/providers
+            if (sub.equals("ai/providers")) {
+                sendJsonResponse(exchange, 200, "{\"providers\": " + providersJson() + "}");
+                return;
+            }
+
+            // 3. Model list: /api/admin/ai/models
+            if (sub.equals("ai/models")) {
+                sendJsonResponse(exchange, 200, "{\"models\": " + modelsJson() + "}");
+                return;
+            }
+
+            // 4. Scan (discover models): /api/admin/ai/scan
+            if (sub.equals("ai/scan") && isPost) {
+                String providerId = extractJsonField(body, "providerId");
+                String result = scanProviders(providerId);
+                permissionManager.recordAudit(userId, "AI_MODEL_SCAN", "ai", providerId != null ? providerId : "all",
+                        null, null, "SUCCESS", "Model scan requested");
+                sendJsonResponse(exchange, 200, result);
+                return;
+            }
+
+            // 5. Provider actions: /api/admin/ai/providers/action
+            if (sub.equals("ai/providers/action") && isPost) {
+                String providerId = extractJsonField(body, "providerId");
+                String action = extractJsonField(body, "action");
+                if (providerId == null || providerId.isBlank()) {
+                    sendJsonResponse(exchange, 400, "{\"error\": \"providerId is required\"}");
+                    return;
+                }
+                String result;
+                switch (action == null ? "" : action.toLowerCase()) {
+                    case "remove" -> {
+                        if (aiProviderRegistry == null) {
+                            result = "{\"success\": false, \"error\": \"AI provider registry unavailable\"}";
+                        } else {
+                            try {
+                                aiProviderRegistry.unregisterProvider(providerId);
+                                result = "{\"success\": true, \"message\": \"Provider removed\"}";
+                            } catch (Exception e) {
+                                result = "{\"success\": false, \"error\": \"" + escapeJson(e.getMessage()) + "\"}";
+                            }
+                        }
+                    }
+                    case "scan" -> result = scanProviders(providerId);
+                    case "enable" -> result = setProviderEnabled(providerId, true);
+                    case "disable" -> result = setProviderEnabled(providerId, false);
+                    case "default" -> result = setProviderDefault(providerId);
+                    default -> result = "{\"success\": false, \"error\": \"Unknown action: " + escapeJson(action == null ? "" : action) + "\"}";
+                }
+                permissionManager.recordAudit(userId, "AI_PROVIDER_" + (action == null ? "ACTION" : action.toUpperCase()),
+                        "ai-provider", providerId, null, null, result.contains("\"success\": true") ? "SUCCESS" : "FAILED",
+                        "Action: " + action);
+                sendJsonResponse(exchange, 200, result);
+                return;
+            }
+
+            // 6. Model actions: /api/admin/ai/models/action
+            if (sub.equals("ai/models/action") && isPost) {
+                String modelId = extractJsonField(body, "modelId");
+                String providerId = extractJsonField(body, "providerId");
+                String modelName = extractJsonField(body, "model");
+                String action = extractJsonField(body, "action");
+                if (modelId == null || modelId.isBlank()) {
+                    sendJsonResponse(exchange, 400, "{\"error\": \"modelId is required\"}");
+                    return;
+                }
+                String result;
+                switch (action == null ? "" : action.toLowerCase()) {
+                    case "remove" -> {
+                        if (aiModelRegistryService == null) {
+                            result = "{\"success\": false, \"error\": \"AI model registry unavailable\"}";
+                        } else {
+                            aiModelRegistryService.removeModel(modelId);
+                            result = "{\"success\": true, \"message\": \"Model removed from catalog\"}";
+                        }
+                    }
+                    case "delete" -> result = deleteModelFromProvider(modelId, providerId, modelName);
+                    default -> result = "{\"success\": false, \"error\": \"Unknown action: " + escapeJson(action == null ? "" : action) + "\"}";
+                }
+                permissionManager.recordAudit(userId, "AI_MODEL_" + (action == null ? "ACTION" : action.toUpperCase()),
+                        "ai-model", modelId, null, null, result.contains("\"success\": true") ? "SUCCESS" : "FAILED",
+                        "Action: " + action);
+                sendJsonResponse(exchange, 200, result);
+                return;
+            }
+
+            // 7. LLM lifecycle actions: /api/admin/ai/llm/action
+            if (sub.equals("ai/llm/action") && isPost) {
+                String action = extractJsonField(body, "action");
+                String providerId = extractJsonField(body, "providerId");
+                String model = extractJsonField(body, "model");
+                String result;
+                switch (action == null ? "" : action.toLowerCase()) {
+                    case "start" -> {
+                        if (aiServiceController == null) {
+                            result = "{\"success\": false, \"error\": \"AI service controller unavailable\"}";
+                        } else {
+                            aiServiceController.startAiService();
+                            result = "{\"success\": true, \"running\": true}";
+                        }
+                    }
+                    case "stop" -> {
+                        if (aiServiceController == null) {
+                            result = "{\"success\": false, \"error\": \"AI service controller unavailable\"}";
+                        } else {
+                            aiServiceController.stopAiService();
+                            result = "{\"success\": true, \"running\": false}";
+                        }
+                    }
+                    case "load" -> result = llmModelOperation(providerId, model, "load");
+                    case "unload" -> result = llmModelOperation(providerId, model, "unload");
+                    case "remove" -> result = llmModelOperation(providerId, model, "delete");
+                    case "show" -> result = llmModelShow(providerId, model);
+                    default -> result = "{\"success\": false, \"error\": \"Unknown action: " + escapeJson(action == null ? "" : action) + "\"}";
+                }
+                permissionManager.recordAudit(userId, "AI_LLM_" + (action == null ? "ACTION" : action.toUpperCase()),
+                        "ai-llm", model != null ? model : providerId, null, null,
+                        result.contains("\"success\": true") ? "SUCCESS" : "FAILED", "Action: " + action);
+                sendJsonResponse(exchange, 200, result);
+                return;
+            }
+
+            // 8. Environment sessions: /api/admin/ai/sessions + /action
+            if (sub.equals("ai/sessions")) {
+                sendJsonResponse(exchange, 200, "{\"sessions\": " + sessionsJson() + "}");
+                return;
+            }
+            if (sub.equals("ai/sessions/action") && isPost) {
+                String action = extractJsonField(body, "action");
+                String name = extractJsonField(body, "name");
+                if (executionConfigurationService == null) {
+                    sendJsonResponse(exchange, 503, "{\"error\": \"Execution configuration service unavailable\"}");
+                    return;
+                }
+                if (name == null || name.isBlank()) {
+                    sendJsonResponse(exchange, 400, "{\"error\": \"name is required\"}");
+                    return;
+                }
+                String result;
+                switch (action == null ? "" : action.toLowerCase()) {
+                    case "save" -> {
+                        eu.kalafatic.tryst.domain.ai.ExecutionConfiguration config =
+                                new eu.kalafatic.tryst.domain.ai.ExecutionConfiguration(
+                                        blankToEmpty(extractJsonField(body, "harnessId")),
+                                        blankToEmpty(extractJsonField(body, "providerId")),
+                                        blankToEmpty(extractJsonField(body, "modelId")),
+                                        blankToEmpty(extractJsonField(body, "agentProfileId")),
+                                        java.util.Map.of(), java.util.List.of(), java.util.Map.of(), java.util.Map.of(),
+                                        eu.kalafatic.tryst.domain.ai.ExecutionConfiguration.SOURCE_SESSION);
+                        try {
+                            executionConfigurationService.saveSession(name, config);
+                            result = "{\"success\": true, \"message\": \"Session saved\"}";
+                        } catch (Exception e) {
+                            result = "{\"success\": false, \"error\": \"" + escapeJson(e.getMessage()) + "\"}";
+                        }
+                    }
+                    case "load" -> {
+                        var session = executionConfigurationService.loadSession(name);
+                        if (session.isPresent()) {
+                            eu.kalafatic.tryst.domain.ai.ExecutionConfiguration c = session.get();
+                            result = String.format(
+                                    "{\"success\": true, \"name\": \"%s\", \"harnessId\": \"%s\", \"providerId\": \"%s\", \"modelId\": \"%s\", \"agentProfileId\": \"%s\"}",
+                                    escapeJson(name), escapeJson(c.harnessId()), escapeJson(c.providerId()),
+                                    escapeJson(c.modelId()), escapeJson(c.agentProfileId()));
+                        } else {
+                            result = "{\"success\": false, \"error\": \"Session not found\"}";
+                        }
+                    }
+                    case "remove" -> {
+                        executionConfigurationService.removeSession(name);
+                        result = "{\"success\": true, \"message\": \"Session removed\"}";
+                    }
+                    case "savecurrent" -> {
+                        eu.kalafatic.tryst.domain.ai.ExecutionConfiguration global =
+                                executionConfigurationService.getGlobal()
+                                        .orElseGet(() -> eu.kalafatic.tryst.domain.ai.ExecutionConfiguration
+                                                .empty(eu.kalafatic.tryst.domain.ai.ExecutionConfiguration.SOURCE_GLOBAL));
+                        try {
+                            executionConfigurationService.saveSession(name, global);
+                            result = "{\"success\": true, \"message\": \"Current global environment saved as session\"}";
+                        } catch (Exception e) {
+                            result = "{\"success\": false, \"error\": \"" + escapeJson(e.getMessage()) + "\"}";
+                        }
+                    }
+                    case "apply" -> {
+                        var session = executionConfigurationService.loadSession(name);
+                        if (session.isPresent()) {
+                            try {
+                                executionConfigurationService.saveGlobal(session.get());
+                                result = "{\"success\": true, \"message\": \"Session applied as global environment\"}";
+                            } catch (Exception e) {
+                                result = "{\"success\": false, \"error\": \"" + escapeJson(e.getMessage()) + "\"}";
+                            }
+                        } else {
+                            result = "{\"success\": false, \"error\": \"Session not found\"}";
+                        }
+                    }
+                    default -> result = "{\"success\": false, \"error\": \"Unknown action: " + escapeJson(action == null ? "" : action) + "\"}";
+                }
+                permissionManager.recordAudit(userId, "AI_SESSION_" + (action == null ? "ACTION" : action.toUpperCase()),
+                        "ai-session", name, null, null, result.contains("\"success\": true") ? "SUCCESS" : "FAILED",
+                        "Action: " + action);
+                sendJsonResponse(exchange, 200, result);
+                return;
+            }
+
+            sendJsonResponse(exchange, 404, "{\"error\": \"AI admin endpoint not found\"}");
+        }
+
+        private String providersJson() {
+            StringBuilder sb = new StringBuilder("[");
+            boolean first = true;
+            if (aiModelRegistryService != null) {
+                for (eu.kalafatic.tryst.domain.ai.AiModelRegistryService.AiProviderInfo p
+                        : aiModelRegistryService.getAllProviders()) {
+                    if (!first) sb.append(",");
+                    first = false;
+                    long modelCount = aiModelRegistryService.getAllModels().stream()
+                            .filter(m -> p.id().equals(m.providerId())).count();
+                    sb.append(String.format(
+                            "{\"id\": \"%s\", \"name\": \"%s\", \"type\": \"%s\", \"endpoint\": \"%s\", \"enabled\": %b, \"health\": \"%s\", \"modelCount\": %d}",
+                            escapeJson(p.id()), escapeJson(p.name()), escapeJson(p.providerType()),
+                            escapeJson(p.endpoint()), p.enabled(), p.health().name(), modelCount));
+                }
+            }
+            sb.append("]");
+            return sb.toString();
+        }
+
+        private String modelsJson() {
+            StringBuilder sb = new StringBuilder("[");
+            boolean first = true;
+            if (aiModelRegistryService != null) {
+                for (eu.kalafatic.tryst.domain.ai.AiModelRegistryService.PublishedModel m
+                        : aiModelRegistryService.getAllModels()) {
+                    if (!first) sb.append(",");
+                    first = false;
+                    sb.append(String.format(
+                            "{\"id\": \"%s\", \"providerId\": \"%s\", \"model\": \"%s\", \"displayName\": \"%s\", \"available\": %b, \"published\": %b, \"contextLimit\": %d}",
+                            escapeJson(m.id()), escapeJson(m.providerId()), escapeJson(m.modelIdentifier()),
+                            escapeJson(m.displayName()), m.available(), m.published(), m.contextLimit()));
+                }
+            }
+            sb.append("]");
+            return sb.toString();
+        }
+
+        private String sessionsJson() {
+            StringBuilder sb = new StringBuilder("[");
+            boolean first = true;
+            if (executionConfigurationService != null) {
+                for (eu.kalafatic.tryst.domain.ai.ExecutionConfigurationService.EnvironmentSession s
+                        : executionConfigurationService.listSessions()) {
+                    if (!first) sb.append(",");
+                    first = false;
+                    eu.kalafatic.tryst.domain.ai.ExecutionConfiguration c = s.configuration();
+                    sb.append(String.format(
+                            "{\"name\": \"%s\", \"harnessId\": \"%s\", \"providerId\": \"%s\", \"modelId\": \"%s\", \"agentProfileId\": \"%s\"}",
+                            escapeJson(s.name()), escapeJson(c.harnessId()), escapeJson(c.providerId()),
+                            escapeJson(c.modelId()), escapeJson(c.agentProfileId())));
+                }
+            }
+            sb.append("]");
+            return sb.toString();
+        }
+
+        private String scanProviders(String providerId) {
+            if (aiProviderRegistry == null) {
+                return "{\"success\": false, \"error\": \"AI provider registry unavailable\"}";
+            }
+            List<String> scanned = new ArrayList<>();
+            if (providerId == null || providerId.isBlank()) {
+                for (eu.kalafatic.tryst.domain.ai.AiProviderDescriptor d : aiProviderRegistry.listProviders()) {
+                    try {
+                        aiProviderRegistry.discoverModels(d.id()).get(30, java.util.concurrent.TimeUnit.SECONDS);
+                        scanned.add(d.id());
+                    } catch (Exception e) {
+                        TrystLog.warn(TrystHttpServer.class, "Model scan failed for " + d.id() + ": " + e.getMessage());
+                    }
+                }
+            } else {
+                try {
+                    aiProviderRegistry.discoverModels(providerId).get(30, java.util.concurrent.TimeUnit.SECONDS);
+                    scanned.add(providerId);
+                } catch (Exception e) {
+                    return "{\"success\": false, \"error\": \"" + escapeJson(e.getMessage()) + "\"}";
+                }
+            }
+            StringBuilder sb = new StringBuilder("{\"success\": true, \"scanned\": [");
+            for (int i = 0; i < scanned.size(); i++) {
+                if (i > 0) sb.append(",");
+                sb.append("\"").append(escapeJson(scanned.get(i))).append("\"");
+            }
+            sb.append("]}");
+            return sb.toString();
+        }
+
+        private String setProviderEnabled(String providerId, boolean enabled) {
+            if (aiProviderRegistry == null) {
+                return "{\"success\": false, \"error\": \"AI provider registry unavailable\"}";
+            }
+            try {
+                aiProviderRegistry.setProviderEnabled(providerId, enabled);
+                return "{\"success\": true, \"enabled\": " + enabled + "}";
+            } catch (Exception e) {
+                return "{\"success\": false, \"error\": \"" + escapeJson(e.getMessage()) + "\"}";
+            }
+        }
+
+        private String setProviderDefault(String providerId) {
+            if (aiProviderRegistry == null) {
+                return "{\"success\": false, \"error\": \"AI provider registry unavailable\"}";
+            }
+            try {
+                aiProviderRegistry.selectDefaultProvider(providerId);
+                return "{\"success\": true}";
+            } catch (Exception e) {
+                return "{\"success\": false, \"error\": \"" + escapeJson(e.getMessage()) + "\"}";
+            }
+        }
+
+        private String llmModelOperation(String providerId, String model, String operation) {
+            if (model == null || model.isBlank()) {
+                return "{\"success\": false, \"error\": \"model is required\"}";
+            }
+            if (aiProviderRegistry == null) {
+                return "{\"success\": false, \"error\": \"AI provider registry unavailable\"}";
+            }
+            eu.kalafatic.tryst.domain.ai.AIProvider adapter = resolveAdapter(providerId);
+            if (adapter == null) {
+                return "{\"success\": false, \"error\": \"No provider adapter available\"}";
+            }
+            try {
+                java.util.concurrent.CompletableFuture<Boolean> futureOp = switch (operation) {
+                    case "load" -> adapter.loadModel(model);
+                    case "unload" -> adapter.unloadModel(model);
+                    case "delete" -> adapter.deleteModel(model);
+                    default -> java.util.concurrent.CompletableFuture.completedFuture(false);
+                };
+                Boolean ok = futureOp.get(60, java.util.concurrent.TimeUnit.SECONDS);
+                if (Boolean.TRUE.equals(ok)) {
+                    if ("delete".equals(operation) && aiModelRegistryService != null) {
+                        String adapterProvider = adapter.getProviderId();
+                        aiModelRegistryService.getAllModels().stream()
+                                .filter(m -> adapterProvider.equals(m.providerId())
+                                        && model.equals(m.modelIdentifier()))
+                                .map(eu.kalafatic.tryst.domain.ai.AiModelRegistryService.PublishedModel::id)
+                                .toList()
+                                .forEach(aiModelRegistryService::removeModel);
+                    }
+                    return "{\"success\": true, \"message\": \"Model " + operation + " completed\"}";
+                }
+                return "{\"success\": false, \"error\": \"Provider reported failure or does not support " + operation + "\"}";
+            } catch (Exception e) {
+                return "{\"success\": false, \"error\": \"" + escapeJson(e.getMessage()) + "\"}";
+            }
+        }
+
+        private String llmModelShow(String providerId, String model) {
+            if (model == null || model.isBlank()) {
+                return "{\"success\": false, \"error\": \"model is required\"}";
+            }
+            eu.kalafatic.tryst.domain.ai.AIProvider adapter = resolveAdapter(providerId);
+            if (adapter == null) {
+                return "{\"success\": false, \"error\": \"No provider adapter available\"}";
+            }
+            try {
+                java.util.Optional<String> details = adapter.showModel(model)
+                        .get(60, java.util.concurrent.TimeUnit.SECONDS);
+                return details.map(payload -> "{\"success\": true, \"payload\": \"" + escapeJson(payload) + "\"}")
+                        .orElse("{\"success\": false, \"error\": \"Model details not available\"}");
+            } catch (Exception e) {
+                return "{\"success\": false, \"error\": \"" + escapeJson(e.getMessage()) + "\"}";
+            }
+        }
+
+        private String deleteModelFromProvider(String modelId, String providerId, String modelName) {
+            String name = modelName;
+            if (name == null || name.isBlank()) {
+                name = modelId.contains(":") ? modelId.substring(modelId.indexOf(':') + 1) : modelId;
+            }
+            String result = llmModelOperation(providerId, name, "delete");
+            if (result.contains("\"success\": true") && aiModelRegistryService != null) {
+                aiModelRegistryService.removeModel(modelId);
+            }
+            return result;
+        }
+
+        private eu.kalafatic.tryst.domain.ai.AIProvider resolveAdapter(String providerId) {
+            if (aiProviderRegistry == null) {
+                return null;
+            }
+            if (providerId != null && !providerId.isBlank()) {
+                return aiProviderRegistry.findAdapter(providerId).orElse(null);
+            }
+            return aiProviderRegistry.getDefaultAdapter().orElse(null);
+        }
+
+        private static String blankToEmpty(String value) {
+            return value == null ? "" : value;
+        }
+
+        // ------------------------------------------------------------------
+        // Connected harness administration
+        // ------------------------------------------------------------------
+
+        private void handleAdminHarnesses(HttpExchange exchange, String sub, String userId) throws IOException {
+            boolean isPost = "POST".equalsIgnoreCase(exchange.getRequestMethod());
+            String body = isPost ? new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8) : "";
+
+            if (sub.equals("harnesses")) {
+                StringBuilder sb = new StringBuilder("{\"harnesses\": [");
+                if (connectedApplicationRegistry != null) {
+                    var apps = connectedApplicationRegistry.listApplications();
+                    String selected = connectedApplicationRegistry.getSelectedApplicationId().orElse("");
+                    for (int i = 0; i < apps.size(); i++) {
+                        var a = apps.get(i);
+                        if (i > 0) sb.append(",");
+                        sb.append(String.format(
+                                "{\"id\": \"%s\", \"name\": \"%s\", \"type\": \"%s\", \"enabled\": %b, \"status\": \"%s\", \"statusMessage\": \"%s\", \"selected\": %b}",
+                                escapeJson(a.getId()), escapeJson(a.getName()), escapeJson(a.getApplicationType()),
+                                a.isEnabled(), a.getStatus() == null ? "UNKNOWN" : a.getStatus().name(),
+                                escapeJson(a.getStatusMessage() == null ? "" : a.getStatusMessage()),
+                                a.getId().equals(selected)));
+                    }
+                }
+                sb.append("]}");
+                sendJsonResponse(exchange, 200, sb.toString());
+                return;
+            }
+
+            if (sub.equals("harnesses/action") && isPost) {
+                String applicationId = extractJsonField(body, "applicationId");
+                String action = extractJsonField(body, "action");
+                if (applicationId == null || applicationId.isBlank()) {
+                    sendJsonResponse(exchange, 400, "{\"error\": \"applicationId is required\"}");
+                    return;
+                }
+                if (connectedApplicationRegistry == null) {
+                    sendJsonResponse(exchange, 503, "{\"error\": \"Connected application registry unavailable\"}");
+                    return;
+                }
+                String result;
+                switch (action == null ? "" : action.toLowerCase()) {
+                    case "test", "scan" -> {
+                        try {
+                            var test = connectedApplicationRegistry.testConnection(applicationId);
+                            result = String.format("{\"success\": %b, \"message\": \"%s\"}",
+                                    test.success(), escapeJson(test.message()));
+                        } catch (Exception e) {
+                            result = "{\"success\": false, \"error\": \"" + escapeJson(e.getMessage()) + "\"}";
+                        }
+                    }
+                    case "remove" -> {
+                        try {
+                            connectedApplicationRegistry.unregisterApplication(applicationId);
+                            result = "{\"success\": true, \"message\": \"Harness removed\"}";
+                        } catch (Exception e) {
+                            result = "{\"success\": false, \"error\": \"" + escapeJson(e.getMessage()) + "\"}";
+                        }
+                    }
+                    case "enable" -> {
+                        connectedApplicationRegistry.setApplicationEnabled(applicationId, true);
+                        result = "{\"success\": true, \"enabled\": true}";
+                    }
+                    case "disable" -> {
+                        connectedApplicationRegistry.setApplicationEnabled(applicationId, false);
+                        result = "{\"success\": true, \"enabled\": false}";
+                    }
+                    case "select" -> {
+                        connectedApplicationRegistry.selectApplication(applicationId);
+                        result = "{\"success\": true, \"message\": \"Harness selected\"}";
+                    }
+                    default -> result = "{\"success\": false, \"error\": \"Unknown action: " + escapeJson(action == null ? "" : action) + "\"}";
+                }
+                permissionManager.recordAudit(userId, "HARNESS_" + (action == null ? "ACTION" : action.toUpperCase()),
+                        "harness", applicationId, null, null, result.contains("\"success\": true") ? "SUCCESS" : "FAILED",
+                        "Action: " + action);
+                sendJsonResponse(exchange, 200, result);
+                return;
+            }
+
+            sendJsonResponse(exchange, 404, "{\"error\": \"Harness admin endpoint not found\"}");
         }
 
         private void handleAdminUsers(HttpExchange exchange, String sub) throws IOException {
@@ -4758,6 +5292,7 @@ public class TrystHttpServer implements TrystHttpService {
                                 <div class="list-item active" onclick="switchAdminSub('overview')">Server Overview</div>
                                 <div class="list-item" onclick="switchAdminSub('bundles')">OSGi Bundles</div>
                                 <div class="list-item" onclick="switchAdminSub('services')">Managed Services</div>
+                                <div class="list-item" onclick="switchAdminSub('ai')">AI Environments</div>
                                 <div class="list-item" onclick="switchAdminSub('workers')">Worker Utilization</div>
                                 <div class="list-item" onclick="switchAdminSub('tasks')">Task Supervision</div>
                                 <div class="list-item" onclick="switchAdminSub('workspaces')">Workspaces & Sandboxes</div>
@@ -5622,7 +6157,7 @@ public class TrystHttpServer implements TrystHttpService {
                                         qList.innerHTML = '<span style="color:var(--muted);">No tasks in queue.</span>';
                                     } else {
                                         qList.innerHTML = '<table><tr><th>ID</th><th>Title</th><th>Status</th><th>Priority</th><th>Action</th></tr>' +
-                                            tasks.map(t => `<tr><td>${t.id.substring(0,8)}</td><td><b>${escapeHtml(t.title)}</b></td><td><span class="badge badge-info">${t.status}</span></td><td>${t.priority}</td><td><button class="btn btn-sm btn-primary" style="margin-right:4px;" onclick="openTaskInStudio('${t.id}')">⚡ Studio</button><button class="btn btn-sm btn-danger" onclick="cancelAdminTask('${t.id}')">Cancel</button></td></tr>`).join('') + '</table>';
+                                            tasks.map(t => `<tr class="ctx-target" data-ctx-type="task" data-ctx-id="${t.id}" data-ctx-label="${escapeHtml(t.title)}" data-ctx-status="${t.status}"><td>${t.id.substring(0,8)}</td><td><b>${escapeHtml(t.title)}</b></td><td><span class="badge badge-info">${t.status}</span></td><td>${t.priority}</td><td><button class="btn btn-sm btn-primary" style="margin-right:4px;" onclick="openTaskInStudio('${t.id}')">⚡ Studio</button><button class="btn btn-sm btn-danger" onclick="cancelAdminTask('${t.id}')">Cancel</button></td></tr>`).join('') + '</table>';
                                     }
                                 }
 
@@ -6333,6 +6868,8 @@ public class TrystHttpServer implements TrystHttpService {
                                     const data = await res.json();
                                     container.innerHTML = '<table><tr><th>PID</th><th>Command</th><th>Working Dir</th><th>Status</th><th>Duration</th></tr>' +
                                         data.processes.map(p => `<tr><td>${p.pid}</td><td>${p.command}</td><td>${p.workingDir}</td><td>${p.status}</td><td>${p.durationMs}ms</td></tr>`).join('') + '</table>';
+                                } else if (sub === 'ai') {
+                                    loadAiAdminPanel(container);
                                 } else if (sub === 'github') {
                                     loadGitHubAccountStatus(container);
                                 }
@@ -6345,6 +6882,105 @@ public class TrystHttpServer implements TrystHttpService {
                             const res = await fetch(apiUrl('/api/admin/database/backup'), { method: 'POST' });
                             const d = await res.json();
                             alert(d.success ? 'Backup created at: ' + d.backupPath : 'Backup failed');
+                        }
+
+                        async function loadAiAdminPanel(container) {
+                            try {
+                                const res = await fetch(apiUrl('/api/admin/ai'), { headers: getAuthHeaders() });
+                                const data = await res.json();
+                                const healthBadge = h => h === 'ONLINE' ? 'badge-success' : (h === 'DEGRADED' ? 'badge-warning' : 'badge-error');
+                                const yesNoBadge = v => v ? 'badge-success' : 'badge-error';
+                                const harnessBadge = s => s === 'CONNECTED' ? 'badge-success' : (s === 'UNKNOWN' ? 'badge-warning' : 'badge-error');
+                                const provRows = (data.providers || []).map(p => `<tr><td><b>${p.name}</b><br><code>${p.id}</code></td><td>${p.type}</td><td><code>${p.endpoint}</code></td><td>${p.enabled ? 'yes' : 'no'}</td><td><span class="badge ${healthBadge(p.health)}">${p.health}</span></td><td>${p.modelCount}</td><td><button class="btn btn-sm btn-primary" onclick="aiProviderAction('${p.id}','scan')">Scan</button> <button class="btn btn-sm btn-default" onclick="aiProviderAction('${p.id}','${p.enabled ? 'disable' : 'enable'}')">${p.enabled ? 'Disable' : 'Enable'}</button> <button class="btn btn-sm btn-default" onclick="aiProviderAction('${p.id}','default')">Default</button> <button class="btn btn-sm btn-danger" onclick="aiProviderAction('${p.id}','remove')">Remove</button></td></tr>`).join('');
+                                const modelRows = (data.models || []).map(m => `<tr><td><b>${m.model}</b><br><code>${m.id}</code></td><td>${m.providerId}</td><td><span class="badge ${yesNoBadge(m.available)}">${m.available ? 'available' : 'offline'}</span></td><td><span class="badge ${m.published ? 'badge-success' : 'badge-warning'}">${m.published ? 'published' : 'hidden'}</span></td><td><button class="btn btn-sm btn-primary" onclick="aiModelAction('${m.id}','${m.providerId}','${m.model}','show')">Browse</button> <button class="btn btn-sm btn-default" onclick="aiModelAction('${m.id}','${m.providerId}','${m.model}','load')">Load</button> <button class="btn btn-sm btn-default" onclick="aiModelAction('${m.id}','${m.providerId}','${m.model}','unload')">Unload</button> <button class="btn btn-sm btn-warning" onclick="aiModelAction('${m.id}','${m.providerId}','${m.model}','remove')">Remove</button> <button class="btn btn-sm btn-danger" onclick="aiModelAction('${m.id}','${m.providerId}','${m.model}','delete')">Delete</button></td></tr>`).join('');
+                                const harnessRes = await fetch(apiUrl('/api/admin/harnesses'), { headers: getAuthHeaders() });
+                                const harnessData = await harnessRes.json();
+                                const harnessRows = (harnessData.harnesses || []).map(h => `<tr><td><b>${h.name}</b><br><code>${h.id}</code></td><td>${h.type}</td><td>${h.enabled ? 'yes' : 'no'}</td><td><span class="badge ${harnessBadge(h.status)}">${h.status}</span></td><td>${h.selected ? '<span class="badge badge-success">selected</span>' : ''}</td><td><button class="btn btn-sm btn-primary" onclick="harnessAction('${h.id}','scan')">Scan</button> <button class="btn btn-sm btn-default" onclick="harnessAction('${h.id}','${h.enabled ? 'disable' : 'enable'}')">${h.enabled ? 'Disable' : 'Enable'}</button> <button class="btn btn-sm btn-default" onclick="harnessAction('${h.id}','select')">Select</button> <button class="btn btn-sm btn-danger" onclick="harnessAction('${h.id}','remove')">Remove</button></td></tr>`).join('');
+                                const sessionRows = (data.sessions || []).map(s => `<tr><td>${s.name}</td><td>${s.harnessId || '-'}</td><td>${s.providerId || '-'}</td><td>${s.modelId || '-'}</td><td>${s.agentProfileId || '-'}</td><td><button class="btn btn-sm btn-primary" onclick="aiSessionAction('${s.name}','apply')">Load</button> <button class="btn btn-sm btn-danger" onclick="aiSessionAction('${s.name}','remove')">Remove</button></td></tr>`).join('');
+                                const aiRunning = data.aiServiceRunning;
+                                container.innerHTML = `
+                                    <div style="margin-bottom: 12px;">
+                                        <span class="badge ${aiRunning ? 'badge-success' : 'badge-error'}">AI SERVICE ${aiRunning ? 'RUNNING' : 'STOPPED'}</span>
+                                        <span class="badge ${data.available ? 'badge-success' : 'badge-warning'}">ENDPOINT ${data.available ? 'ONLINE' : 'OFFLINE'}</span>
+                                        <span class="badge badge-info">MODEL ${data.model || '-'}</span>
+                                        <span class="badge badge-info">REQUESTS ${data.totalRequests} (${data.successCount} ok / ${data.failCount} failed)</span>
+                                    </div>
+                                    <div style="margin-bottom: 14px;">
+                                        <button class="btn btn-sm btn-success" onclick="aiLlmAction('${aiRunning ? 'stop' : 'start'}')">${aiRunning ? 'Stop LLM Service' : 'Start LLM Service'}</button>
+                                        <button class="btn btn-sm btn-primary" onclick="aiScanAll()">Scan All Providers</button>
+                                    </div>
+                                    <div class="section-title">AI Providers</div>
+                                    <table><tr><th>Provider</th><th>Type</th><th>Endpoint</th><th>Enabled</th><th>Health</th><th>Models</th><th>Actions</th></tr>${provRows || '<tr><td colspan="7">No providers registered.</td></tr>'}</table>
+                                    <div class="section-title">Models</div>
+                                    <table><tr><th>Model</th><th>Provider</th><th>Available</th><th>Published</th><th>Actions</th></tr>${modelRows || '<tr><td colspan="5">No models discovered. Use Scan to refresh.</td></tr>'}</table>
+                                    <div class="section-title">Connected Harnesses</div>
+                                    <table><tr><th>Application</th><th>Type</th><th>Enabled</th><th>Status</th><th>Selection</th><th>Actions</th></tr>${harnessRows || '<tr><td colspan="6">No harnesses registered.</td></tr>'}</table>
+                                    <div class="section-title">Execution Environment Sessions</div>
+                                    <div style="margin-bottom: 8px;">
+                                        <input id="aiSessionName" type="text" placeholder="Session name" style="width: 220px; padding: 6px; border: 1px solid var(--border); border-radius: 4px;" />
+                                        <button class="btn btn-sm btn-primary" onclick="aiSessionAction(document.getElementById('aiSessionName').value, 'savecurrent')">Save Current</button>
+                                    </div>
+                                    <table><tr><th>Session</th><th>Harness</th><th>Provider</th><th>Model</th><th>Agent</th><th>Actions</th></tr>${sessionRows || '<tr><td colspan="6">No saved sessions.</td></tr>'}</table>`;
+                            } catch (e) {
+                                container.innerHTML = 'Error loading AI environments: ' + e;
+                            }
+                        }
+
+                        async function aiProviderAction(id, action) {
+                            if (action === 'remove' && !confirm('Remove provider ' + id + '?')) return;
+                            const res = await fetch(apiUrl('/api/admin/ai/providers/action'), { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ providerId: id, action }) });
+                            const d = await res.json();
+                            if (!d.success) alert('Provider action failed: ' + (d.error || 'unknown'));
+                            switchAdminSub('ai');
+                        }
+
+                        async function aiModelAction(id, providerId, model, action) {
+                            if (action === 'delete' && !confirm('Permanently delete model ' + model + ' from provider?')) return;
+                            if (action === 'remove' && !confirm('Remove model ' + model + ' from the catalog?')) return;
+                            let url = '/api/admin/ai/models/action';
+                            let payload = { modelId: id, providerId, model, action };
+                            if (action === 'load' || action === 'unload') {
+                                url = '/api/admin/ai/llm/action';
+                                payload = { action, providerId, model };
+                            }
+                            const res = await fetch(apiUrl(url), { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(payload) });
+                            const d = await res.json();
+                            if (action === 'show' && d.success) {
+                                alert('Model details: ' + d.payload);
+                                return;
+                            }
+                            if (!d.success) alert('Model action failed: ' + (d.error || 'unknown'));
+                            switchAdminSub('ai');
+                        }
+
+                        async function aiLlmAction(action) {
+                            const res = await fetch(apiUrl('/api/admin/ai/llm/action'), { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ action }) });
+                            const d = await res.json();
+                            if (!d.success) alert('LLM action failed: ' + (d.error || 'unknown'));
+                            switchAdminSub('ai');
+                        }
+
+                        async function aiScanAll() {
+                            const res = await fetch(apiUrl('/api/admin/ai/scan'), { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({}) });
+                            const d = await res.json();
+                            if (!d.success) alert('Scan failed: ' + (d.error || 'unknown'));
+                            switchAdminSub('ai');
+                        }
+
+                        async function harnessAction(id, action) {
+                            if (action === 'remove' && !confirm('Remove harness ' + id + '?')) return;
+                            const res = await fetch(apiUrl('/api/admin/harnesses/action'), { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ applicationId: id, action }) });
+                            const d = await res.json();
+                            if (!d.success) alert('Harness action failed: ' + (d.error || d.message || 'unknown'));
+                            switchAdminSub('ai');
+                        }
+
+                        async function aiSessionAction(name, action) {
+                            if (!name) { alert('Enter a session name first.'); return; }
+                            const res = await fetch(apiUrl('/api/admin/ai/sessions/action'), { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ name, action }) });
+                            const d = await res.json();
+                            if (!d.success) alert('Session action failed: ' + (d.error || 'unknown'));
+                            switchAdminSub('ai');
                         }
 
                         async function loadGitHubAccountStatus(container) {
@@ -7773,6 +8409,90 @@ public class TrystHttpServer implements TrystHttpService {
                                 console.warn('Notification stream connection failed:', e);
                             }
                         });
+                    </script>
+                    <style>
+                        .ctx-menu-tryst { position: fixed; z-index: 9999; min-width: 220px; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 6px 18px rgba(0,0,0,.45); padding: 4px 0; }
+                        .ctx-menu-tryst button { display: block; width: 100%; text-align: left; background: transparent; border: none; color: var(--text); padding: 6px 12px; font-size: 13px; cursor: pointer; }
+                        .ctx-menu-tryst button:hover:not(:disabled) { background: var(--panel2); }
+                        .ctx-menu-tryst button:disabled { color: var(--muted); cursor: not-allowed; }
+                        .ctx-menu-tryst .ctx-sep { height: 1px; margin: 4px 0; background: var(--border); }
+                        .ctx-menu-tryst .ctx-danger { color: #ff7b72; }
+                    </style>
+                    <div id="trystCtxMenu" class="ctx-menu-tryst" role="menu" style="display:none;"></div>
+                    <script>
+                        /* Unified contextual actions (Darwin Family contract v1.0) — same
+                           action ids/domain operations as the RCP navigator menus. */
+                        (function () {
+                            const menu = document.getElementById('trystCtxMenu');
+                            function closeMenu() { menu.style.display = 'none'; menu.innerHTML = ''; }
+                            async function openMenu(x, y, target) {
+                                closeMenu();
+                                const params = new URLSearchParams();
+                                params.set('type', target.dataset.ctxType || '');
+                                params.set('id', target.dataset.ctxId || '');
+                                params.set('label', target.dataset.ctxLabel || '');
+                                params.set('state.status', target.dataset.ctxStatus || '');
+                                try {
+                                    const res = await fetch(apiUrl('/api/contextual/actions?' + params.toString()), { headers: getAuthHeaders() });
+                                    if (!res.ok) { return; }
+                                    const body = await res.json();
+                                    const actions = body.actions || [];
+                                    if (!actions.length) { return; }
+                                    let currentGroup = null;
+                                    for (const action of actions) {
+                                        if (action.group !== currentGroup) {
+                                            if (currentGroup !== null) {
+                                                const sep = document.createElement('div');
+                                                sep.className = 'ctx-sep';
+                                                menu.appendChild(sep);
+                                            }
+                                            currentGroup = action.group;
+                                        }
+                                        const item = document.createElement('button');
+                                        item.type = 'button';
+                                        item.textContent = action.label;
+                                        item.disabled = !action.enabled;
+                                        item.className = action.dangerous ? 'ctx-danger' : '';
+                                        item.title = action.description + (action.enabled ? '' : ' — ' + (action.disabledReason || 'unavailable'));
+                                        if (action.enabled) {
+                                            item.addEventListener('click', async () => {
+                                                closeMenu();
+                                                if (action.confirmation === 'confirm' || action.confirmation === 'dangerous') {
+                                                    if (!confirm(action.label + ' on ' + (target.dataset.ctxLabel || target.dataset.ctxId) + '?')) { return; }
+                                                }
+                                                try {
+                                                    const exec = await fetch(apiUrl('/api/contextual/execute'), {
+                                                        method: 'POST',
+                                                        headers: Object.assign({ 'Content-Type': 'application/json' }, getAuthHeaders()),
+                                                        body: JSON.stringify({ actionId: action.actionId, objectType: target.dataset.ctxType, objectId: target.dataset.ctxId, objectLabel: target.dataset.ctxLabel, objectState: { status: target.dataset.ctxStatus || '' } })
+                                                    });
+                                                    const result = await exec.json();
+                                                    if (result.ok) {
+                                                        try { refreshQueueAndSchedules(); } catch (ignored) {}
+                                                    }
+                                                } catch (e) { /* server enforces; UI only refreshes */ }
+                                            });
+                                        }
+                                        menu.appendChild(item);
+                                    }
+                                    menu.style.display = 'block';
+                                    menu.style.left = Math.min(x, window.innerWidth - 240) + 'px';
+                                    menu.style.top = Math.min(y, window.innerHeight - menu.offsetHeight - 8) + 'px';
+                                } catch (e) { /* backend unavailable */ }
+                            }
+                            document.addEventListener('contextmenu', (event) => {
+                                const target = event.target.closest('.ctx-target[data-ctx-type]');
+                                if (!target) { closeMenu(); return; }
+                                event.preventDefault();
+                                openMenu(event.clientX, event.clientY, target);
+                            });
+                            document.addEventListener('click', (event) => {
+                                if (!menu.contains(event.target)) { closeMenu(); }
+                            });
+                            document.addEventListener('keydown', (event) => {
+                                if (event.key === 'Escape') { closeMenu(); }
+                            });
+                        })();
                     </script>
                 </body>
                 </html>

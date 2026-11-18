@@ -36,6 +36,18 @@
                value="TRYST – AI Development Environment">
          </property>
          <property
+               name="aboutImage"
+               value="about.png">
+         </property>
+         <property
+               name="aboutText"
+               value="Version: {0}&#x0A;Build id: {1}&#x0A;&#x0A;(c) Copyright 2026 eu.kalafatic&#x0A;All rights reserved.&#x0A;&#x0A;TRYST is an AI-assisted software development platform providing a Jules-like workflow: tasks, sessions, repositories, sandboxes and configurable coding agents with full diff review and approval.&#x0A;&#x0A;Java runtime: {2}&#x0A;Eclipse platform: {3}">
+         </property>
+         <property
+               name="windowImages"
+               value="tryst16.png,tryst32.png,tryst48.png,tryst64.png">
+         </property>
+         <property
                name="startupForegroundColor"
                value="94A3B8">
          </property>

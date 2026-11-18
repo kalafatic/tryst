@@ -3,6 +3,7 @@ package eu.kalafatic.tryst.domain.ai;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 
@@ -66,6 +67,21 @@ public interface AIProvider {
         return "http://localhost:11434";
     }
 
+    /**
+     * Applies a configuration update (endpoint, credentials, defaults). Compatible
+     * evolution of the provider contract: adapters that support runtime reconfiguration
+     * override this; all other implementations keep the no-op default.
+     */
+    default void updateConfiguration(Map<String, String> configuration) {
+    }
+
+    /**
+     * Returns the current connection configuration with sensitive values masked.
+     */
+    default Map<String, String> getConnectionConfiguration() {
+        return Map.of();
+    }
+
     CompletableFuture<Boolean> checkConnection();
 
     CompletableFuture<List<ProviderModelMetadata>> listAvailableModels();
@@ -73,4 +89,35 @@ public interface AIProvider {
     CompletableFuture<InferenceResponse> generateResponse(InferenceRequest request);
 
     CompletableFuture<Void> streamResponse(InferenceRequest request, Consumer<String> chunkConsumer);
+
+    /**
+     * Loads (pre-warms) a model into the inference backend's memory.
+     * Providers that support preloading override this; the default reports the
+     * operation as unsupported.
+     */
+    default CompletableFuture<Boolean> loadModel(String model) {
+        return CompletableFuture.completedFuture(false);
+    }
+
+    /**
+     * Unloads a model from the inference backend's memory (releases resources).
+     */
+    default CompletableFuture<Boolean> unloadModel(String model) {
+        return CompletableFuture.completedFuture(false);
+    }
+
+    /**
+     * Permanently removes a model from the inference backend's local storage.
+     */
+    default CompletableFuture<Boolean> deleteModel(String model) {
+        return CompletableFuture.completedFuture(false);
+    }
+
+    /**
+     * Returns backend-specific model details (for example the Ollama
+     * {@code /api/show} payload) or an empty optional when unsupported.
+     */
+    default CompletableFuture<Optional<String>> showModel(String model) {
+        return CompletableFuture.completedFuture(Optional.empty());
+    }
 }

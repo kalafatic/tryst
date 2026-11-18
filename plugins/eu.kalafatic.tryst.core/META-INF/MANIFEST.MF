@@ -2,7 +2,7 @@ Manifest-Version: 1.0
 Bundle-ManifestVersion: 2
 Bundle-Name: TRYST Core
 Bundle-SymbolicName: eu.kalafatic.tryst.core
-Bundle-Version: 0.1.0.qualifier
+Bundle-Version: 2.6.11.qualifier
 Bundle-RequiredExecutionEnvironment: JavaSE-21
 Require-Bundle: org.eclipse.osgi,
  org.eclipse.equinox.common,
@@ -12,6 +12,7 @@ Export-Package: eu.kalafatic.tryst.core,
  eu.kalafatic.tryst.core.config,
  eu.kalafatic.tryst.core.error,
  eu.kalafatic.tryst.core.event,
+ eu.kalafatic.tryst.core.json,
  eu.kalafatic.tryst.core.lifecycle,
  eu.kalafatic.tryst.core.log,
  eu.kalafatic.tryst.core.port,

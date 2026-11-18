@@ -92,7 +92,7 @@ public class ServerBootstrapAndNetworkingTest {
         SchemaMigrationService migrationService = new SchemaMigrationService(databaseManager);
         migrationService.migrate();
 
-        assertEquals(20, migrationService.getCurrentVersion(), "Database should be migrated to V20");
+        assertEquals(eu.kalafatic.tryst.infrastructure.persistence.SchemaMigrationService.LATEST_VERSION, migrationService.getCurrentVersion(), "Database should be migrated to Veu.kalafatic.tryst.infrastructure.persistence.SchemaMigrationService.LATEST_VERSION");
     }
 
     @Test

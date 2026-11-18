@@ -18,7 +18,7 @@ class DatabaseInitializationTest {
             dbManager.initialize();
             SchemaMigrationService migration = new SchemaMigrationService(dbManager);
             migration.migrate();
-            assertEquals(20, migration.getCurrentVersion());
+            assertEquals(eu.kalafatic.tryst.infrastructure.persistence.SchemaMigrationService.LATEST_VERSION, migration.getCurrentVersion());
         }
     }
 
@@ -31,7 +31,7 @@ class DatabaseInitializationTest {
             dbManager.initialize();
             SchemaMigrationService migration = new SchemaMigrationService(dbManager);
             migration.migrate();
-            assertEquals(20, migration.getCurrentVersion());
+            assertEquals(eu.kalafatic.tryst.infrastructure.persistence.SchemaMigrationService.LATEST_VERSION, migration.getCurrentVersion());
         }
 
         // Second startup - reopen same DB
@@ -39,7 +39,7 @@ class DatabaseInitializationTest {
             dbManager.initialize();
             SchemaMigrationService migration = new SchemaMigrationService(dbManager);
             migration.migrate(); // Should safely do nothing
-            assertEquals(20, migration.getCurrentVersion());
+            assertEquals(eu.kalafatic.tryst.infrastructure.persistence.SchemaMigrationService.LATEST_VERSION, migration.getCurrentVersion());
         }
     }
 }

@@ -107,7 +107,7 @@ class DatabaseAvailabilityAndPersistenceVerificationTest {
 
         // Verify schema_version is 14
         SchemaMigrationService migrationService = new SchemaMigrationService(dbManager);
-        assertEquals(20, migrationService.getCurrentVersion(), "Schema version must be 20");
+        assertEquals(eu.kalafatic.tryst.infrastructure.persistence.SchemaMigrationService.LATEST_VERSION, migrationService.getCurrentVersion(), "Schema version must be eu.kalafatic.tryst.infrastructure.persistence.SchemaMigrationService.LATEST_VERSION");
     }
 
     @Test
@@ -145,7 +145,7 @@ class DatabaseAvailabilityAndPersistenceVerificationTest {
             reopenedDb.initialize();
             SchemaMigrationService migration = new SchemaMigrationService(reopenedDb);
             migration.migrate();
-            assertEquals(20, migration.getCurrentVersion());
+            assertEquals(eu.kalafatic.tryst.infrastructure.persistence.SchemaMigrationService.LATEST_VERSION, migration.getCurrentVersion());
 
             SqliteProjectRepository projectRepo = new SqliteProjectRepository(reopenedDb);
             SqliteTaskRepository taskRepo = new SqliteTaskRepository(reopenedDb);

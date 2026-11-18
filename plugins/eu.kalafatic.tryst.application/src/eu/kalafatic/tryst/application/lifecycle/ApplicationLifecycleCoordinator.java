@@ -47,6 +47,7 @@ import eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteTaskReposi
 import eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteWorkspaceRepository;
 import eu.kalafatic.tryst.infrastructure.server.TrystHttpServer;
 import eu.kalafatic.tryst.core.server.TrystHttpService;
+import eu.kalafatic.tryst.domain.contextual.ContextualActionRegistry;
 import eu.kalafatic.tryst.core.server.TrystServerLifecycleService;
 import eu.kalafatic.tryst.infrastructure.server.TrystTcpServer;
 import eu.kalafatic.tryst.core.server.TrystTcpService;
@@ -66,7 +67,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * Deterministic lifecycle coordinator driving startup, configuration,
  * persistence, core/domain/AI services, OSGi registration, reconciliation, and clean shutdown.
  */
-public class ApplicationLifecycleCoordinator implements TrystServerLifecycleService {
+public class ApplicationLifecycleCoordinator implements TrystServerLifecycleService,
+        eu.kalafatic.tryst.infrastructure.server.AiServiceController {
 
     private final BundleContext bundleContext;
     private final List<ApplicationLifecycleListener> listeners = new CopyOnWriteArrayList<>();
@@ -107,6 +109,7 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
     private ServiceRegistration<AiInferenceService> aiInferenceServiceRegistration;
     private volatile boolean aiServiceRunning = false;
     private GitService gitService;
+    private volatile ContextualActionRegistry contextualActionRegistry;
     private BuildAndTestService buildAndTestService;
     private CodeReviewService codeReviewService;
     private SandboxProvider sandboxProvider;
@@ -116,6 +119,9 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
     private SessionTaskOrchestrator sessionTaskOrchestrator;
     private AutonomousDevelopmentService autonomousDevelopmentService;
     private eu.kalafatic.tryst.domain.ai.AiModelRegistryService aiModelRegistryService;
+    private eu.kalafatic.tryst.domain.ai.AiProviderRegistry aiProviderRegistry;
+    private eu.kalafatic.tryst.domain.ai.ExecutionConfigurationService
+            executionConfigurationService;
     private eu.kalafatic.tryst.domain.service.TaskLifecycleManager taskLifecycleManager;
     private eu.kalafatic.tryst.domain.service.TaskRecoveryService taskRecoveryService;
     private eu.kalafatic.tryst.domain.service.TaskQueue taskQueue;
@@ -178,6 +184,18 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
         notifyListeners(ApplicationLifecycleEvent.of(targetStage));
 
         executeStageActions(targetStage);
+    }
+
+    /**
+     * Publishes a sub-milestone progress notification for the current lifecycle stage without
+     * changing the stage itself. Consumers (e.g. the splash handler) use these notifications to
+     * display meaningful startup messages connected to real initialization activities.
+     */
+    public synchronized void notifyStartupProgress(String message) {
+        if (message == null || message.isBlank()) {
+            return;
+        }
+        notifyListeners(ApplicationLifecycleEvent.of(currentStage, message));
     }
 
     private void executeStageActions(ApplicationLifecycleStage stage) {
@@ -276,6 +294,7 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
         this.taskRecoveryService.reconcileInterruptedTasks();
 
         this.taskQueue = new eu.kalafatic.tryst.domain.service.TaskQueue(this.taskRepository, this.taskLifecycleManager);
+        notifyStartupProgress("Loading application modules...");
 
         // 5. Initialize Core domain & async services
         this.asyncExecutionService = new ManagedAsyncExecutionService();
@@ -317,9 +336,22 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
                 Duration.ofSeconds(configuration.requestTimeoutSeconds())
         );
         this.aiModelRegistryService = new eu.kalafatic.tryst.domain.ai.AiModelRegistryService(configuration.defaultModel());
-        this.aiModelRegistryService.registerProvider("ollama-default", "Default Ollama Endpoint", "OLLAMA", configuration.ollamaEndpoint(), true);
+        // Unified multi-provider dimension (Phase 9): one persisted provider lifecycle
+        // registry wrapping the shared model catalog. Providers registered here are the
+        // only source of provider descriptors, enablement and credentials.
+        this.aiProviderRegistry = new eu.kalafatic.tryst.domain.ai.DefaultAiProviderRegistry(
+                new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteAiProviderRepository(
+                        this.databaseManager,
+                        new eu.kalafatic.tryst.infrastructure.persistence.SecretCodec(
+                                configuration.configurationDirectory())),
+                this.aiModelRegistryService);
+        this.aiProviderRegistry.registerProvider("ollama-default", "Default Ollama Endpoint",
+                "OLLAMA", configuration.ollamaEndpoint(), true,
+                new eu.kalafatic.tryst.infrastructure.ai.OllamaProvider(
+                        "ollama-default", configuration.ollamaEndpoint(),
+                        Duration.ofSeconds(configuration.requestTimeoutSeconds())));
         try {
-            this.aiModelRegistryService.discoverModelsFromInferenceService("ollama-default", this.aiInferenceService).join();
+            this.aiProviderRegistry.discoverModels("ollama-default").join();
             if (serverReadinessService != null) {
                 serverReadinessService.markHealthy("AiProvider", java.util.Map.of("provider", "ollama-default"));
             }
@@ -335,12 +367,11 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
         try {
             eu.kalafatic.tryst.infrastructure.ai.EnrProvider enrProvider =
                     new eu.kalafatic.tryst.infrastructure.ai.EnrProvider();
-            this.aiModelRegistryService.registerProvider(
+            this.aiProviderRegistry.registerProvider(
                     eu.kalafatic.tryst.infrastructure.ai.EnrProvider.PROVIDER_ID,
-                    "ENR Neural Runtime", "ENR", enrProvider.getEndpoint(), true);
-            this.aiModelRegistryService.discoverModelsFromProvider(
-                    eu.kalafatic.tryst.infrastructure.ai.EnrProvider.PROVIDER_ID,
-                    enrProvider).join();
+                    "ENR Neural Runtime", "ENR", enrProvider.getEndpoint(), true, enrProvider);
+            this.aiProviderRegistry.discoverModels(
+                    eu.kalafatic.tryst.infrastructure.ai.EnrProvider.PROVIDER_ID).join();
             if (serverReadinessService != null) {
                 serverReadinessService.markHealthy("AiProvider", java.util.Map.of("provider", "enr-default"));
             }
@@ -350,6 +381,12 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
                 serverReadinessService.markDegraded("AiProvider", e.getMessage(), java.util.Map.of("provider", "enr-default"));
             }
         }
+        // Unified execution configuration (Phase 9): GLOBAL -> PROJECT -> TASK resolution
+        // with immutable per-task snapshots.
+        this.executionConfigurationService =
+                new eu.kalafatic.tryst.domain.ai.DefaultExecutionConfigurationService(
+                        new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteExecutionConfigurationRepository(
+                                this.databaseManager));
         this.gitService = new GitService();
         Path mirrorsDir = configuration.defaultWorkspaceDirectory().resolve("mirrors");
         this.repositoryPoolManager = new eu.kalafatic.tryst.infrastructure.vcs.RepositoryPoolManager(mirrorsDir, this.gitService);
@@ -483,7 +520,8 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
         eu.kalafatic.tryst.domain.repository.DStudioConfigurationRepository dstudioConfigRepo =
                 new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteDStudioConfigurationRepository(databaseManager);
         connectedApplicationRegistry.registerAdapter(
-                new eu.kalafatic.tryst.evo.integration.service.DStudioCodingHarnessAdapter(dstudioConfigRepo));
+                new eu.kalafatic.tryst.evo.integration.service.DStudioCodingHarnessAdapter(
+                        dstudioConfigRepo, executionConfigurationService));
         // Phase 6: DCode is the default family coding harness. Connection configuration is
         // persisted via the dedicated repository (migration V20); the DCode bearer token is
         // runtime-only and never persisted.
@@ -501,9 +539,12 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
         }
 
         // ExternalAiDelegator over the registry: TaskWorker's existing seam now routes the
-        // implementation step through the selected connected coding harness.
+        // implementation step through the selected connected coding harness. Task-level
+        // execution configuration (harness/provider/model/agent overrides) is honored
+        // through the unified execution-configuration service.
         this.taskOrchestrator.setExternalAiDelegator(
-                new eu.kalafatic.tryst.domain.harness.HarnessAiDelegator(connectedApplicationRegistry));
+                new eu.kalafatic.tryst.domain.harness.HarnessAiDelegator(
+                        connectedApplicationRegistry, executionConfigurationService));
         this.connectedApplicationRegistry = connectedApplicationRegistry;
 
         // Scoped MCP Server
@@ -546,6 +587,7 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
         }
 
         // 7. Resolve port allocations coherently using PortAllocationManager
+        notifyStartupProgress("Starting embedded services...");
         eu.kalafatic.tryst.core.port.PortRegistry portRegistry = this.configurationService.getPortRegistry();
         eu.kalafatic.tryst.core.port.PortAllocationManager portMgr = this.configurationService.getPortAllocationManager();
         eu.kalafatic.tryst.core.port.PortAllocationGroup resolvedGroup = null;
@@ -608,6 +650,8 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
                     configuration.portRangeEnd()
             );
             server.setAiModelRegistryService(this.aiModelRegistryService);
+            server.setAiManagementServices(this.aiProviderRegistry,
+                    this.connectedApplicationRegistry, this.executionConfigurationService, this);
             server.setTaskOrchestrator(this.taskOrchestrator);
             server.setGitHubService(this.gitHubService, this.gitHubCredentialRepository, this.gitHubCredentialEncryptionService);
             server.setGitCommitRepository(this.gitCommitRepository);
@@ -632,6 +676,12 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
 
             // Register TEIP EVO Integration, MCP and connected-application routes
             registerIntegrationHttpHandlers(server);
+
+            // Unified contextual actions (Darwin Family Contextual Action Contract
+            // v1.0): one registry, task/session/project/repository providers, web
+            // surface. RCP navigator menus and the web interface resolve and execute
+            // through this single authority.
+            registerContextualActions(server);
 
             this.httpService = server;
             this.httpService.start();
@@ -689,6 +739,9 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
                 this.aiServiceRunning = true;
             }
             registerService(eu.kalafatic.tryst.domain.ai.AiModelRegistryService.class, this.aiModelRegistryService);
+            registerService(eu.kalafatic.tryst.domain.ai.AiProviderRegistry.class, this.aiProviderRegistry);
+            registerService(eu.kalafatic.tryst.domain.ai.ExecutionConfigurationService.class,
+                    this.executionConfigurationService);
             registerService(GitService.class, this.gitService);
             registerService(BuildAndTestService.class, this.buildAndTestService);
             registerService(eu.kalafatic.tryst.domain.build.BuildAndQualityService.class, this.buildAndTestService);
@@ -1058,6 +1111,20 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
         return aiModelRegistryService;
     }
 
+    public eu.kalafatic.tryst.domain.ai.AiProviderRegistry getAiProviderRegistry() {
+        return aiProviderRegistry;
+    }
+
+    public eu.kalafatic.tryst.domain.harness.ConnectedApplicationRegistry
+            getConnectedApplicationRegistry() {
+        return connectedApplicationRegistry;
+    }
+
+    public eu.kalafatic.tryst.domain.ai.ExecutionConfigurationService
+            getExecutionConfigurationService() {
+        return executionConfigurationService;
+    }
+
     public eu.kalafatic.tryst.domain.github.GitHubService getGitHubService() {
         return gitHubService;
     }
@@ -1072,6 +1139,10 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
 
     public GitService getGitService() {
         return gitService;
+    }
+
+    public ContextualActionRegistry getContextualActionRegistry() {
+        return contextualActionRegistry;
     }
 
     public BuildAndTestService getBuildAndTestService() {
@@ -1269,6 +1340,8 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
                 configuration.portRangeEnd()
         );
         server.setAiModelRegistryService(this.aiModelRegistryService);
+        server.setAiManagementServices(this.aiProviderRegistry,
+                this.connectedApplicationRegistry, this.executionConfigurationService, this);
         server.setTaskOrchestrator(this.taskOrchestrator);
         server.setGitHubService(this.gitHubService, this.gitHubCredentialRepository, this.gitHubCredentialEncryptionService);
         server.setGitCommitRepository(this.gitCommitRepository);
@@ -1314,6 +1387,46 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
             server.registerHandler("/api/integration/applications",
                     new eu.kalafatic.tryst.application.http.ConnectedApplicationsHttpHandler(
                             connectedApplicationRegistry, this.authenticationService, this.permissionManager));
+        }
+    }
+
+    private void registerContextualActions(
+            eu.kalafatic.tryst.infrastructure.server.TrystHttpServer server) {
+        try {
+            eu.kalafatic.tryst.domain.contextual.ContextualActionRegistry registry =
+                    new eu.kalafatic.tryst.domain.contextual
+                            .DefaultContextualActionRegistry();
+            eu.kalafatic.tryst.domain.contextual.TrystContextualActions.install(registry,
+                    this.taskOrchestrator, this.taskRepository, this.sessionRepository,
+                    this.projectRepository);
+            if (this.gitService != null) {
+                eu.kalafatic.tryst.infrastructure.contextual.TrystRepositoryContextActions
+                        .install(registry, this.gitService);
+            }
+            this.contextualActionRegistry = registry;
+            if (server != null) {
+                server.registerHandler(
+                        eu.kalafatic.tryst.infrastructure.contextual.ContextualHttpHandler.PATH,
+                        new eu.kalafatic.tryst.infrastructure.contextual
+                                .ContextualHttpHandler(registry, exchange -> {
+                                    String header = exchange.getRequestHeaders()
+                                            .getFirst("Authorization");
+                                    String token = header != null
+                                            && header.startsWith("Bearer ")
+                                                    ? header.substring("Bearer ".length())
+                                                            .trim()
+                                                    : "";
+                                    return this.authenticationService == null
+                                            || token.isBlank()
+                                                    ? null
+                                                    : this.authenticationService
+                                                            .authenticateToken(token)
+                                                            .orElse(null);
+                                }));
+            }
+        } catch (Exception e) {
+            System.err.println("[TRYST] Contextual action framework registration failed: "
+                    + e.getMessage());
         }
     }
 

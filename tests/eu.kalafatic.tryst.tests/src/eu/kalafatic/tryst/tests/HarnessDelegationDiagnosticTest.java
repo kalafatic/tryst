@@ -37,9 +37,9 @@ class HarnessDelegationDiagnosticTest {
 
         Path root = Files.createTempDirectory("hdiag");
         Path repoSource = root.resolve("repo-src");
-        try (Stream<Path> walk = Files.walk(Path.of("/home/petr/git/DCoder-121126"))) {
+        try (Stream<Path> walk = Files.walk(Path.of("/home/petr/git/DCode-121126"))) {
             for (Path p : (Iterable<Path>) walk::iterator) {
-                Path dest = repoSource.resolve(Path.of("/home/petr/git/DCoder-121126").relativize(p).toString());
+                Path dest = repoSource.resolve(Path.of("/home/petr/git/DCode-121126").relativize(p).toString());
                 if (Files.isDirectory(p)) Files.createDirectories(dest);
                 else { Files.createDirectories(dest.getParent()); Files.copy(p, dest); }
             }

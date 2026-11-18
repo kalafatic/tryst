@@ -10,52 +10,84 @@ import org.eclipse.core.runtime.IProduct;
 import org.eclipse.core.runtime.Platform;
 import org.eclipse.jface.resource.StringConverter;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.events.PaintEvent;
+import org.eclipse.swt.events.PaintListener;
+import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.FontData;
 import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.graphics.Rectangle;
+import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
-import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.ui.branding.IProductConstants;
+import org.eclipse.ui.internal.StartupThreading.StartupRunnable;
 import org.eclipse.ui.splash.BasicSplashHandler;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.FrameworkUtil;
 import org.osgi.framework.Version;
 
 /**
- * Enhanced TRYST Splash Handler providing:
- * 1. Visible startup progress bar and dynamic stage updates linked to real lifecycle events.
- * 2. Application version dynamically retrieved from OSGi bundle metadata in the top-right corner.
+ * TRYST splash handler following the established Eclipse/EVO splash design principles:
+ * <ul>
+ *   <li>Version rendered dynamically from the product/plugin manifest in the upper-left corner
+ *       via a paint listener (no hardcoded version, transparent background).</li>
+ *   <li>Real startup progress connected to {@link ApplicationLifecycleCoordinator} milestones;
+ *       every update is driven by an actual lifecycle transition, never by an artificial timer.</li>
+ *   <li>Thread-safe updates: direct execution on the SWT UI thread, deferred execution (with a
+ *       {@link StartupRunnable}) from other threads, plus a forced repaint so progress is
+ *       visible even while the workbench initialization blocks the event loop.</li>
+ *   <li>The splash closes itself as soon as the workbench is running; on fatal startup errors
+ *       {@link #closeSplashIfVisible()} prevents a frozen splash window.</li>
+ * </ul>
  */
 public class TrystSplashHandler extends BasicSplashHandler implements ApplicationLifecycleListener {
 
-    private Label versionLabel;
-    private Font versionFont;
-    private IProgressMonitor monitor;
+    private static volatile TrystSplashHandler activeInstance;
+
     private ApplicationLifecycleCoordinator coordinator;
+    private IProgressMonitor monitor;
+    private Font versionFont;
+    private Color foregroundColor;
+    private int lastPercent = 0;
+    private boolean finished = false;
 
     @Override
     public void init(Shell splash) {
         super.init(splash);
+        activeInstance = this;
 
-        // Configure message & progress coordinates
-        String progressRectString = "40,240,420,14";
-        String messageRectString = "40,218,420,18";
-        String foregroundColorString = "94A3B8";
-
-        IProduct product = Platform.getProduct();
-        if (product != null) {
-            String pr = product.getProperty(IProductConstants.STARTUP_PROGRESS_RECT);
-            if (pr != null) progressRectString = pr;
-            String mr = product.getProperty(IProductConstants.STARTUP_MESSAGE_RECT);
-            if (mr != null) messageRectString = mr;
-            String fg = product.getProperty(IProductConstants.STARTUP_FOREGROUND_COLOR);
-            if (fg != null) foregroundColorString = fg;
+        configureRectsAndForeground();
+        renderVersionLabel();
+        monitor = getBundleProgressMonitor();
+        if (monitor != null) {
+            monitor.beginTask("Initializing TRYST...", 100);
         }
 
-        setProgressRect(StringConverter.asRectangle(progressRectString, new Rectangle(40, 240, 420, 14)));
-        setMessageRect(StringConverter.asRectangle(messageRectString, new Rectangle(40, 218, 420, 18)));
+        connectLifecycleCoordinator();
+    }
+
+    private void configureRectsAndForeground() {
+        IProduct product = Platform.getProduct();
+        Rectangle progressRect = new Rectangle(40, 240, 420, 15);
+        Rectangle messageRect = new Rectangle(40, 220, 420, 20);
+        String foregroundColorString = "94A3B8";
+        if (product != null) {
+            String pr = product.getProperty(IProductConstants.STARTUP_PROGRESS_RECT);
+            if (pr != null) {
+                progressRect = StringConverter.asRectangle(pr, progressRect);
+            }
+            String mr = product.getProperty(IProductConstants.STARTUP_MESSAGE_RECT);
+            if (mr != null) {
+                messageRect = StringConverter.asRectangle(mr, messageRect);
+            }
+            String fg = product.getProperty(IProductConstants.STARTUP_FOREGROUND_COLOR);
+            if (fg != null) {
+                foregroundColorString = fg;
+            }
+        }
+        setProgressRect(progressRect);
+        setMessageRect(messageRect);
 
         int fgInt;
         try {
@@ -63,61 +95,101 @@ public class TrystSplashHandler extends BasicSplashHandler implements Applicatio
         } catch (Exception ex) {
             fgInt = 0x94A3B8;
         }
-        setForeground(new RGB((fgInt >> 16) & 0xFF, (fgInt >> 8) & 0xFF, fgInt & 0xFF));
-
-        this.monitor = getBundleProgressMonitor();
-        if (monitor != null) {
-            monitor.beginTask("Initializing TRYST Platform...", 100);
-            monitor.worked(10);
-        }
-
-        // Render dynamic OSGi version in top-right corner
-        createVersionLabel(splash);
-
-        // Register to lifecycle coordinator for real progress updates
-        connectLifecycleCoordinator();
+        RGB rgb = new RGB((fgInt >> 16) & 0xFF, (fgInt >> 8) & 0xFF, fgInt & 0xFF);
+        setForeground(rgb);
+        foregroundColor = new Color(getSplash().getDisplay(), rgb);
     }
 
-    private void createVersionLabel(Shell splash) {
+    /**
+     * Resolves the TRYST application version dynamically, following the EVO resolution chain:
+     * product property, product defining bundle manifest, own bundle manifest, then fallback.
+     */
+    public static String resolveApplicationVersion() {
+        String version = null;
         try {
-            String versionStr = resolveBundleVersion();
-            versionLabel = new Label(getContent(), SWT.RIGHT);
-            versionLabel.setText("v" + versionStr);
-            versionLabel.setForeground(getForeground());
+            IProduct product = Platform.getProduct();
+            if (product != null) {
+                version = product.getProperty("version");
+                if (version == null || version.isBlank()) {
+                    Bundle defining = product.getDefiningBundle();
+                    if (defining != null) {
+                        version = defining.getHeaders().get("Bundle-Version");
+                        if (version == null || version.isBlank()) {
+                            Version v = defining.getVersion();
+                            if (v != null) {
+                                version = v.toString();
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+            // Platform lookups can fail in non-OSGi test environments
+        }
+        if (version == null || version.isBlank()) {
+            try {
+                Bundle bundle = FrameworkUtil.getBundle(TrystSplashHandler.class);
+                if (bundle != null) {
+                    version = bundle.getHeaders().get("Bundle-Version");
+                    if (version == null || version.isBlank()) {
+                        Version v = bundle.getVersion();
+                        if (v != null) {
+                            version = v.toString();
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {
+                // Framework lookups can fail outside OSGi
+            }
+        }
+        if (version == null || version.isBlank()) {
+            version = "2.6.11";
+        }
+        if (version.endsWith(".qualifier")) {
+            version = version.substring(0, version.length() - ".qualifier".length());
+        }
+        return version;
+    }
 
-            Display display = splash.getDisplay();
-            FontData[] fontData = splash.getFont().getFontData();
+    /**
+     * Draws "v X.Y.Z" in the upper-left corner of the splash content using a paint listener,
+     * which guarantees a transparent background over the splash artwork (EVO pattern).
+     */
+    private void renderVersionLabel() {
+        try {
+            Shell splash = getSplash();
+            if (splash == null || splash.isDisposed()) {
+                return;
+            }
+            final String version = resolveApplicationVersion();
+
+            final FontData[] fontData = splash.getFont().getFontData();
             for (FontData fd : fontData) {
                 fd.setHeight(8);
                 fd.setStyle(SWT.BOLD);
             }
-            versionFont = new Font(display, fontData);
-            versionLabel.setFont(versionFont);
+            versionFont = new Font(splash.getDisplay(), fontData);
+            final Font paintFont = versionFont;
 
-            // Position at top-right corner of splash
-            Rectangle splashBounds = splash.getBounds();
-            int width = 120;
-            int height = 18;
-            int x = Math.max(10, splashBounds.width - width - 15);
-            int y = 12;
-            versionLabel.setBounds(x, y, width, height);
+            Composite content = getContent();
+            if (content != null && !content.isDisposed()) {
+                content.addPaintListener(new PaintListener() {
+                    @Override
+                    public void paintControl(PaintEvent e) {
+                        Color fg = foregroundColor;
+                        if (fg == null || fg.isDisposed()) {
+                            fg = e.display.getSystemColor(SWT.COLOR_WIDGET_FOREGROUND);
+                        }
+                        e.gc.setForeground(fg);
+                        e.gc.setFont(paintFont);
+                        e.gc.drawText("v " + version, 14, 12, true);
+                    }
+                });
+                content.redraw();
+            }
         } catch (Throwable t) {
             TrystLog.warn(TrystSplashHandler.class, "Failed to render version label on splash: " + t.getMessage());
         }
-    }
-
-    private String resolveBundleVersion() {
-        try {
-            Bundle bundle = FrameworkUtil.getBundle(TrystSplashHandler.class);
-            if (bundle != null) {
-                Version ver = bundle.getVersion();
-                if (ver != null) {
-                    return ver.getMajor() + "." + ver.getMinor() + "." + ver.getMicro();
-                }
-            }
-        } catch (Throwable ignored) {
-        }
-        return "0.1.0";
     }
 
     private void connectLifecycleCoordinator() {
@@ -125,8 +197,8 @@ public class TrystSplashHandler extends BasicSplashHandler implements Applicatio
             coordinator = eu.kalafatic.tryst.application.TrystApplication.getCoordinator();
             if (coordinator != null) {
                 coordinator.addLifecycleListener(this);
-                // Sync current state
-                onLifecycleEvent(ApplicationLifecycleEvent.of(coordinator.getCurrentStage()));
+                // Catch up honestly with the current stage (e.g. relaunch or late binding).
+                applyStage(coordinator.getCurrentStage());
             }
         } catch (Throwable t) {
             TrystLog.warn(TrystSplashHandler.class, "Could not hook lifecycle listener on splash: " + t.getMessage());
@@ -135,46 +207,154 @@ public class TrystSplashHandler extends BasicSplashHandler implements Applicatio
 
     @Override
     public void onLifecycleEvent(ApplicationLifecycleEvent event) {
-        if (monitor == null || event == null || event.stage() == null) return;
-
-        ApplicationLifecycleStage toStage = event.stage();
-        int targetWork = switch (toStage) {
-            case PLATFORM_INITIALIZATION -> 20;
-            case CONFIGURATION_INITIALIZATION -> 40;
-            case CORE_SERVICE_INITIALIZATION -> 65;
-            case APPLICATION_READY -> 85;
-            case WORKBENCH_RUNNING -> 100;
-            default -> 10;
-        };
-
-        String message = switch (toStage) {
-            case PLATFORM_INITIALIZATION -> "Initializing platform and target configurations...";
-            case CONFIGURATION_INITIALIZATION -> "Loading preferences and network configurations...";
-            case CORE_SERVICE_INITIALIZATION -> "Starting core background services and database...";
-            case APPLICATION_READY -> "Starting embedded HTTP server & API listeners...";
-            case WORKBENCH_RUNNING -> "Opening central workspace and layout...";
-            default -> "Starting application...";
-        };
+        if (event == null || event.stage() == null) {
+            return;
+        }
+        final ApplicationLifecycleStage stage = event.stage();
+        final String description = event.description();
 
         Shell splash = getSplash();
-        if (splash != null && !splash.isDisposed()) {
-            Display display = splash.getDisplay();
-            if (!display.isDisposed()) {
-                display.asyncExec(() -> {
-                    if (monitor != null && !splash.isDisposed()) {
-                        monitor.subTask(message);
-                        monitor.internalWorked(targetWork);
-                        if (toStage == ApplicationLifecycleStage.WORKBENCH_RUNNING) {
-                            monitor.done();
-                        }
+        if (splash == null || splash.isDisposed()) {
+            return;
+        }
+        Display display = splash.getDisplay();
+        if (display.isDisposed()) {
+            return;
+        }
+
+        Runnable update = () -> applyStage(stage, description);
+        if (Thread.currentThread() == display.getThread()) {
+            update.run();
+        } else {
+            // StartupRunnable ensures the update executes before the UI is fully initialized.
+            try {
+                display.asyncExec(new StartupRunnable() {
+                    @Override
+                    public void runWithException() {
+                        update.run();
                     }
                 });
+            } catch (Throwable t) {
+                display.asyncExec(update);
             }
+        }
+    }
+
+    private void applyStage(ApplicationLifecycleStage stage) {
+        applyStage(stage, null);
+    }
+
+    private void applyStage(ApplicationLifecycleStage stage, String description) {
+        if (finished || monitor == null) {
+            return;
+        }
+
+        int targetPercent;
+        String message;
+        switch (stage) {
+            case PLATFORM_INITIALIZATION, APPLICATION_START -> {
+                targetPercent = 10;
+                message = "Initializing TRYST...";
+            }
+            case CONFIGURATION_INITIALIZATION -> {
+                targetPercent = 25;
+                message = "Loading application modules...";
+            }
+            case CORE_SERVICE_INITIALIZATION -> {
+                targetPercent = 50;
+                message = "Initializing database...";
+            }
+            case APPLICATION_READY -> {
+                targetPercent = 80;
+                message = "Embedded services running.";
+            }
+            case WORKBENCH_RUNNING -> {
+                targetPercent = 100;
+                message = "Ready.";
+            }
+            default -> {
+                return;
+            }
+        }
+
+        // Sub-milestone notifications carry a custom description with the current stage and
+        // advance the bar by one step for each real initialization activity.
+        boolean customDescription = description != null && !description.isBlank()
+                && !description.equals(stage.name());
+        if (customDescription) {
+            message = description;
+            if (stage != ApplicationLifecycleStage.WORKBENCH_RUNNING) {
+                targetPercent = Math.min(lastPercent + 10, 95);
+            }
+        }
+
+        Shell splash = getSplash();
+        if (splash == null || splash.isDisposed()) {
+            return;
+        }
+
+        try {
+            if (targetPercent > lastPercent) {
+                monitor.worked(targetPercent - lastPercent);
+                lastPercent = targetPercent;
+            }
+            monitor.subTask(message);
+
+            Composite content = getContent();
+            if (content != null && !content.isDisposed()) {
+                // Force a synchronous repaint so the update is visible even while the
+                // workbench initialization is blocking the SWT event loop.
+                content.update();
+            }
+        } catch (Throwable t) {
+            TrystLog.debug(TrystSplashHandler.class, "Splash progress update skipped: " + t.getMessage());
+        }
+
+        if (stage == ApplicationLifecycleStage.WORKBENCH_RUNNING) {
+            finished = true;
+            try {
+                monitor.done();
+            } catch (Throwable ignored) {
+            }
+            closeSplash();
+        }
+    }
+
+    private void closeSplash() {
+        Shell splash = getSplash();
+        if (splash == null || splash.isDisposed()) {
+            return;
+        }
+        Display display = splash.getDisplay();
+        Runnable close = () -> {
+            if (splash != null && !splash.isDisposed()) {
+                try {
+                    splash.close();
+                } catch (Throwable ignored) {
+                }
+            }
+        };
+        if (Thread.currentThread() == display.getThread()) {
+            close.run();
+        } else {
+            display.asyncExec(close);
+        }
+    }
+
+    /**
+     * Force-closes the splash window from any thread. Called on fatal startup failures so the
+     * application never exits leaving a frozen splash screen behind.
+     */
+    public static void closeSplashIfVisible() {
+        TrystSplashHandler handler = activeInstance;
+        if (handler != null) {
+            handler.closeSplash();
         }
     }
 
     @Override
     public void dispose() {
+        activeInstance = null;
         if (coordinator != null) {
             coordinator.removeLifecycleListener(this);
             coordinator = null;
@@ -182,6 +362,10 @@ public class TrystSplashHandler extends BasicSplashHandler implements Applicatio
         if (versionFont != null && !versionFont.isDisposed()) {
             versionFont.dispose();
             versionFont = null;
+        }
+        if (foregroundColor != null && !foregroundColor.isDisposed()) {
+            foregroundColor.dispose();
+            foregroundColor = null;
         }
         super.dispose();
     }

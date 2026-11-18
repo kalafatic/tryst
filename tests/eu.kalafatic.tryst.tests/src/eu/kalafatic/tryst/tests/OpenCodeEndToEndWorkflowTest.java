@@ -172,7 +172,7 @@ class OpenCodeEndToEndWorkflowTest {
         assertNotNull(projectId);
 
         Path repoSource = tempDir.resolve("repo-src");
-        copyTree(Path.of("/home/petr/git/DCoder-121126"), repoSource);
+        copyTree(Path.of("/home/petr/git/DCode-121126"), repoSource);
         String repoUrl = repoSource.toUri().toString();
 
         // 3. Submit the coding task through the task intake API
