@@ -8,6 +8,7 @@
 
    <launcherArgs>
       <programArgs>-consoleLog
+--launcher.suppressErrors
       </programArgs>
       <vmArgs>-Dorg.eclipse.swt.graphics.Resource.reportNonDisposed=true
       </vmArgs>
