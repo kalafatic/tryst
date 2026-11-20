@@ -38,11 +38,16 @@ public class MainWorkspaceView extends ViewPart {
 
     public static final String ID = "eu.kalafatic.tryst.ui.view.mainWorkspace";
 
+    /** Honest empty-state notice: the legacy workspace task list is no longer populated. */
+    private static final String LEGACY_TASK_NOTICE =
+            "Legacy workspace view — tasks are managed by the live orchestration (see the Navigator view or the web UI)";
+
     private WorkspaceController controller;
     private Label activeProjectLabel;
     private ComboViewer sessionCombo;
     private TableViewer taskViewer;
     private StyledText agentStreamText;
+    private Label taskNoticeLabel;
 
     @Override
     public void createPartControl(Composite parent) {
@@ -84,6 +89,11 @@ public class MainWorkspaceView extends ViewPart {
         Group taskGroup = new Group(sash, SWT.NONE);
         taskGroup.setText("Development Tasks");
         taskGroup.setLayout(new GridLayout(1, false));
+
+        taskNoticeLabel = new Label(taskGroup, SWT.WRAP);
+        taskNoticeLabel.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
+        taskNoticeLabel.setForeground(taskGroup.getDisplay().getSystemColor(org.eclipse.swt.SWT.COLOR_DARK_GRAY));
+        taskNoticeLabel.setVisible(false);
 
         taskViewer = new TableViewer(taskGroup, SWT.BORDER | SWT.SINGLE | SWT.V_SCROLL | SWT.H_SCROLL);
         taskViewer.getTable().setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
@@ -157,8 +167,16 @@ public class MainWorkspaceView extends ViewPart {
             sessionCombo.setSelection(new StructuredSelection(controller.getActiveSession()));
         }
 
-        taskViewer.setInput(controller.getTasks());
+        var tasks = controller.getTasks();
+        taskViewer.setInput(tasks);
         taskViewer.refresh();
+        if (taskNoticeLabel != null && !taskNoticeLabel.isDisposed()) {
+            boolean empty = tasks == null || tasks.isEmpty();
+            taskNoticeLabel.setVisible(empty);
+            if (empty) {
+                taskNoticeLabel.setText(LEGACY_TASK_NOTICE);
+            }
+        }
     }
 
     private void createActions() {

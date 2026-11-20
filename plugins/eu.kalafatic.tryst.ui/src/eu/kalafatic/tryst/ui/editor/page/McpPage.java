@@ -158,7 +158,9 @@ public class McpPage extends AbstractTrystEditorPage {
         if (config != null && http != null && http.isRunning()) {
             return config.resolveEffectiveExternalUrl(http.getPort()) + "/api/mcp (JSON-RPC 2.0)";
         }
-        return "http://127.0.0.1:38080/tryst/api/mcp (JSON-RPC 2.0)";
+        String ctxPath = config != null ? config.contextPath() : "/tryst";
+        return "http://127.0.0.1:" + eu.kalafatic.tryst.ui.TrystUiServices.getLiveHttpPort()
+                + ctxPath + "/api/mcp (JSON-RPC 2.0)";
     }
 
     @Override

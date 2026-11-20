@@ -26,6 +26,9 @@ import org.osgi.framework.BundleContext;
 import org.osgi.framework.FrameworkUtil;
 import org.osgi.framework.ServiceReference;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.Statement;
@@ -63,6 +66,7 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
     private Action openNavigatorViewAction;
     private Action openConsoleViewAction;
     private Action openCentralWorkspaceAction;
+    private Action openTerminalAction;
 
     // Database Actions
     private Action openDbExplorerAction;
@@ -80,7 +84,6 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
     private Action checkTeipStatusAction;
     private Action viewEvoInstancesAction;
     private Action routeTaskToEvoAction;
-    private Action evoAssistAction;
     private Action viewRoutingHistoryAction;
 
     private Action refreshAllAction;
@@ -164,22 +167,20 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
         newTaskAction = new Action("New &Task...") {
             @Override
             public void run() {
-                var coord = resolveCoordinator();
-                if (coord == null || coord.getWorkspaceService() == null) {
-                    MessageDialog.openWarning(window.getShell(), "New Task",
-                            "WorkspaceService is not available yet. Try again after startup completes.");
-                    return;
+                // Task intake is owned by the live orchestration pipeline (TaskOrchestrator +
+                // TaskIntakeService) exposed through the web UI. Open the web client directly
+                // on the intake form instead of creating a dead legacy AgentTask.
+                String url = resolveWebUrl();
+                if (!url.contains("?")) {
+                    url += "?newTask=1";
+                } else {
+                    url += "&newTask=1";
                 }
-                InputDialog dialog = new InputDialog(window.getShell(), "Create Development Task",
-                        "Task title:", "Implement Autonomous Change", null);
-                if (dialog.open() == InputDialog.OK && dialog.getValue() != null && !dialog.getValue().isBlank()) {
-                    try {
-                        coord.getWorkspaceService().createTask(dialog.getValue().trim(), "User-created task");
-                    } catch (Exception e) {
-                        TrystLog.error(ApplicationActionBarAdvisor.class, "Failed to create task: " + e.getMessage(), e);
-                        MessageDialog.openError(window.getShell(), "New Task",
-                                "Failed to create task:\n\n" + e.getMessage());
-                    }
+                boolean success = Program.launch(url);
+                if (!success) {
+                    TrystLog.warn(ApplicationActionBarAdvisor.class, "Failed to launch external browser for new task intake: " + url);
+                    MessageDialog.openInformation(window.getShell(), "New Task",
+                            "Submit new tasks through the TRYST web client at: " + url);
                 }
             }
         };
@@ -232,6 +233,32 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
         };
         openWebBrowserAction.setId("eu.kalafatic.tryst.application.action.openWebBrowser");
         register(openWebBrowserAction);
+
+        openTerminalAction = new Action("Open &Terminal") {
+            @Override
+            public void run() {
+                String directory = resolveWorkspaceDirectory();
+                if (directory == null || directory.isBlank()) {
+                    directory = System.getProperty("user.home", ".");
+                }
+                String[] command = terminalCommand(directory);
+                if (command == null) {
+                    MessageDialog.openWarning(window.getShell(), "Open Terminal",
+                            "No supported terminal emulator found on this system "
+                                    + "(tried x-terminal-emulator, gnome-terminal, konsole, xterm).");
+                    return;
+                }
+                try {
+                    new ProcessBuilder(command).start();
+                } catch (IOException e) {
+                    TrystLog.error(ApplicationActionBarAdvisor.class, "Failed to open terminal in " + directory + ": " + e.getMessage(), e);
+                    MessageDialog.openError(window.getShell(), "Open Terminal",
+                            "Failed to open terminal:\n\n" + e.getMessage());
+                }
+            }
+        };
+        openTerminalAction.setId("eu.kalafatic.tryst.application.action.openTerminal");
+        register(openTerminalAction);
 
         openMainPerspectiveAction = new Action("Switch to Main Perspective") {
             @Override
@@ -538,21 +565,6 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
         routeTaskToEvoAction.setId("eu.kalafatic.tryst.application.action.routeTaskToEvo");
         register(routeTaskToEvoAction);
 
-        evoAssistAction = new Action("EVO Assist / Diagnostics Request...") {
-            @Override
-            public void run() {
-                InputDialog dlg = new InputDialog(window.getShell(), "EVO Assist",
-                        "Enter diagnostic or code query for EVO:", "Explain current repository architecture", null);
-                if (dlg.open() == InputDialog.OK && dlg.getValue() != null && !dlg.getValue().isBlank()) {
-                    String prompt = dlg.getValue().trim();
-                    MessageDialog.openInformation(window.getShell(), "EVO Assist",
-                            "Submitted query to EVO peer:\n\"" + prompt + "\"\n\nProcessing in background.");
-                }
-            }
-        };
-        evoAssistAction.setId("eu.kalafatic.tryst.application.action.evoAssist");
-        register(evoAssistAction);
-
         viewRoutingHistoryAction = new Action("View EVO Routing History") {
             @Override
             public void run() {
@@ -619,12 +631,70 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
                 if (coord.getHttpService() != null && coord.getHttpService().isRunning()) {
                     return cfg.resolveEffectiveExternalUrl(coord.getHttpService().getPort());
                 }
+                // Live port from the authoritative runtime port registry (bound socket
+                // or coherent allocation) instead of a hardcoded listener port.
+                var portRegistry = coord.getConfigurationService().getPortRegistry();
+                if (portRegistry != null) {
+                    return "http://127.0.0.1:" + portRegistry.getEffectivePort(eu.kalafatic.tryst.core.port.ServicePortIdentifier.HTTP_SERVICE) + cfg.contextPath();
+                }
                 if (cfg.canonicalUrl() != null) {
                     return cfg.canonicalUrl();
                 }
             }
         }
-        return "http://127.0.0.1:38080/tryst";
+        return "http://127.0.0.1:" + eu.kalafatic.tryst.core.port.ServicePortIdentifier.DEFAULT_HTTP_PORT + "/tryst";
+    }
+
+    /**
+     * Resolves the current workspace root directory from the workspace service when
+     * available; returns {@code null} when no live workspace is loaded.
+     */
+    private String resolveWorkspaceDirectory() {
+        var coord = resolveCoordinator();
+        if (coord != null && coord.getWorkspaceService() != null) {
+            try {
+                var ws = coord.getWorkspaceService().getCurrentWorkspace();
+                if (ws != null && ws.getRootPath() != null && Files.isDirectory(ws.getRootPath())) {
+                    return ws.getRootPath().toAbsolutePath().toString();
+                }
+            } catch (Exception e) {
+                TrystLog.warn(ApplicationActionBarAdvisor.class, "Could not resolve workspace directory: " + e.getMessage());
+            }
+        }
+        return null;
+    }
+
+    private String[] terminalCommand(String directory) {
+        if (hasCommand("x-terminal-emulator")) {
+            return new String[]{"x-terminal-emulator", "--working-directory=" + directory};
+        }
+        if (hasCommand("gnome-terminal")) {
+            return new String[]{"gnome-terminal", "--working-directory=" + directory};
+        }
+        if (hasCommand("konsole")) {
+            return new String[]{"konsole", "--workdir", directory};
+        }
+        if (hasCommand("xterm")) {
+            return new String[]{"xterm", "-e", "cd " + shellQuote(directory) + " && $SHELL"};
+        }
+        return null;
+    }
+
+    private boolean hasCommand(String command) {
+        String path = System.getenv("PATH");
+        if (path == null) {
+            return false;
+        }
+        for (String dir : path.split(":")) {
+            if (Files.isExecutable(Path.of(dir, command))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String shellQuote(String value) {
+        return "'" + value.replace("'", "'\\''") + "'";
     }
 
     @Override
@@ -712,7 +782,6 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
         teipMenu.add(viewEvoInstancesAction);
         teipMenu.add(new Separator());
         teipMenu.add(routeTaskToEvoAction);
-        teipMenu.add(evoAssistAction);
         teipMenu.add(viewRoutingHistoryAction);
         teipMenu.add(new Separator());
         teipMenu.add(new GroupMarker(IWorkbenchActionConstants.MB_ADDITIONS));
@@ -720,6 +789,7 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
 
         MenuManager webMenu = new MenuManager("&Web", "web");
         webMenu.add(openWebBrowserAction);
+        webMenu.add(openTerminalAction);
         webMenu.add(new Separator());
         webMenu.add(new GroupMarker(IWorkbenchActionConstants.MB_ADDITIONS));
         menuBar.add(webMenu);

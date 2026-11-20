@@ -84,7 +84,7 @@ public class ConfigurationPage extends AbstractTrystEditorPage {
         new Label(portGroup, SWT.NONE);
 
         createRow(portGroup, "HTTP Listener Port:");
-        lblHttpPort = createValueLabel(portGroup, "38080");
+        lblHttpPort = createValueLabel(portGroup, String.valueOf(TrystUiServices.getLiveHttpPort()));
         new Label(portGroup, SWT.NONE);
 
         createRow(portGroup, "Effective Access URL:");
@@ -105,7 +105,7 @@ public class ConfigurationPage extends AbstractTrystEditorPage {
         new Label(portGroup, SWT.NONE);
 
         createRow(portGroup, "API Listener Port:");
-        lblApiPort = createValueLabel(portGroup, "38180");
+        lblApiPort = createValueLabel(portGroup, String.valueOf(TrystUiServices.getLiveApiPort()));
         new Label(portGroup, SWT.NONE);
 
         Group dbGroup = new Group(parent, SWT.NONE);
@@ -120,7 +120,7 @@ public class ConfigurationPage extends AbstractTrystEditorPage {
         lblDbSize = createValueLabel(dbGroup, "-");
 
         createRow(dbGroup, "Migration Version:");
-        lblDbSchema = createValueLabel(dbGroup, "V14 (Workflow & Scheduling Persistent)");
+        lblDbSchema = createValueLabel(dbGroup, "-");
 
         refresh();
     }
@@ -166,7 +166,7 @@ public class ConfigurationPage extends AbstractTrystEditorPage {
         ApplicationConfiguration config = TrystUiServices.getConfiguration();
         if (config != null) {
             var http = TrystUiServices.getHttpService();
-            int port = (http != null && http.isRunning()) ? http.getPort() : config.httpPort();
+            int port = (http != null && http.isRunning()) ? http.getPort() : TrystUiServices.getLiveHttpPort();
             if (lblNetworkMode != null && !lblNetworkMode.isDisposed()) {
                 lblNetworkMode.setText(config.networkMode() != null ? config.networkMode().name() : "LOOPBACK");
             }
@@ -177,8 +177,10 @@ public class ConfigurationPage extends AbstractTrystEditorPage {
                 lblEffectiveUrl.setText(config.resolveEffectiveExternalUrl(port));
             }
             lblHttpPort.setText(String.valueOf(port));
-            lblApiPort.setText(String.valueOf(config.tcpPort()));
+        } else {
+            lblHttpPort.setText(String.valueOf(TrystUiServices.getLiveHttpPort()));
         }
+        lblApiPort.setText(String.valueOf(TrystUiServices.getLiveApiPort()));
 
         SqliteDatabaseManager db = TrystUiServices.getDatabaseManager();
         if (db != null && db.getDatabasePath() != null) {
@@ -189,6 +191,25 @@ public class ConfigurationPage extends AbstractTrystEditorPage {
             } catch (Exception ignored) {
                 lblDbSize.setText("Unknown");
             }
+        }
+        lblDbSchema.setText("V" + resolveAppliedSchemaVersion() + " (latest: V"
+                + eu.kalafatic.tryst.infrastructure.persistence.SchemaMigrationService.LATEST_VERSION + ")");
+    }
+
+    /**
+     * Reads the actually applied schema version from the {@code schema_version}
+     * migration table instead of a hardcoded label.
+     */
+    private int resolveAppliedSchemaVersion() {
+        SqliteDatabaseManager db = TrystUiServices.getDatabaseManager();
+        if (db == null) {
+            return 0;
+        }
+        try (java.sql.Statement stmt = db.getConnection().createStatement();
+             java.sql.ResultSet rs = stmt.executeQuery("SELECT COALESCE(MAX(version), 0) FROM schema_version;")) {
+            return rs.next() ? rs.getInt(1) : 0;
+        } catch (Exception e) {
+            return 0;
         }
     }
 }

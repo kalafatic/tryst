@@ -54,10 +54,50 @@ public class AiMonitoringView extends ViewPart {
     }
 
     private void checkConnection() {
+        // Resolve the live default provider/model truth: the default selection in the
+        // AiProviderRegistry, the persisted GLOBAL execution configuration, and finally
+        // the runtime AI inference service. Show "—" when nothing is configured.
+        String providerText = null;
+        String modelText = null;
+
+        eu.kalafatic.tryst.domain.ai.AiProviderRegistry registry = TrystUiServices.getAiProviderRegistry();
+        if (registry != null) {
+            var defaultId = registry.getDefaultProviderId();
+            if (defaultId.isPresent()) {
+                var descriptor = registry.findProvider(defaultId.get());
+                if (descriptor.isPresent()) {
+                    providerText = descriptor.get().name();
+                    if (descriptor.get().endpoint() != null && !descriptor.get().endpoint().isBlank()) {
+                        providerText = providerText + " (" + descriptor.get().endpoint() + ")";
+                    }
+                    modelText = descriptor.get().defaultModel();
+                }
+            }
+        }
+
+        if (modelText == null || modelText.isBlank()) {
+            var execConfig = TrystUiServices.getExecutionConfigurationService();
+            if (execConfig != null) {
+                var global = execConfig.getGlobal();
+                if (global.isPresent() && global.get().modelId() != null && !global.get().modelId().isBlank()) {
+                    modelText = global.get().modelId();
+                }
+            }
+        }
+
         AiInferenceService ai = TrystUiServices.getAiInferenceService();
+        if (providerText == null || providerText.isBlank()) {
+            if (ai instanceof eu.kalafatic.tryst.domain.ai.AIProvider provider) {
+                providerText = provider.getProviderId();
+            } else if (ai != null) {
+                providerText = ai.getClass().getSimpleName();
+            }
+        }
+
+        lblEndpoint.setText(providerText != null && !providerText.isBlank() ? providerText : "—");
+        lblModel.setText(modelText != null && !modelText.isBlank() ? modelText : "—");
+
         if (ai != null) {
-            lblEndpoint.setText("Configured (Ollama)");
-            lblModel.setText("codellama");
             ai.checkConnection().thenAccept(online -> {
                 Display.getDefault().asyncExec(() -> {
                     if (!lblStatus.isDisposed()) {

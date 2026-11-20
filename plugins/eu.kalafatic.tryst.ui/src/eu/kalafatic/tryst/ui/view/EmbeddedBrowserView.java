@@ -69,7 +69,7 @@ public class EmbeddedBrowserView extends ViewPart {
 
     private void resolveAndNavigate() {
         RuntimeEndpointRegistry reg = TrystUiServices.getService(RuntimeEndpointRegistry.class);
-        String targetUrl = "http://127.0.0.1:38080/tryst";
+        String targetUrl = resolveDefaultUrl();
         if (reg != null && reg.getCurrentEndpoint() != null) {
             RuntimeEndpoint ep = reg.getCurrentEndpoint();
             targetUrl = resolveBestUrl(ep);
@@ -79,8 +79,15 @@ public class EmbeddedBrowserView extends ViewPart {
         navigateToUrl(targetUrl);
     }
 
+    private String resolveDefaultUrl() {
+        int port = TrystUiServices.getLiveHttpPort();
+        var config = TrystUiServices.getConfiguration();
+        String ctxPath = config != null ? config.contextPath() : "/tryst";
+        return "http://127.0.0.1:" + port + ctxPath;
+    }
+
     private String resolveBestUrl(RuntimeEndpoint ep) {
-        if (ep == null) return "http://127.0.0.1:38080/tryst";
+        if (ep == null) return resolveDefaultUrl();
         // Prefer externalUrl (which accounts for reverse proxy configuration and bound ports)
         if (ep.externalUrl() != null && !ep.externalUrl().isBlank()) {
             return ep.externalUrl();

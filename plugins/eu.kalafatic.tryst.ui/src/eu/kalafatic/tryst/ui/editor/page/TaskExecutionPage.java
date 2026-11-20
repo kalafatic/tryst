@@ -37,12 +37,17 @@ public class TaskExecutionPage extends AbstractTrystEditorPage {
 
     public static final String ID = "eu.kalafatic.tryst.ui.editor.page.taskExecution";
 
+    /** Honest empty-state notice: the legacy workspace task list is no longer populated. */
+    private static final String LEGACY_TASK_NOTICE =
+            "Legacy workspace view — tasks are managed by the live orchestration (see the Navigator view or the web UI)";
+
     private WorkspaceController controller;
     private ComboViewer taskCombo;
     private StyledText streamOutput;
     private AgentTask selectedTask;
     private Button btnRun;
     private Button btnCancel;
+    private Label legacyNotice;
 
     public TaskExecutionPage(TrystWorkbenchEditor editor) {
         super(ID, "Task Execution", editor);
@@ -93,6 +98,10 @@ public class TaskExecutionPage extends AbstractTrystEditorPage {
                 this.selectedTask = t;
             }
         });
+
+        legacyNotice = new Label(parent, SWT.WRAP);
+        legacyNotice.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
+        legacyNotice.setVisible(false);
 
         Group streamGroup = new Group(parent, SWT.NONE);
         streamGroup.setText("Agent Execution & Reasoning Stream");
@@ -201,6 +210,13 @@ public class TaskExecutionPage extends AbstractTrystEditorPage {
         if (controller == null || taskCombo == null || taskCombo.getControl().isDisposed()) return;
         var tasks = controller.getTasks();
         taskCombo.setInput(tasks);
+        if (legacyNotice != null && !legacyNotice.isDisposed()) {
+            boolean empty = tasks == null || tasks.isEmpty();
+            legacyNotice.setVisible(empty);
+            if (empty) {
+                legacyNotice.setText(LEGACY_TASK_NOTICE);
+            }
+        }
         if (selectedTask != null) {
             taskCombo.setSelection(new StructuredSelection(selectedTask));
         } else if (!tasks.isEmpty()) {

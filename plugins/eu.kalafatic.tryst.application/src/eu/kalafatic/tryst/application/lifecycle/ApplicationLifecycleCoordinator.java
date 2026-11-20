@@ -653,6 +653,7 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
             server.setAiManagementServices(this.aiProviderRegistry,
                     this.connectedApplicationRegistry, this.executionConfigurationService, this);
             server.setTaskOrchestrator(this.taskOrchestrator);
+            server.setSchemaMigrationService(this.migrationService);
             server.setGitHubService(this.gitHubService, this.gitHubCredentialRepository, this.gitHubCredentialEncryptionService);
             server.setGitCommitRepository(this.gitCommitRepository);
             server.setManagedServiceController(serviceController);
@@ -1049,6 +1050,14 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
         return backupService;
     }
 
+    /**
+     * Returns the forward-only schema migration service holding the authoritative
+     * applied database schema version (may be {@code null} before core initialization).
+     */
+    public SchemaMigrationService getSchemaMigrationService() {
+        return migrationService;
+    }
+
     public PermissionManager getPermissionManager() {
         return permissionManager;
     }
@@ -1343,6 +1352,7 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
         server.setAiManagementServices(this.aiProviderRegistry,
                 this.connectedApplicationRegistry, this.executionConfigurationService, this);
         server.setTaskOrchestrator(this.taskOrchestrator);
+        server.setSchemaMigrationService(this.migrationService);
         server.setGitHubService(this.gitHubService, this.gitHubCredentialRepository, this.gitHubCredentialEncryptionService);
         server.setGitCommitRepository(this.gitCommitRepository);
         server.setTaskIntakeService(this.taskIntakeService);

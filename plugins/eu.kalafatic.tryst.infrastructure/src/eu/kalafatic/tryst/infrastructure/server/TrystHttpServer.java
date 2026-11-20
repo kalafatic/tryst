@@ -86,6 +86,7 @@ public class TrystHttpServer implements TrystHttpService {
     private eu.kalafatic.tryst.domain.service.ManagedServiceController managedServiceController;
     private eu.kalafatic.tryst.domain.intake.TaskIntakeService taskIntakeService;
     private eu.kalafatic.tryst.infrastructure.vcs.RepositoryPoolManager repositoryPoolManager;
+    private eu.kalafatic.tryst.infrastructure.persistence.SchemaMigrationService schemaMigrationService;
     private eu.kalafatic.tryst.domain.workflow.WorkflowDefinitionRepository workflowDefinitionRepository;
     private eu.kalafatic.tryst.domain.workflow.WorkflowExecutionRepository workflowExecutionRepository;
     private eu.kalafatic.tryst.domain.service.WorkflowEngine workflowEngine;
@@ -222,6 +223,14 @@ public class TrystHttpServer implements TrystHttpService {
 
     public void setTaskIntakeService(eu.kalafatic.tryst.domain.intake.TaskIntakeService taskIntakeService) {
         this.taskIntakeService = taskIntakeService;
+    }
+
+    /**
+     * Wires the forward-only schema migration service so admin endpoints can report
+     * the actually applied database schema version instead of a hardcoded value.
+     */
+    public void setSchemaMigrationService(eu.kalafatic.tryst.infrastructure.persistence.SchemaMigrationService schemaMigrationService) {
+        this.schemaMigrationService = schemaMigrationService;
     }
 
     public void setRepositoryPoolManager(eu.kalafatic.tryst.infrastructure.vcs.RepositoryPoolManager repositoryPoolManager) {
@@ -3163,7 +3172,7 @@ public class TrystHttpServer implements TrystHttpService {
                     return;
                 }
                 String json = String.format("{\"databasePath\": \"%s\", \"sizeBytes\": %d, \"schemaVersion\": %d}",
-                        escapeJson(dbPath), dbSize, 3);
+                        escapeJson(dbPath), dbSize, resolveSchemaVersion());
                 sendJsonResponse(exchange, 200, json);
                 return;
             }
@@ -6034,10 +6043,16 @@ public class TrystHttpServer implements TrystHttpService {
                         }
 
                         async function loadDashboardData() {
+                            await Promise.all([
+                                loadDashboardStats(),
+                                loadDashboardRecentTasks(),
+                                loadDashboardWorkspaces()
+                            ]);
+                        }
+
+                        async function loadDashboardStats() {
                             try {
-                                const [tasksRes, wsRes, poolsRes, revsRes] = await Promise.all([
-                                    fetch(apiUrl('/api/tasks'), { headers: getAuthHeaders() }),
-                                    fetch(apiUrl('/api/admin/workspaces'), { headers: getAuthHeaders() }),
+                                const [poolsRes, revsRes] = await Promise.all([
                                     fetch(apiUrl('/api/pools'), { headers: getAuthHeaders() }),
                                     fetch(apiUrl('/api/reviews'), { headers: getAuthHeaders() })
                                 ]);
@@ -6054,32 +6069,53 @@ public class TrystHttpServer implements TrystHttpService {
                                     const revData = await revsRes.json();
                                     document.getElementById('dashReviews').textContent = revData.reviews ? revData.reviews.length : 0;
                                 }
+                            } catch (e) {
+                                console.warn('Failed to load dashboard stats:', e);
+                            }
+                        }
 
-                                if (tasksRes.ok) {
-                                    const taskData = await tasksRes.json();
-                                    const tasks = taskData.tasks || [];
-                                    const container = document.getElementById('dashRecentTasks');
-                                    if (tasks.length === 0) {
-                                        container.innerHTML = '<span style="color:var(--muted);">No tasks recorded yet.</span>';
-                                    } else {
-                                        container.innerHTML = '<table><tr><th>ID</th><th>Title</th><th>Status</th><th>Priority</th><th>Action</th></tr>' +
-                                            tasks.slice(0, 8).map(t => `<tr><td>${t.id.substring(0,8)}</td><td><b>${escapeHtml(t.title)}</b></td><td><span class="badge badge-info">${t.status}</span></td><td>${t.priority}</td><td><button class="btn btn-sm btn-primary" onclick="openTaskInStudio('${t.id}')">⚡ Studio</button></td></tr>`).join('') + '</table>';
-                                    }
-                                }
+                        function renderDashboardError(containerId, loaderName) {
+                            const container = document.getElementById(containerId);
+                            if (container) {
+                                container.innerHTML = '<span style="color:#d9534f; cursor:pointer;" onclick="' + loaderName + '()">Failed to load &mdash; retry</span>';
+                            }
+                        }
 
-                                if (wsRes.ok) {
-                                    const wsData = await wsRes.json();
-                                    const list = wsData.workspaces || [];
-                                    const container = document.getElementById('dashActiveWorkspaces');
-                                    if (list.length === 0) {
-                                        container.innerHTML = '<span style="color:var(--muted);">No active sandboxes.</span>';
-                                    } else {
-                                        container.innerHTML = '<table><tr><th>Workspace ID</th><th>Project</th><th>Status</th></tr>' +
-                                            list.slice(0, 8).map(w => `<tr><td>${w.id.substring(0,8)}</td><td>${w.projectId||'-'}</td><td><span class="badge badge-success">${w.state}</span></td></tr>`).join('') + '</table>';
-                                    }
+                        async function loadDashboardRecentTasks() {
+                            const container = document.getElementById('dashRecentTasks');
+                            try {
+                                const res = await fetch(apiUrl('/api/tasks'), { headers: getAuthHeaders() });
+                                if (!res.ok) throw new Error('HTTP ' + res.status);
+                                const taskData = await res.json();
+                                const tasks = taskData.tasks || [];
+                                if (tasks.length === 0) {
+                                    container.innerHTML = '<span style="color:var(--muted);">No tasks recorded yet.</span>';
+                                } else {
+                                    container.innerHTML = '<table><tr><th>ID</th><th>Title</th><th>Status</th><th>Priority</th><th>Action</th></tr>' +
+                                        tasks.slice(0, 8).map(t => `<tr><td>${t.id.substring(0,8)}</td><td><b>${escapeHtml(t.title)}</b></td><td><span class="badge badge-info">${t.status}</span></td><td>${t.priority}</td><td><button class="btn btn-sm btn-primary" onclick="openTaskInStudio('${t.id}')">⚡ Studio</button></td></tr>`).join('') + '</table>';
                                 }
                             } catch (e) {
-                                console.warn('Failed to load dashboard:', e);
+                                console.warn('Failed to load dashboard tasks:', e);
+                                renderDashboardError('dashRecentTasks', 'loadDashboardRecentTasks');
+                            }
+                        }
+
+                        async function loadDashboardWorkspaces() {
+                            const container = document.getElementById('dashActiveWorkspaces');
+                            try {
+                                const res = await fetch(apiUrl('/api/admin/workspaces'), { headers: getAuthHeaders() });
+                                if (!res.ok) throw new Error('HTTP ' + res.status);
+                                const wsData = await res.json();
+                                const list = wsData.workspaces || [];
+                                if (list.length === 0) {
+                                    container.innerHTML = '<span style="color:var(--muted);">No active sandboxes.</span>';
+                                } else {
+                                    container.innerHTML = '<table><tr><th>Workspace ID</th><th>Project</th><th>Status</th></tr>' +
+                                        list.slice(0, 8).map(w => `<tr><td>${w.id.substring(0,8)}</td><td>${w.projectId||'-'}</td><td><span class="badge badge-success">${w.state}</span></td></tr>`).join('') + '</table>';
+                                }
+                            } catch (e) {
+                                console.warn('Failed to load dashboard workspaces:', e);
+                                renderDashboardError('dashActiveWorkspaces', 'loadDashboardWorkspaces');
                             }
                         }
 
@@ -8373,7 +8409,9 @@ public class TrystHttpServer implements TrystHttpService {
                             try {
                                 const urlParams = new URLSearchParams(window.location.search);
                                 const studioParam = urlParams.get('studio') || urlParams.get('taskId');
-                                if (studioParam) {
+                                if (urlParams.get('newTask') === '1') {
+                                    openNewTaskModal();
+                                } else if (studioParam) {
                                     openTaskInStudio(studioParam);
                                 } else {
                                     switchNavSection(currentNavSection || 'reviews');
@@ -8616,6 +8654,35 @@ public class TrystHttpServer implements TrystHttpService {
             list.add(itemMatcher.group(1).replace("\\\"", "\"").replace("\\\\", "\\"));
         }
         return list;
+    }
+
+    /**
+     * Resolves the actually applied database schema version from the forward-only
+     * migration service. Falls back to reading the applied version directly from the
+     * {@code schema_version} table when the migration service is not wired (e.g.
+     * standalone construction); returns 0 when the database is unavailable.
+     */
+    private int resolveSchemaVersion() {
+        if (schemaMigrationService != null) {
+            try {
+                return schemaMigrationService.getCurrentVersion();
+            } catch (Exception e) {
+                TrystLog.warn(TrystHttpServer.class, "Failed to read schema version from migration service: " + e.getMessage());
+            }
+        }
+        if (databaseManager != null) {
+            try {
+                try (java.sql.Statement stmt = databaseManager.getConnection().createStatement();
+                     java.sql.ResultSet rs = stmt.executeQuery("SELECT COALESCE(MAX(version), 0) FROM schema_version;")) {
+                    if (rs.next()) {
+                        return rs.getInt(1);
+                    }
+                }
+            } catch (Exception e) {
+                TrystLog.warn(TrystHttpServer.class, "Failed to read schema version from database: " + e.getMessage());
+            }
+        }
+        return 0;
     }
 
     private static String extractJsonField(String json, String field) {

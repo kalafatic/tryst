@@ -43,6 +43,10 @@ public class TaskManagementPage extends AbstractTrystEditorPage {
 
     public static final String ID = "eu.kalafatic.tryst.ui.editor.page.taskManagement";
 
+    /** Honest empty-state notice: the legacy workspace task list is no longer populated. */
+    private static final String LEGACY_TASK_NOTICE =
+            "Legacy workspace view — tasks are managed by the live orchestration (see the Navigator view or the web UI)";
+
     private WorkspaceController controller;
     private ComboViewer sessionCombo;
     private TableViewer taskViewer;
@@ -51,6 +55,7 @@ public class TaskManagementPage extends AbstractTrystEditorPage {
     private Button btnCancelTask;
     private Button btnCopyTaskId;
     private Button btnExecEnv;
+    private Label legacyNotice;
 
     public TaskManagementPage(TrystWorkbenchEditor editor) {
         super(ID, "Task Management", editor);
@@ -122,6 +127,10 @@ public class TaskManagementPage extends AbstractTrystEditorPage {
         filterText.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         filterText.setMessage("Filter by task title, status, or description...");
         filterText.addModifyListener(e -> applyFilter());
+
+        legacyNotice = new Label(parent, SWT.WRAP);
+        legacyNotice.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
+        legacyNotice.setVisible(false);
 
         taskViewer = new TableViewer(parent, SWT.BORDER | SWT.FULL_SELECTION | SWT.V_SCROLL | SWT.H_SCROLL);
         Table table = taskViewer.getTable();
@@ -313,7 +322,15 @@ public class TaskManagementPage extends AbstractTrystEditorPage {
         if (controller.getActiveSession() != null) {
             sessionCombo.setSelection(new StructuredSelection(controller.getActiveSession()));
         }
-        taskViewer.setInput(controller.getTasks());
+        var tasks = controller.getTasks();
+        if (legacyNotice != null && !legacyNotice.isDisposed()) {
+            boolean empty = tasks == null || tasks.isEmpty();
+            legacyNotice.setVisible(empty);
+            if (empty) {
+                legacyNotice.setText(LEGACY_TASK_NOTICE);
+            }
+        }
+        taskViewer.setInput(tasks);
         taskViewer.refresh();
     }
 

@@ -117,14 +117,24 @@ public class StudioEditorPage extends AbstractTrystEditorPage implements IWorkbe
     }
 
     private String resolveStudioUrl(String taskId) {
-        String base = "http://127.0.0.1:38080/tryst";
+        String base = resolveBaseUrl();
+        return base + "?studio=" + taskId;
+    }
+
+    /**
+     * Resolves the Studio base URL from the live runtime endpoint registry; falls back
+     * to the live HTTP listener port from the port registry (never a hardcoded port).
+     */
+    private String resolveBaseUrl() {
         RuntimeEndpointRegistry reg = TrystUiServices.getService(RuntimeEndpointRegistry.class);
         if (reg != null && reg.getCurrentEndpoint() != null) {
             var ep = reg.getCurrentEndpoint();
-            if (ep.externalUrl() != null && !ep.externalUrl().isBlank()) base = ep.externalUrl();
-            else if (ep.internalUrl() != null && !ep.internalUrl().isBlank()) base = ep.internalUrl();
+            if (ep.externalUrl() != null && !ep.externalUrl().isBlank()) return ep.externalUrl();
+            if (ep.internalUrl() != null && !ep.internalUrl().isBlank()) return ep.internalUrl();
         }
-        return base + "?studio=" + taskId;
+        var config = TrystUiServices.getConfiguration();
+        String ctxPath = config != null ? config.contextPath() : "/tryst";
+        return "http://127.0.0.1:" + TrystUiServices.getLiveHttpPort() + ctxPath;
     }
 
     @Override

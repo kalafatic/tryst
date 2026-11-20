@@ -393,6 +393,56 @@ public final class TrystUiServices {
     }
 
     /**
+     * Resolves the authoritative {@link eu.kalafatic.tryst.core.port.PortRegistry}
+     * holding the coherently allocated and actually bound service ports.
+     */
+    public static eu.kalafatic.tryst.core.port.PortRegistry getPortRegistry() {
+        var appCoord = eu.kalafatic.tryst.application.TrystApplication.getCoordinator();
+        if (appCoord != null && appCoord.getConfigurationService() != null) {
+            var reg = appCoord.getConfigurationService().getPortRegistry();
+            if (reg != null) {
+                return reg;
+            }
+        }
+        return getService(eu.kalafatic.tryst.core.port.PortRegistry.class);
+    }
+
+    /**
+     * Resolves the live HTTP listener port: actually bound socket first, then the
+     * coherently allocated port from the port registry, then the configured value.
+     */
+    public static int getLiveHttpPort() {
+        var http = getHttpService();
+        if (http != null && http.isRunning()) {
+            return http.getPort();
+        }
+        var reg = getPortRegistry();
+        if (reg != null) {
+            return reg.getEffectivePort(eu.kalafatic.tryst.core.port.ServicePortIdentifier.HTTP_SERVICE);
+        }
+        var config = getConfiguration();
+        return config != null
+                ? config.httpPort()
+                : eu.kalafatic.tryst.core.port.ServicePortIdentifier.DEFAULT_HTTP_PORT;
+    }
+
+    /**
+     * Resolves the live API listener port from the authoritative port registry
+     * (bound socket first, then the coherent allocation), falling back to the
+     * configured HTTP port offset by the canonical service spacing.
+     */
+    public static int getLiveApiPort() {
+        var reg = getPortRegistry();
+        if (reg != null) {
+            return reg.getEffectivePort(eu.kalafatic.tryst.core.port.ServicePortIdentifier.API_SERVICE);
+        }
+        var config = getConfiguration();
+        return config != null
+                ? config.httpPort() + eu.kalafatic.tryst.core.port.ServicePortIdentifier.SERVICE_PORT_SPACING
+                : eu.kalafatic.tryst.core.port.ServicePortIdentifier.DEFAULT_API_PORT;
+    }
+
+    /**
      * Triggers real HTTP server startup through the authoritative server lifecycle service.
      */
     public static synchronized eu.kalafatic.tryst.core.server.TrystHttpService startHttpServer() throws Exception {

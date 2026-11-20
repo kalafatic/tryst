@@ -63,7 +63,27 @@ public class DatabaseAdminView extends ViewPart {
                 long size = Files.size(db.getDatabasePath());
                 lblSize.setText(size + " bytes (" + (size / 1024) + " KB)");
             } catch (Exception ignored) {}
-            lblSchema.setText("V3 (Production Platform)");
+            lblSchema.setText("V" + resolveAppliedSchemaVersion() + " (latest: V"
+                    + eu.kalafatic.tryst.infrastructure.persistence.SchemaMigrationService.LATEST_VERSION + ")");
+        } else {
+            lblSchema.setText("—");
+        }
+    }
+
+    /**
+     * Reads the actually applied schema version from the {@code schema_version}
+     * migration table instead of a hardcoded label.
+     */
+    private int resolveAppliedSchemaVersion() {
+        SqliteDatabaseManager db = TrystUiServices.getDatabaseManager();
+        if (db == null) {
+            return 0;
+        }
+        try (java.sql.Statement stmt = db.getConnection().createStatement();
+             java.sql.ResultSet rs = stmt.executeQuery("SELECT COALESCE(MAX(version), 0) FROM schema_version;")) {
+            return rs.next() ? rs.getInt(1) : 0;
+        } catch (Exception e) {
+            return 0;
         }
     }
 

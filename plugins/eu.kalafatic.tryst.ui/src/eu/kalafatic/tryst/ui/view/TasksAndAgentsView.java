@@ -21,6 +21,10 @@ public class TasksAndAgentsView extends ViewPart {
 
     public static final String ID = "eu.kalafatic.tryst.ui.view.tasksAndAgents";
 
+    /** Honest empty-state notice: the legacy workspace task list is no longer populated. */
+    private static final String LEGACY_TASK_NOTICE =
+            "Legacy workspace view — tasks are managed by the live orchestration (see the Navigator view or the web UI)";
+
     private TableViewer taskViewer;
     private Label statusLabel;
 
@@ -88,8 +92,14 @@ public class TasksAndAgentsView extends ViewPart {
             return;
         }
 
+        java.util.List<AgentTask> tasks = ws.getCurrentWorkspace().getTasks();
+        if (tasks == null || tasks.isEmpty()) {
+            statusLabel.setText(LEGACY_TASK_NOTICE);
+            taskViewer.setInput(Collections.emptyList());
+            return;
+        }
         statusLabel.setText("");
-        taskViewer.setInput(ws.getCurrentWorkspace().getTasks());
+        taskViewer.setInput(tasks);
     }
 
     @Override
