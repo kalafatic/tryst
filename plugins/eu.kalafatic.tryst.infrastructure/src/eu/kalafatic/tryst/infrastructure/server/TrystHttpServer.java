@@ -8456,13 +8456,35 @@ public class TrystHttpServer implements TrystHttpService {
                         .ctx-menu-tryst .ctx-sep { height: 1px; margin: 4px 0; background: var(--border); }
                         .ctx-menu-tryst .ctx-danger { color: #ff7b72; }
                     </style>
-                    <div id="trystCtxMenu" class="ctx-menu-tryst" role="menu" style="display:none;"></div>
+                    <div id="trystCtxMenu" class="ctx-menu-tryst" role="menu" aria-label="Context actions" style="display:none;"></div>
                     <script>
                         /* Unified contextual actions (Darwin Family contract v1.0) — same
-                           action ids/domain operations as the RCP navigator menus. */
+                           action ids/domain operations as the RCP navigator menus.
+                           Keyboard support: focus first enabled item on open, ArrowUp/ArrowDown
+                           navigation, Enter activates, Escape closes and restores focus. */
                         (function () {
                             const menu = document.getElementById('trystCtxMenu');
-                            function closeMenu() { menu.style.display = 'none'; menu.innerHTML = ''; }
+                            let lastTrigger = null;
+                            function closeMenu() {
+                                menu.style.display = 'none';
+                                menu.innerHTML = '';
+                                if (lastTrigger) {
+                                    try { lastTrigger.focus(); } catch (e) {}
+                                    lastTrigger = null;
+                                }
+                            }
+                            function enabledItems() {
+                                return Array.prototype.filter.call(
+                                    menu.querySelectorAll('button[role="menuitem"]'),
+                                    item => !item.disabled
+                                );
+                            }
+                            function focusIndex(items, index) {
+                                if (!items.length) { return -1; }
+                                const bounded = (index + items.length) % items.length;
+                                items[bounded].focus();
+                                return bounded;
+                            }
                             async function openMenu(x, y, target) {
                                 closeMenu();
                                 const params = new URLSearchParams();
@@ -8482,14 +8504,17 @@ public class TrystHttpServer implements TrystHttpService {
                                             if (currentGroup !== null) {
                                                 const sep = document.createElement('div');
                                                 sep.className = 'ctx-sep';
+                                                sep.setAttribute('role', 'separator');
                                                 menu.appendChild(sep);
                                             }
                                             currentGroup = action.group;
                                         }
                                         const item = document.createElement('button');
                                         item.type = 'button';
+                                        item.setAttribute('role', 'menuitem');
                                         item.textContent = action.label;
                                         item.disabled = !action.enabled;
+                                        item.setAttribute('aria-disabled', action.enabled ? 'false' : 'true');
                                         item.className = action.dangerous ? 'ctx-danger' : '';
                                         item.title = action.description + (action.enabled ? '' : ' — ' + (action.disabledReason || 'unavailable'));
                                         if (action.enabled) {
@@ -8516,6 +8541,8 @@ public class TrystHttpServer implements TrystHttpService {
                                     menu.style.display = 'block';
                                     menu.style.left = Math.min(x, window.innerWidth - 240) + 'px';
                                     menu.style.top = Math.min(y, window.innerHeight - menu.offsetHeight - 8) + 'px';
+                                    lastTrigger = target;
+                                    focusIndex(enabledItems(), 0);
                                 } catch (e) { /* backend unavailable */ }
                             }
                             document.addEventListener('contextmenu', (event) => {
@@ -8528,7 +8555,35 @@ public class TrystHttpServer implements TrystHttpService {
                                 if (!menu.contains(event.target)) { closeMenu(); }
                             });
                             document.addEventListener('keydown', (event) => {
-                                if (event.key === 'Escape') { closeMenu(); }
+                                if (menu.style.display !== 'block') { return; }
+                                const items = enabledItems();
+                                if (event.key === 'Escape') {
+                                    event.preventDefault();
+                                    closeMenu();
+                                    return;
+                                }
+                                if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                                    event.preventDefault();
+                                    if (!items.length) { return; }
+                                    const current = items.indexOf(document.activeElement);
+                                    const delta = event.key === 'ArrowDown' ? 1 : -1;
+                                    focusIndex(items, current < 0 ? (event.key === 'ArrowDown' ? 0 : items.length - 1) : current + delta);
+                                    return;
+                                }
+                                if (event.key === 'Enter') {
+                                    event.preventDefault();
+                                    if (document.activeElement && menu.contains(document.activeElement)
+                                            && !document.activeElement.disabled) {
+                                        document.activeElement.click();
+                                    }
+                                    return;
+                                }
+                                if (event.key === 'Tab') {
+                                    // Keep keyboard focus inside the menu while it is open.
+                                    event.preventDefault();
+                                    const current = items.indexOf(document.activeElement);
+                                    focusIndex(items, (current < 0 ? 0 : current) + (event.shiftKey ? -1 : 1));
+                                }
                             });
                         })();
                     </script>

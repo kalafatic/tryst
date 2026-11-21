@@ -1,11 +1,16 @@
 package eu.kalafatic.tryst.ui.view;
 
+import eu.kalafatic.tryst.application.launcher.TerminalLauncher;
 import eu.kalafatic.tryst.domain.model.Project;
+import eu.kalafatic.tryst.domain.service.WorkspaceService;
 import eu.kalafatic.tryst.ui.TrystUiServices;
 import eu.kalafatic.tryst.ui.controller.ProjectExplorerController;
 import org.eclipse.jface.action.Action;
+import org.eclipse.jface.action.IMenuListener;
 import org.eclipse.jface.action.IMenuManager;
 import org.eclipse.jface.action.IToolBarManager;
+import org.eclipse.jface.action.MenuManager;
+import org.eclipse.jface.action.Separator;
 import org.eclipse.jface.dialogs.InputDialog;
 import org.eclipse.jface.viewers.ArrayContentProvider;
 import org.eclipse.jface.viewers.IStructuredSelection;
@@ -13,17 +18,26 @@ import org.eclipse.jface.viewers.LabelProvider;
 import org.eclipse.jface.viewers.TableViewer;
 import org.eclipse.jface.window.Window;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.dnd.Clipboard;
+import org.eclipse.swt.dnd.TextTransfer;
+import org.eclipse.swt.dnd.Transfer;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
+import org.eclipse.swt.widgets.Menu;
 import org.eclipse.ui.part.ViewPart;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
  * View presenting project list in the left dock of TRYST.
  * Contains no business logic; delegates completely to ProjectExplorerController.
+ *
+ * <p>Context menu (Family UX standard v1.0): Refresh, Copy Path, Open Terminal for the
+ * selected project location (workspace root fallback). "Open" is intentionally omitted:
+ * this view lists projects only and has no file-open support.
  */
 public class ProjectExplorerView extends ViewPart {
 
@@ -72,6 +86,7 @@ public class ProjectExplorerView extends ViewPart {
         viewer.setInput(controller.getProjects());
 
         createActions();
+        createContextMenu();
     }
 
     private void createActions() {
@@ -98,6 +113,96 @@ public class ProjectExplorerView extends ViewPart {
 
         IMenuManager menu = getViewSite().getActionBars().getMenuManager();
         menu.add(addProjectAction);
+    }
+
+    private void createContextMenu() {
+        MenuManager menuMgr = new MenuManager("#ProjectExplorerPopupMenu");
+        menuMgr.setRemoveAllWhenShown(true);
+        menuMgr.addMenuListener(new IMenuListener() {
+            @Override
+            public void menuAboutToShow(IMenuManager manager) {
+                IStructuredSelection selection = viewer.getStructuredSelection();
+                Project selectedProject = (!selection.isEmpty() && selection.getFirstElement() instanceof Project project)
+                        ? project
+                        : null;
+                populateContextMenu(manager, selectedProject);
+            }
+        });
+        Menu menu = menuMgr.createContextMenu(viewer.getControl());
+        viewer.getControl().setMenu(menu);
+        getSite().registerContextMenu(menuMgr, viewer);
+    }
+
+    private void populateContextMenu(IMenuManager manager, Project selectedProject) {
+        manager.add(new Action("Refresh") {
+            @Override
+            public void run() {
+                if (controller != null && viewer != null && !viewer.getControl().isDisposed()) {
+                    viewer.setInput(controller.getProjects());
+                    viewer.refresh();
+                }
+            }
+        });
+
+        if (selectedProject != null) {
+            final Path location = selectedProject.getLocation();
+            manager.add(new Action("Copy Path") {
+                @Override
+                public void run() {
+                    if (location != null) {
+                        copyToClipboard(location.toString());
+                    }
+                }
+            });
+            manager.add(new Action("Open Terminal") {
+                @Override
+                public void run() {
+                    TerminalLauncher.launchWithUi(getSite().getShell(), resolveTerminalDirectory(location));
+                }
+            });
+        } else {
+            manager.add(new Separator());
+            manager.add(new Action("Open Terminal") {
+                @Override
+                public void run() {
+                    TerminalLauncher.launchWithUi(getSite().getShell(), resolveTerminalDirectory(null));
+                }
+            });
+        }
+    }
+
+    /**
+     * Resolves the directory the terminal should open in: the selected project location when
+     * it exists, otherwise the current workspace root (user home fallback handled by the
+     * shared {@link TerminalLauncher}).
+     */
+    private Path resolveTerminalDirectory(Path projectLocation) {
+        if (projectLocation != null && Files.isDirectory(projectLocation)) {
+            return projectLocation;
+        }
+        WorkspaceService workspaceService = TrystUiServices.getWorkspaceService();
+        if (workspaceService != null) {
+            try {
+                var workspace = workspaceService.getCurrentWorkspace();
+                if (workspace != null && workspace.getRootPath() != null && Files.isDirectory(workspace.getRootPath())) {
+                    return workspace.getRootPath();
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return null;
+    }
+
+    private void copyToClipboard(String text) {
+        if (text == null) {
+            return;
+        }
+        Clipboard clipboard = new Clipboard(getSite().getShell().getDisplay());
+        try {
+            clipboard.setContents(new Object[]{text}, new Transfer[]{TextTransfer.getInstance()});
+        } finally {
+            clipboard.dispose();
+        }
     }
 
     @Override

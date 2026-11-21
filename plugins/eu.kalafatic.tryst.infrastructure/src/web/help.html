@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TRYST Help</title>
+<style>
+    :root {
+        --bg: #f8fafc; --panel: #ffffff; --border: #cbd5e1; --text: #0f172a;
+        --muted: #475569; --primary: #0284c7; --primary-dark: #0369a1;
+        --code-bg: #f1f5f9; --green: #16a34a;
+    }
+    * { box-sizing: border-box; }
+    body { font-family: "Segoe UI", Arial, -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+           margin: 0; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.55; }
+    header { background: #ffffff; border-bottom: 1px solid var(--border); padding: 14px 28px; }
+    header h1 { margin: 0; font-size: 19px; color: var(--text); }
+    header p { margin: 4px 0 0 0; color: var(--muted); font-size: 13px; }
+    .layout { display: flex; max-width: 1180px; margin: 0 auto; }
+    nav.toc { width: 240px; min-width: 200px; padding: 22px 14px; position: sticky; top: 0; align-self: flex-start; }
+    nav.toc a { display: block; color: var(--muted); text-decoration: none; padding: 4px 10px;
+                border-left: 3px solid transparent; font-size: 13px; }
+    nav.toc a:hover { color: var(--text); background: #eef2f7; }
+    nav.toc a.section { font-weight: 600; color: var(--text); margin-top: 8px; }
+    main { flex: 1; padding: 22px 28px 80px 10px; min-width: 0; }
+    section.card { background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+                   padding: 20px 24px; margin-bottom: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+    h2 { margin: 0 0 10px 0; font-size: 18px; }
+    h3 { margin: 18px 0 8px 0; font-size: 15px; color: var(--primary-dark); }
+    p, li { color: var(--text); }
+    code { background: var(--code-bg); border: 1px solid var(--border); border-radius: 3px;
+           padding: 1px 5px; font-family: Consolas, "Courier New", monospace; font-size: 12.5px; }
+    pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 5px;
+          padding: 12px 14px; overflow-x: auto; font-family: Consolas, "Courier New", monospace;
+          font-size: 12.5px; line-height: 1.5; }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 13px; }
+    th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; background: #f8fafc; }
+    .note { border-left: 4px solid var(--primary); background: #e0f2fe33; padding: 10px 14px;
+            border-radius: 3px; margin: 12px 0; color: var(--muted); font-size: 13px; }
+    .anchor { scroll-margin-top: 14px; }
+</style>
+</head>
+<body>
+<header>
+    <h1>TRYST – AI Development Environment</h1>
+    <p>Web help served by the embedded TRYST HTTP server. Press <code>F1</code> in any view for context-specific help.</p>
+</header>
+<div class="layout">
+    <nav class="toc" aria-label="Help contents">
+        <a href="#top" class="section">Top</a>
+        <a href="#getting-started" class="section">Getting Started</a>
+        <a href="#shortcuts" class="section">Keyboard Shortcuts</a>
+        <a href="#context" class="section">Context Help</a>
+        <a href="#context-navigator">&#8226; Navigator</a>
+        <a href="#context-console">&#8226; Console</a>
+        <a href="#context-studio">&#8226; Studio Editor</a>
+        <a href="#context-database">&#8226; Database</a>
+        <a href="#context-teip">&#8226; TEIP</a>
+        <a href="#context-administration">&#8226; Administration Views</a>
+        <a href="#context-browser">&#8226; Embedded Browser</a>
+        <a href="#cli" class="section">CLI Commands</a>
+        <a href="#diagnostics" class="section">Diagnostics</a>
+    </nav>
+    <main>
+        <section class="card anchor" id="top">
+            <h2>TRYST Help</h2>
+            <p>TRYST is a Java 21 Eclipse RCP / OSGi platform that runs as a professional IDE and as a
+               headless autonomous development server. The IDE and the server share one core: projects,
+               tasks, agents, code reviews, persistence (SQLite) and the embedded HTTP/TCP services.</p>
+            <p>This page documents the workbench (F1 context help, keyboard shortcuts), the headless CLI
+               and the diagnostics endpoints. It is served from the same embedded HTTP server that hosts
+               the TRYST web client.</p>
+        </section>
+
+        <section class="card anchor" id="getting-started">
+            <h2>Getting Started</h2>
+            <h3>Launch the workbench</h3>
+            <pre>./tryst</pre>
+            <h3>Launch the headless server</h3>
+            <pre>./tryst -nosplash -application eu.kalafatic.tryst.application.server</pre>
+            <p>With no command argument on a terminal (TTY) the server starts an interactive REPL
+               (<code>tryst&gt;</code> prompt). Without a TTY it runs as a daemon until stopped.</p>
+            <h3>Open the web interface</h3>
+            <p>Use the menu <code>Tools &rarr; Open TRYST Web Interface</code>, or run the CLI command
+               <code>/web</code> to print the live URL (the HTTP port is resolved at runtime and may
+               differ from the default 38080 when a fallback port is allocated).</p>
+            <h3>Submit a task</h3>
+            <p>Use <code>File &rarr; New Task&hellip;</code>, which opens the web intake form, or create
+               tasks through the <code>Tasks</code> menu and the Studio editor pages.</p>
+            <h3>Open a terminal in the workspace</h3>
+            <p>Use <code>Tools &rarr; Open Terminal</code>; in the Navigator and Project Explorer views,
+               the context menus offer <code>Open Terminal</code> for the selected project/repository.</p>
+        </section>
+
+        <section class="card anchor" id="shortcuts">
+            <h2>Keyboard Shortcuts</h2>
+            <p>TRYST uses the standard Eclipse 3.x workbench key bindings. No custom TRYST key bindings
+               are defined; the workbench defaults apply, plus one TRYST-specific key:</p>
+            <table>
+                <tr><th>Key</th><th>Action</th></tr>
+                <tr><td><code>F1</code></td><td>Open TRYST web help for the active view/editor (TRYST-specific)</td></tr>
+                <tr><td><code>Ctrl+C</code> / <code>Ctrl+X</code> / <code>Ctrl+V</code></td><td>Copy / Cut / Paste</td></tr>
+                <tr><td><code>Ctrl+A</code></td><td>Select all</td></tr>
+                <tr><td><code>Ctrl+Z</code> / <code>Ctrl+Y</code></td><td>Undo / Redo</td></tr>
+                <tr><td><code>Ctrl+S</code></td><td>Save active editor</td></tr>
+                <tr><td><code>Alt+Shift+Q</code></td><td>Show View dialog (Eclipse standard)</td></tr>
+                <tr><td><code>Ctrl+Shift+L</code></td><td>Show Eclipse key assist (if available)</td></tr>
+            </table>
+            <div class="note">F1 only reacts to a plain press (no <code>Ctrl</code>/<code>Shift</code>/<code>Alt</code>).
+            The anchor is mapped from the active part id; unknown parts fall back to the generic context section.</div>
+        </section>
+
+        <section class="card anchor" id="context">
+            <h2>Context Help</h2>
+            <p>Pressing <code>F1</code> (or <code>Help &rarr; Context Help</code>) opens this page at the
+               section describing the active view or editor.</p>
+
+            <h3 class="anchor" id="context-navigator">Navigator</h3>
+            <p>The <b>TRYST Navigator</b> is the flagship hierarchical view: Servers, Sessions, Tasks
+               (partitioned by lifecycle status), Projects &amp; Repositories, Code Reviews, Users,
+               TEIP/AI integrations, Database tables and System items.</p>
+            <ul>
+                <li>Double-click a node to open the matching Studio editor page.</li>
+                <li>Right-click for node menus: copy ids/paths, task lifecycle actions
+                    (start/pause/resume/cancel/archive/delete), Git pull, and
+                    <code>Open Terminal</code> for projects/repositories.</li>
+                <li><b>More Actions</b> lists the unified contextual actions (Darwin Family
+                    contextual contract) resolved by the registry.</li>
+            </ul>
+
+            <h3 class="anchor" id="context-console">Console</h3>
+            <p>The <b>Console Output</b> view shows live application output. Its context menu offers
+               select all, copy, and clearing actions.</p>
+
+            <h3 class="anchor" id="context-studio">Studio Editor</h3>
+            <p>The <b>TRYST Studio</b> editor hosts the administration pages: Overview Dashboard,
+               Task Execution, Task Management, Task Details, Project Explorer, Git, Build, Test
+               Quality, Code Review, AI Integration, MCP, TEIP Integration, Database, Server
+               Monitoring and Configuration. Select pages via the editor header or by double-clicking
+               Navigator nodes.</p>
+
+            <h3 class="anchor" id="context-database">Database</h3>
+            <p>The <b>Database</b> page and <b>Database Admin</b> view expose the SQLite database:
+               schema/table browsing and integrity tools. The <code>Database</code> menu provides
+               PRAGMA integrity checks, foreign-key verification, WAL checkpoint and VACUUM.</p>
+
+            <h3 class="anchor" id="context-teip">TEIP</h3>
+            <p>The <b>TEIP</b> menu and TEIP Integration page manage the EVO bridge: status/health
+               checks, available EVO capabilities, task routing and the routing history.</p>
+
+            <h3 class="anchor" id="context-administration">Administration Views</h3>
+            <p><b>Users &amp; Sessions</b>, <b>User Detail</b>, <b>Session Detail</b>,
+               <b>Tasks &amp; Agents</b> and <b>Audit &amp; Logs</b> administer the platform. The
+               same data is available headless through <code>/api/admin/*</code> (users, sessions,
+               processes, audit).</p>
+
+            <h3 class="anchor" id="context-browser">Embedded Browser</h3>
+            <p>The <b>Embedded Browser</b> view connects automatically to the active runtime endpoint
+               (no hardcoded port) and hosts the TRYST web client inside the workbench. The
+               <b>Server Overview</b> view summarizes the live server state.</p>
+        </section>
+
+        <section class="card anchor" id="cli">
+            <h2>CLI Commands</h2>
+            <p>The headless server application
+               (<code>-application eu.kalafatic.tryst.application.server</code>) accepts one-shot
+               commands, runs as a daemon without a TTY, or starts an interactive REPL
+               (<code>tryst&gt;</code>) on a terminal. Slash forms (<code>/status</code>,
+               <code>/help</code>, &hellip;) and plain forms are equivalent.</p>
+            <table>
+                <tr><th>Command</th><th>Description</th></tr>
+                <tr><td><code>(no arguments)</code></td><td>Start the server and keep serving (REPL on a TTY, daemon otherwise).</td></tr>
+                <tr><td><code>help [topic]</code></td><td>Print general help or detailed help for one command.</td></tr>
+                <tr><td><code>status</code></td><td>Start the server, print the live host/port status, exit 0.</td></tr>
+                <tr><td><code>web</code></td><td>Print the live TRYST web interface URL.</td></tr>
+                <tr><td><code>terminal [dir]</code></td><td>Open a terminal emulator in the workspace (or the given directory); guarded when no emulator exists.</td></tr>
+                <tr><td><code>models</code></td><td>List published AI models (GET <code>/api/models</code>).</td></tr>
+                <tr><td><code>sessions</code></td><td>List tasks (GET <code>/api/tasks</code>); TRYST has no public <code>/api/sessions</code> endpoint.</td></tr>
+                <tr><td><code>providers</code></td><td>List AI providers referenced by the published models (GET <code>/api/models</code>).</td></tr>
+                <tr><td><code>config [show]</code></td><td>Print the effective configuration; no secrets are printed.</td></tr>
+                <tr><td><code>logs [show]</code></td><td>Print the TRYST log file location and its last lines.</td></tr>
+                <tr><td><code>stop</code></td><td>Graceful shutdown of the server running in this session (REPL/daemon).</td></tr>
+                <tr><td><code>restart</code></td><td>Explains the supported restart procedure (relaunch the process).</td></tr>
+                <tr><td><code>start</code></td><td>Explains the server start modes.</td></tr>
+                <tr><td><code>exit</code></td><td>Leave the interactive REPL.</td></tr>
+            </table>
+            <div class="note">Unknown commands fail with exit code 1 and print the nearest command
+            suggestions. <code>/agents</code> is intentionally not exposed: TRYST has no
+            <code>/api/agents</code> endpoint.</div>
+            <h3>TCP text protocol</h3>
+            <p>The TCP service (default port 38280) speaks a simple line protocol:
+               <code>PING</code>, <code>STATUS</code>, <code>PROJECTS</code>, <code>TASKS</code>,
+               <code>HELP</code> (also <code>/help</code>), <code>QUIT</code>, <code>EXIT</code>.</p>
+        </section>
+
+        <section class="card anchor" id="diagnostics">
+            <h2>Diagnostics</h2>
+            <p>Diagnostics are served by the embedded HTTP server at the live runtime endpoint
+               (<code>Tools &rarr; Open TRYST Web Interface</code> prints it; <code>Help &rarr;
+               Diagnostics</code> opens the status endpoint directly).</p>
+            <table>
+                <tr><th>Endpoint</th><th>Purpose</th></tr>
+                <tr><td><code>GET /api/status</code></td><td>Server status summary (readiness, health components).</td></tr>
+                <tr><td><code>GET /api/notifications/stream</code></td><td>Server-sent event stream of notifications (supports <code>lastEventId</code>).</td></tr>
+                <tr><td><code>GET /api/admin/*</code></td><td>Administration: users, sessions, processes, audit (authentication applies outside development mode).</td></tr>
+            </table>
+            <div class="note">Logs: the TRYST log file lives at <code>~/.tryst/logs/tryst.log</code>
+            (override with <code>-Dtryst.log.dir=...</code>); the CLI command <code>logs show</code>
+            prints its location and tail.</div>
+        </section>
+    </main>
+</div>
+</body>
+</html>

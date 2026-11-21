@@ -311,6 +311,12 @@ public class TrystNavigatorView extends ViewPart implements WorkspaceChangeListe
                             if (p.getLocation() != null) copyToClipboard(p.getLocation().toString());
                         }
                     });
+                    manager.add(new Action("Open Terminal") {
+                        @Override
+                        public void run() {
+                            openTerminalForPath(p.getLocation());
+                        }
+                    });
                     manager.add(new Action("Create Task for Project") {
                         @Override
                         public void run() {
@@ -342,6 +348,12 @@ public class TrystNavigatorView extends ViewPart implements WorkspaceChangeListe
                         @Override
                         public void run() {
                             copyToClipboard(p.getLocation().toString());
+                        }
+                    });
+                    manager.add(new Action("Open Terminal") {
+                        @Override
+                        public void run() {
+                            openTerminalForPath(p.getLocation());
                         }
                     });
                 }
@@ -690,6 +702,15 @@ public class TrystNavigatorView extends ViewPart implements WorkspaceChangeListe
         } finally {
             cb.dispose();
         }
+    }
+
+    /**
+     * Opens a terminal in the given node filesystem path via the shared
+     * {@link eu.kalafatic.tryst.application.launcher.TerminalLauncher}; non-existent paths
+     * fall back to the workspace root / user home inside the launcher.
+     */
+    private void openTerminalForPath(java.nio.file.Path path) {
+        eu.kalafatic.tryst.application.launcher.TerminalLauncher.launchWithUi(getSite().getShell(), path);
     }
 
     public void refreshAsync() {

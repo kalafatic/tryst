@@ -23,8 +23,8 @@ import java.util.Arrays;
  *
  * <p>All actions use standard Eclipse mechanisms:
  * <ul>
- *   <li>Help Contents uses the workbench help system ({@code IWorkbenchHelpSystem}) and reports
- *       clearly when no TRYST documentation content is published.</li>
+ *   <li>Help Contents opens the TRYST web help page served by the embedded HTTP server
+ *       at the live runtime endpoint ({@link HelpLauncher}).</li>
  *   <li>About opens the native Eclipse About dialog (command
  *       {@code org.eclipse.ui.help.aboutAction}).</li>
  *   <li>Installation Details opens the native Eclipse Installation Details dialog (command
@@ -43,8 +43,6 @@ public final class TrystHelpMenuSupport {
     public static final String COMMAND_CUSTOMIZE_PERSPECTIVE = "org.eclipse.ui.window.customizePerspective";
     public static final String COMMAND_INSTALL_NEW_SOFTWARE = "org.eclipse.equinox.p2.ui.sdk.install";
     public static final String SITES_PREFERENCE_PAGE = "org.eclipse.equinox.internal.p2.ui.sdk.SitesPreferencePage";
-
-    private static final String HELP_TOC_EXTENSION_POINT = "org.eclipse.help.toc";
 
     private TrystHelpMenuSupport() {
     }
@@ -117,9 +115,9 @@ public final class TrystHelpMenuSupport {
     }
 
     /**
-     * Creates the "Help Contents" action. Opens the native Eclipse help system when TRYST
-     * documentation content is available, otherwise reports explicitly that documentation is
-     * not yet available.
+     * Creates the "Help Contents" action. Opens the TRYST web help page
+     * ({@code <context>/help.html#top}) served by the embedded HTTP server, using the
+     * live runtime endpoint so no HTTP port is ever hardcoded.
      */
     public static IAction createHelpContentsAction(IWorkbenchWindow window) {
         Action action = new Action("&Help Contents") {
@@ -130,34 +128,16 @@ public final class TrystHelpMenuSupport {
                     return;
                 }
                 try {
-                    if (isHelpContentAvailable()) {
-                        window.getWorkbench().getHelpSystem().displayHelp();
-                    } else {
-                        MessageDialog.openInformation(shell, "Help Contents",
-                                "TRYST documentation is not yet available.\n\n"
-                                        + "The Eclipse help system is installed, but no TRYST "
-                                        + "documentation content has been published.");
-                    }
+                    HelpLauncher.openTopic(window, HelpLauncher.ANCHOR_TOP);
                 } catch (Throwable t) {
                     TrystLog.warn(TrystHelpMenuSupport.class, "Failed to open help contents: " + t.getMessage());
                     MessageDialog.openInformation(shell, "Help Contents",
-                            "TRYST documentation is not yet available.\n\n"
-                                    + "The Eclipse help system is installed, but no TRYST "
-                                    + "documentation content has been published.");
+                            "TRYST help could not be opened:\n\n" + t.getMessage());
                 }
             }
         };
         action.setId("eu.kalafatic.tryst.application.action.helpContents");
         return action;
-    }
-
-    private static boolean isHelpContentAvailable() {
-        try {
-            return Platform.getExtensionRegistry() != null
-                    && Platform.getExtensionRegistry().getConfigurationElementsFor(HELP_TOC_EXTENSION_POINT).length > 0;
-        } catch (Throwable t) {
-            return false;
-        }
     }
 
     /**

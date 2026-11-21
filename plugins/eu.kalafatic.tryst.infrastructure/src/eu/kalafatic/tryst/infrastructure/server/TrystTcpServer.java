@@ -139,6 +139,9 @@ public class TrystTcpServer implements TrystTcpService {
     private String processCommand(String commandLine) {
         String[] parts = commandLine.split("\\s+", 2);
         String cmd = parts[0].toUpperCase();
+        if (cmd.startsWith("/")) {
+            cmd = cmd.substring(1); // tolerate slash forms such as /help and /ping
+        }
 
         switch (cmd) {
             case "PING" -> {
@@ -160,6 +163,16 @@ public class TrystTcpServer implements TrystTcpService {
                     return "OK count=" + tasks.size();
                 }
                 return "OK count=0";
+            }
+            case "HELP" -> {
+                return "OK TRYST-TCP/1.0 commands:\n"
+                        + "  PING      Health probe; replies PONG\n"
+                        + "  STATUS    Server status (host and bound port)\n"
+                        + "  PROJECTS  Current workspace project count\n"
+                        + "  TASKS     Current workspace task count\n"
+                        + "  HELP      This command list (also /help)\n"
+                        + "  QUIT      Close the connection\n"
+                        + "  EXIT      Close the connection";
             }
             default -> {
                 return "ERR Unknown command: " + cmd;

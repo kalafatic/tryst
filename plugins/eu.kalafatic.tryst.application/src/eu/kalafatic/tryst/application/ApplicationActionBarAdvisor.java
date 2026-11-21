@@ -26,7 +26,6 @@ import org.osgi.framework.BundleContext;
 import org.osgi.framework.FrameworkUtil;
 import org.osgi.framework.ServiceReference;
 
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -36,7 +35,7 @@ import java.util.List;
 
 /**
  * Workbench action bar configuration defining the standard Eclipse TRYST top menus:
- * File, Edit, Navigate, Project, Tasks, Database, TEIP, Web, Observability, Window, Help.
+ * File, Edit, Navigate, Project, Tasks, Database, TEIP, Web, Tools, Observability, Window, Help.
  */
 public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
 
@@ -170,7 +169,7 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
                 // Task intake is owned by the live orchestration pipeline (TaskOrchestrator +
                 // TaskIntakeService) exposed through the web UI. Open the web client directly
                 // on the intake form instead of creating a dead legacy AgentTask.
-                String url = resolveWebUrl();
+                String url = eu.kalafatic.tryst.application.launcher.WebInterfaceLauncher.resolveUrl();
                 if (!url.contains("?")) {
                     url += "?newTask=1";
                 } else {
@@ -220,15 +219,10 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
         openCentralWorkspaceAction.setId("eu.kalafatic.tryst.application.action.openCentralWorkspace");
         register(openCentralWorkspaceAction);
 
-        openWebBrowserAction = new Action("Open TRYST Web Client") {
+        openWebBrowserAction = new Action("Open TRYST &Web Interface") {
             @Override
             public void run() {
-                String url = resolveWebUrl();
-                boolean success = Program.launch(url);
-                if (!success) {
-                    TrystLog.warn(ApplicationActionBarAdvisor.class, "Failed to launch external browser for: " + url);
-                    MessageDialog.openInformation(window.getShell(), "TRYST Web", "Server running at: " + url);
-                }
+                eu.kalafatic.tryst.application.launcher.WebInterfaceLauncher.open(window.getShell());
             }
         };
         openWebBrowserAction.setId("eu.kalafatic.tryst.application.action.openWebBrowser");
@@ -238,23 +232,8 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
             @Override
             public void run() {
                 String directory = resolveWorkspaceDirectory();
-                if (directory == null || directory.isBlank()) {
-                    directory = System.getProperty("user.home", ".");
-                }
-                String[] command = terminalCommand(directory);
-                if (command == null) {
-                    MessageDialog.openWarning(window.getShell(), "Open Terminal",
-                            "No supported terminal emulator found on this system "
-                                    + "(tried x-terminal-emulator, gnome-terminal, konsole, xterm).");
-                    return;
-                }
-                try {
-                    new ProcessBuilder(command).start();
-                } catch (IOException e) {
-                    TrystLog.error(ApplicationActionBarAdvisor.class, "Failed to open terminal in " + directory + ": " + e.getMessage(), e);
-                    MessageDialog.openError(window.getShell(), "Open Terminal",
-                            "Failed to open terminal:\n\n" + e.getMessage());
-                }
+                Path terminalDir = directory != null ? Path.of(directory) : null;
+                eu.kalafatic.tryst.application.launcher.TerminalLauncher.launchWithUi(window.getShell(), terminalDir);
             }
         };
         openTerminalAction.setId("eu.kalafatic.tryst.application.action.openTerminal");
@@ -616,35 +595,6 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
         }
     }
 
-    private String resolveWebUrl() {
-        var coord = resolveCoordinator();
-        if (coord != null && coord.getConfigurationService() != null) {
-            var reg = coord.getConfigurationService().getEndpointRegistry();
-            if (reg != null && reg.getCurrentEndpoint() != null) {
-                var ep = reg.getCurrentEndpoint();
-                if (ep.externalUrl() != null && !ep.externalUrl().isBlank()) return ep.externalUrl();
-                if (ep.internalUrl() != null && !ep.internalUrl().isBlank()) return ep.internalUrl();
-                if (ep.canonicalUrl() != null && !ep.canonicalUrl().isBlank()) return ep.canonicalUrl();
-            }
-            if (coord.getConfiguration() != null) {
-                var cfg = coord.getConfiguration();
-                if (coord.getHttpService() != null && coord.getHttpService().isRunning()) {
-                    return cfg.resolveEffectiveExternalUrl(coord.getHttpService().getPort());
-                }
-                // Live port from the authoritative runtime port registry (bound socket
-                // or coherent allocation) instead of a hardcoded listener port.
-                var portRegistry = coord.getConfigurationService().getPortRegistry();
-                if (portRegistry != null) {
-                    return "http://127.0.0.1:" + portRegistry.getEffectivePort(eu.kalafatic.tryst.core.port.ServicePortIdentifier.HTTP_SERVICE) + cfg.contextPath();
-                }
-                if (cfg.canonicalUrl() != null) {
-                    return cfg.canonicalUrl();
-                }
-            }
-        }
-        return "http://127.0.0.1:" + eu.kalafatic.tryst.core.port.ServicePortIdentifier.DEFAULT_HTTP_PORT + "/tryst";
-    }
-
     /**
      * Resolves the current workspace root directory from the workspace service when
      * available; returns {@code null} when no live workspace is loaded.
@@ -664,39 +614,6 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
         return null;
     }
 
-    private String[] terminalCommand(String directory) {
-        if (hasCommand("x-terminal-emulator")) {
-            return new String[]{"x-terminal-emulator", "--working-directory=" + directory};
-        }
-        if (hasCommand("gnome-terminal")) {
-            return new String[]{"gnome-terminal", "--working-directory=" + directory};
-        }
-        if (hasCommand("konsole")) {
-            return new String[]{"konsole", "--workdir", directory};
-        }
-        if (hasCommand("xterm")) {
-            return new String[]{"xterm", "-e", "cd " + shellQuote(directory) + " && $SHELL"};
-        }
-        return null;
-    }
-
-    private boolean hasCommand(String command) {
-        String path = System.getenv("PATH");
-        if (path == null) {
-            return false;
-        }
-        for (String dir : path.split(":")) {
-            if (Files.isExecutable(Path.of(dir, command))) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private String shellQuote(String value) {
-        return "'" + value.replace("'", "'\\''") + "'";
-    }
-
     @Override
     protected void fillMenuBar(IMenuManager menuBar) {
         IWorkbenchWindow window = getActionBarConfigurer().getWindowConfigurer().getWindow();
@@ -705,8 +622,6 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
         MenuManager fileMenu = new MenuManager("&File", IWorkbenchActionConstants.M_FILE);
         fileMenu.add(new GroupMarker(IWorkbenchActionConstants.FILE_START));
         fileMenu.add(newTaskAction);
-        fileMenu.add(new Separator());
-        fileMenu.add(openWebBrowserAction);
         fileMenu.add(refreshAllAction);
         fileMenu.add(new Separator());
         fileMenu.add(new GroupMarker(IWorkbenchActionConstants.MB_ADDITIONS));
@@ -739,7 +654,6 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
         navigateMenu.add(openConsoleViewAction);
         navigateMenu.add(new Separator());
         navigateMenu.add(openCentralWorkspaceAction);
-        navigateMenu.add(openWebBrowserAction);
         navigateMenu.add(new GroupMarker(IWorkbenchActionConstants.MB_ADDITIONS));
         menuBar.add(navigateMenu);
 
@@ -788,11 +702,16 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
         menuBar.add(teipMenu);
 
         MenuManager webMenu = new MenuManager("&Web", "web");
-        webMenu.add(openWebBrowserAction);
-        webMenu.add(openTerminalAction);
-        webMenu.add(new Separator());
         webMenu.add(new GroupMarker(IWorkbenchActionConstants.MB_ADDITIONS));
         menuBar.add(webMenu);
+
+        // Tools menu (Family UX standard v1.0): single home of the terminal and web
+        // interface launch actions.
+        MenuManager toolsMenu = new MenuManager("&Tools", "tools");
+        toolsMenu.add(openTerminalAction);
+        toolsMenu.add(openWebBrowserAction);
+        toolsMenu.add(new GroupMarker(IWorkbenchActionConstants.MB_ADDITIONS));
+        menuBar.add(toolsMenu);
 
         MenuManager obsMenu = new MenuManager("&Observability", "observability");
         obsMenu.add(refreshAllAction);
@@ -815,10 +734,40 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
         windowMenu.add(new GroupMarker(IWorkbenchActionConstants.MB_ADDITIONS));
         menuBar.add(windowMenu);
 
-        // --- Standard Help Menu (native Eclipse dialogs and p2 update support) ---
+        // --- Standard Help Menu (web-based help topics, then native Eclipse dialogs and p2) ---
         MenuManager helpMenu = new MenuManager("&Help", IWorkbenchActionConstants.M_HELP);
         helpMenu.add(new GroupMarker(IWorkbenchActionConstants.HELP_START));
         helpMenu.add(eu.kalafatic.tryst.application.help.TrystHelpMenuSupport.createHelpContentsAction(window));
+        helpMenu.add(new Action("&Getting Started") {
+            @Override
+            public void run() {
+                eu.kalafatic.tryst.application.help.HelpLauncher.openTopic(window, eu.kalafatic.tryst.application.help.HelpLauncher.ANCHOR_GETTING_STARTED);
+            }
+        });
+        helpMenu.add(new Action("Context &Help") {
+            @Override
+            public void run() {
+                eu.kalafatic.tryst.application.help.HelpLauncher.openContextHelp(window);
+            }
+        });
+        helpMenu.add(new Action("&Keyboard Shortcuts") {
+            @Override
+            public void run() {
+                eu.kalafatic.tryst.application.help.HelpLauncher.openTopic(window, eu.kalafatic.tryst.application.help.HelpLauncher.ANCHOR_SHORTCUTS);
+            }
+        });
+        helpMenu.add(new Action("&CLI Commands") {
+            @Override
+            public void run() {
+                eu.kalafatic.tryst.application.help.HelpLauncher.openTopic(window, eu.kalafatic.tryst.application.help.HelpLauncher.ANCHOR_CLI);
+            }
+        });
+        helpMenu.add(new Action("&Diagnostics") {
+            @Override
+            public void run() {
+                eu.kalafatic.tryst.application.launcher.WebInterfaceLauncher.openPath(window.getShell(), "/api/status");
+            }
+        });
         helpMenu.add(new Separator());
         helpMenu.add(eu.kalafatic.tryst.application.help.TrystHelpMenuSupport.createAboutAction(window));
         helpMenu.add(eu.kalafatic.tryst.application.help.TrystHelpMenuSupport.createInstallationDetailsItem(window));
