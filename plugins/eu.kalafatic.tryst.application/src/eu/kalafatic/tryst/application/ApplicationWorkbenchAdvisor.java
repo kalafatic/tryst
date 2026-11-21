@@ -76,7 +76,7 @@ public class ApplicationWorkbenchAdvisor extends WorkbenchAdvisor {
                 if (coordinator.getCurrentStage().ordinal() < ApplicationLifecycleStage.APPLICATION_READY.ordinal()) {
                     coordinator.transitionTo(ApplicationLifecycleStage.APPLICATION_READY);
                 }
-                if (!coordinator.isHttpServerRunning()) {
+                if (!coordinator.isHttpServerRunning() && coordinator.isWebServerAutoStart()) {
                     try {
                         coordinator.startHttpServer();
                     } catch (Exception e) {

@@ -21,6 +21,7 @@ public class TelemetryService {
     private final ServerMonitoringService monitoringService;
     private final UserSessionRepository sessionRepository;
     private final TaskRepository taskRepository;
+    private volatile AiMonitoringService aiMonitoringService;
     private ScheduledExecutorService scheduler;
     private final AtomicBoolean running = new AtomicBoolean(false);
 
@@ -37,6 +38,14 @@ public class TelemetryService {
             t.setDaemon(true);
             return t;
         });
+    }
+
+    /**
+     * Optional wiring for real AI latency telemetry. When absent, snapshots record no
+     * value (NaN) instead of a fabricated zero.
+     */
+    public void setAiMonitoringService(AiMonitoringService aiMonitoringService) {
+        this.aiMonitoringService = aiMonitoringService;
     }
 
     public synchronized void start(long intervalSeconds) {
@@ -74,6 +83,15 @@ public class TelemetryService {
                 }
             }
 
+            double aiLatencyMs = Double.NaN;
+            AiMonitoringService aiMonitor = this.aiMonitoringService;
+            if (aiMonitor != null) {
+                AiMonitoringService.AiHealthStatus health = aiMonitor.checkHealth();
+                if (health.totalRequests() > 0 && health.successfulRequests() > 0) {
+                    aiLatencyMs = health.averageLatencyMs();
+                }
+            }
+
             TelemetrySnapshot snapshot = TelemetrySnapshot.create(
                     metrics.systemCpuLoad(),
                     metrics.processCpuLoad(),
@@ -85,7 +103,7 @@ public class TelemetryService {
                     activeSessions,
                     queued,
                     runningTasks,
-                    0.0
+                    aiLatencyMs
             );
 
             telemetryRepository.save(snapshot);

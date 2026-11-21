@@ -8,6 +8,7 @@ import java.io.IOException;
 import java.sql.Connection;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -82,21 +83,88 @@ public class RepositoryPoolManager {
         synchronized (databaseManager.getLock()) {
             try {
                 var conn = databaseManager.getConnection();
+                // Schema (V14): id, project_id, remote_url UNIQUE, mirror_path, default_branch,
+                // last_synced_at, mirror_fingerprint — all NOT NULL except project_id.
                 try (var stmt = conn.prepareStatement(
-                        "INSERT INTO repository_mirrors (id, repository_url, mirror_path, last_sync_at, status) " +
-                        "VALUES (?, ?, ?, ?, ?) " +
-                        "ON CONFLICT(repository_url) DO UPDATE SET mirror_path = excluded.mirror_path, last_sync_at = excluded.last_sync_at, status = excluded.status")) {
+                        "INSERT INTO repository_mirrors (id, remote_url, mirror_path, default_branch, last_synced_at, mirror_fingerprint) " +
+                        "VALUES (?, ?, ?, ?, ?, ?) " +
+                        "ON CONFLICT(remote_url) DO UPDATE SET mirror_path = excluded.mirror_path, " +
+                        "last_synced_at = excluded.last_synced_at, mirror_fingerprint = excluded.mirror_fingerprint")) {
                     stmt.setString(1, java.util.UUID.randomUUID().toString());
                     stmt.setString(2, repoUrl);
                     stmt.setString(3, mirrorDir.toAbsolutePath().toString());
-                    stmt.setString(4, java.time.Instant.now().toString());
-                    stmt.setString(5, "READY");
+                    stmt.setString(4, "main");
+                    stmt.setString(5, java.time.Instant.now().toString());
+                    stmt.setString(6, fingerprintFor(repoUrl, mirrorDir));
                     stmt.executeUpdate();
                 }
             } catch (Exception e) {
                 TrystLog.warn(RepositoryPoolManager.class, "Failed to persist repository mirror metadata: " + e.getMessage());
             }
         }
+    }
+
+    private static String fingerprintFor(String repoUrl, Path mirrorDir) {
+        try {
+            long lastModified = java.nio.file.Files.getLastModifiedTime(mirrorDir.resolve("HEAD")).toMillis();
+            return "sha256:" + Integer.toHexString(Objects.hash(repoUrl, lastModified));
+        } catch (Exception e) {
+            return "sha256:" + Integer.toHexString(Objects.hash(repoUrl));
+        }
+    }
+
+    /**
+     * Detailed mirror status record combining persisted metadata (when available) with
+     * the live filesystem state.
+     */
+    public record MirrorStatus(String remoteUrl, String mirrorPath, String defaultBranch,
+                               String lastSyncedAt, boolean existsOnDisk, String syncState) {}
+
+    /**
+     * Lists repository mirrors with status. Uses the persisted repository_mirrors table
+     * when the database manager is wired, falling back to a filesystem listing.
+     */
+    public List<MirrorStatus> listMirrorStatuses() {
+        List<MirrorStatus> statuses = new ArrayList<>();
+        if (databaseManager != null) {
+            synchronized (databaseManager.getLock()) {
+                try {
+                    var conn = databaseManager.getConnection();
+                    try (var stmt = conn.prepareStatement(
+                            "SELECT remote_url, mirror_path, default_branch, last_synced_at FROM repository_mirrors ORDER BY last_synced_at DESC");
+                         var rs = stmt.executeQuery()) {
+                        while (rs.next()) {
+                            String url = rs.getString("remote_url");
+                            String path = rs.getString("mirror_path");
+                            String branch = rs.getString("default_branch");
+                            String lastSync = rs.getString("last_synced_at");
+                            boolean exists = path != null && java.nio.file.Files.exists(Path.of(path));
+                            String syncState = "UNKNOWN";
+                            if (!exists) {
+                                syncState = "MISSING";
+                            } else {
+                                try {
+                                    Instant lastSyncAt = Instant.parse(lastSync);
+                                    syncState = lastSyncAt.plus(Duration.ofHours(24)).isAfter(Instant.now()) ? "SYNCED" : "STALE";
+                                } catch (Exception e) {
+                                    syncState = "SYNCED";
+                                }
+                            }
+                            statuses.add(new MirrorStatus(url, path, branch != null ? branch : "main", lastSync, exists, syncState));
+                        }
+                    }
+                } catch (Exception e) {
+                    TrystLog.warn(RepositoryPoolManager.class, "Failed to read persisted repository mirrors: " + e.getMessage());
+                }
+            }
+        }
+        if (statuses.isEmpty()) {
+            for (String dir : listMirrors()) {
+                Path p = mirrorsBaseDir.resolve(dir);
+                statuses.add(new MirrorStatus(dir, p.toString(), "main", "", Files.exists(p), Files.exists(p) ? "SYNCED" : "MISSING"));
+            }
+        }
+        return statuses;
     }
 
     /**

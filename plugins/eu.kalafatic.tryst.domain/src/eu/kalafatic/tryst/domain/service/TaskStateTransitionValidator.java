@@ -24,6 +24,7 @@ public final class TaskStateTransitionValidator {
                 TaskStatus.READY,
                 TaskStatus.QUEUED,
                 TaskStatus.RUNNING,
+                TaskStatus.PAUSED,
                 TaskStatus.CANCELLED
         ));
 

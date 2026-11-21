@@ -17,13 +17,20 @@ public class Project {
 
     private final String id;
     private final String ownerId;
-    private final String name;
-    private final String description;
+    private String name;
+    private String description;
     private final Path location;
     private ProjectStatus status;
     private boolean active;
     private final Instant createdAt;
     private Instant updatedAt;
+
+    // Project-level coding configuration (V22). Distinct from task-level intake data.
+    private String repositoryUrl = "";
+    private String defaultBranch = "main";
+    private String buildCommand = "";
+    private String testCommand = "";
+    private String instructions = "";
 
     public Project(String name, Path location) {
         this(name, "", location);
@@ -54,6 +61,75 @@ public class Project {
         this.active = active;
         this.createdAt = Objects.requireNonNull(createdAt, "createdAt must not be null");
         this.updatedAt = Objects.requireNonNull(updatedAt, "updatedAt must not be null");
+    }
+
+    public Project(String id, String ownerId, String name, String description, Path location, ProjectStatus status,
+                   boolean active, Instant createdAt, Instant updatedAt,
+                   String repositoryUrl, String defaultBranch, String buildCommand, String testCommand, String instructions) {
+        this(id, ownerId, name, description, location, status, active, createdAt, updatedAt);
+        this.repositoryUrl = repositoryUrl != null ? repositoryUrl.trim() : "";
+        this.defaultBranch = (defaultBranch != null && !defaultBranch.isBlank()) ? defaultBranch.trim() : "main";
+        this.buildCommand = buildCommand != null ? buildCommand.trim() : "";
+        this.testCommand = testCommand != null ? testCommand.trim() : "";
+        this.instructions = instructions != null ? instructions.trim() : "";
+    }
+
+    public String getRepositoryUrl() {
+        return repositoryUrl;
+    }
+
+    public String getDefaultBranch() {
+        return defaultBranch;
+    }
+
+    public String getBuildCommand() {
+        return buildCommand;
+    }
+
+    public String getTestCommand() {
+        return testCommand;
+    }
+
+    public String getInstructions() {
+        return instructions;
+    }
+
+    public void setRepositoryUrl(String repositoryUrl) {
+        this.repositoryUrl = repositoryUrl != null ? repositoryUrl.trim() : "";
+        this.updatedAt = Instant.now();
+    }
+
+    public void setDefaultBranch(String defaultBranch) {
+        this.defaultBranch = (defaultBranch != null && !defaultBranch.isBlank()) ? defaultBranch.trim() : "main";
+        this.updatedAt = Instant.now();
+    }
+
+    public void setBuildCommand(String buildCommand) {
+        this.buildCommand = buildCommand != null ? buildCommand.trim() : "";
+        this.updatedAt = Instant.now();
+    }
+
+    public void setTestCommand(String testCommand) {
+        this.testCommand = testCommand != null ? testCommand.trim() : "";
+        this.updatedAt = Instant.now();
+    }
+
+    public void setInstructions(String instructions) {
+        this.instructions = instructions != null ? instructions.trim() : "";
+        this.updatedAt = Instant.now();
+    }
+
+    public void setName(String name) {
+        if (name == null || name.trim().isEmpty()) {
+            throw new TrystDomainException("Project name must not be null or blank");
+        }
+        this.name = name.trim();
+        this.updatedAt = Instant.now();
+    }
+
+    public void setDescription(String description) {
+        this.description = description != null ? description.trim() : "";
+        this.updatedAt = Instant.now();
     }
 
     public String getId() {

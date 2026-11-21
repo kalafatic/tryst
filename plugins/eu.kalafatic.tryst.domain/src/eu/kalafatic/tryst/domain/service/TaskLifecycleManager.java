@@ -60,4 +60,14 @@ public class TaskLifecycleManager {
         TaskEvent event = new TaskEvent(task.getId(), task.getStatus(), message, details);
         taskRepository.saveTaskEvent(event);
     }
+
+    /**
+     * Persists the current task state without a lifecycle transition or event row.
+     * Used for late-binding fields (e.g. execution_result_id) that are set after the
+     * final state transition.
+     */
+    public void persist(Task task) {
+        Objects.requireNonNull(task, "task must not be null");
+        taskRepository.saveTask(task);
+    }
 }

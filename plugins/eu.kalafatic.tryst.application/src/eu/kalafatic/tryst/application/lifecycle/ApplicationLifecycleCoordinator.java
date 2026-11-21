@@ -492,7 +492,9 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
                 this.workspaceService,
                 this.gitHubService,
                 this.gitHubCredentialRepository,
-                this.permissionManager
+                this.permissionManager,
+                this.sessionRepository,
+                this.conversationMessageRepository
         );
 
         // TEIP 1.1 EVO Integration Repositories & Services
@@ -568,6 +570,9 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
         } else {
             this.aiMonitoringService = new eu.kalafatic.tryst.domain.service.AiMonitoringService(null);
         }
+        // Real AI latency telemetry: snapshots record measured inference latency
+        // (NaN when no inference has been recorded yet — never a fabricated zero).
+        this.telemetryService.setAiMonitoringService(this.aiMonitoringService);
         this.processExecutionManager = new eu.kalafatic.tryst.domain.service.ProcessExecutionManager();
         this.notificationService = new eu.kalafatic.tryst.domain.service.NotificationService(
                 this.notificationRepository,
@@ -663,6 +668,14 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
             if (this.taskOrchestrator != null && this.taskOrchestrator.getStudioService() != null) {
                 server.setStudioService(this.taskOrchestrator.getStudioService());
             }
+            // Asynchronous Coder 2 wiring: coding sessions (continuation), execution
+            // results (real console/build/test data), conversation history, task
+            // instructions and the legacy inference service (real AI explanations).
+            server.setCodingSessionRepository(this.sessionRepository);
+            server.setExecutionResultRepository(this.executionResultRepository);
+            server.setConversationMessageRepository(this.conversationMessageRepository);
+            server.setTaskInstructionRepository(this.taskInstructionRepository);
+            server.setAiInferenceService(this.aiInferenceService);
 
             // Wire workflow and scheduling services
             if (this.databaseManager != null) {
@@ -685,12 +698,32 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
             registerContextualActions(server);
 
             this.httpService = server;
-            this.httpService.start();
-            if (serverReadinessService != null) {
-                serverReadinessService.markHealthy("HttpServer", java.util.Map.of(
-                        "host", configuration.serverHost(),
-                        "port", Integer.toString(this.httpService.getPort())
-                ));
+            if (!configuration.webServerEnabled()) {
+                TrystLog.info(ApplicationLifecycleCoordinator.class,
+                        "Web server disabled (webServer.enabled=false); HTTP service not started. "
+                                + "Backend services keep running.");
+                if (serverReadinessService != null) {
+                    serverReadinessService.updateHealth("HttpServer",
+                            eu.kalafatic.tryst.core.lifecycle.ServerReadinessService.ComponentState.STOPPED,
+                            null, java.util.Map.of("reason", "webServer.enabled=false"));
+                }
+            } else if (!configuration.webServerAutoStart()) {
+                TrystLog.info(ApplicationLifecycleCoordinator.class,
+                        "Web server auto-start disabled (webServer.autoStart=false); "
+                                + "start it from the Web menu or the CLI.");
+                if (serverReadinessService != null) {
+                    serverReadinessService.updateHealth("HttpServer",
+                            eu.kalafatic.tryst.core.lifecycle.ServerReadinessService.ComponentState.STOPPED,
+                            null, java.util.Map.of("reason", "webServer.autoStart=false"));
+                }
+            } else {
+                this.httpService.start();
+                if (serverReadinessService != null) {
+                    serverReadinessService.markHealthy("HttpServer", java.util.Map.of(
+                            "host", configuration.serverHost(),
+                            "port", Integer.toString(this.httpService.getPort())
+                    ));
+                }
             }
         } catch (Exception e) {
             TrystLog.error(ApplicationLifecycleCoordinator.class, "Failed to start HTTP service: " + e.getMessage(), e);
@@ -1233,6 +1266,11 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
      * Idempotent, thread-safe, and independent of UI lifecycle.
      */
     public synchronized TrystHttpService startHttpService() throws Exception {
+        if (configuration != null && !configuration.webServerEnabled()) {
+            throw new IllegalStateException("Web server disabled (webServer.enabled=false). "
+                    + "Enable it in " + configuration.configurationDirectory()
+                    + "/tryst.properties and restart.");
+        }
         if (this.currentStage.ordinal() < ApplicationLifecycleStage.CORE_SERVICE_INITIALIZATION.ordinal()) {
             if (this.currentStage.ordinal() < ApplicationLifecycleStage.PLATFORM_INITIALIZATION.ordinal()) {
                 transitionTo(ApplicationLifecycleStage.PLATFORM_INITIALIZATION);
@@ -1308,6 +1346,34 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
     public synchronized TrystHttpService restartHttpService() throws Exception {
         stopHttpService();
         return startHttpService();
+    }
+
+    /**
+     * Human-readable web server lifecycle state for UI surfaces:
+     * DISABLED / STOPPED / RUNNING / (readiness state).
+     */
+    public String webServerState() {
+        if (configuration != null && !configuration.webServerEnabled()) {
+            return "DISABLED";
+        }
+        if (httpService == null) {
+            return "STOPPED";
+        }
+        if (httpService.isRunning()) {
+            return "RUNNING";
+        }
+        if (serverReadinessService != null
+                && serverReadinessService.getComponent("HttpServer") != null) {
+            return String.valueOf(serverReadinessService.getComponent("HttpServer").state());
+        }
+        return "STOPPED";
+    }
+
+    /**
+     * Whether the web server should be auto-started (config webServer.autoStart).
+     */
+    public boolean isWebServerAutoStart() {
+        return configuration == null || configuration.webServerAutoStart();
     }
 
     private void ensureHttpServiceRegistered() {

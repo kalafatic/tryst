@@ -62,6 +62,7 @@ public class TaskWorker implements Callable<ExecutionResult> {
     private eu.kalafatic.tryst.domain.repository.TaskInstructionRepository taskInstructionRepository;
     private eu.kalafatic.tryst.domain.ai.ExternalAiDelegator externalAiDelegator;
     private eu.kalafatic.tryst.domain.studio.StudioService studioService;
+    private volatile AiFailureClassification agentFailureClassification = AiFailureClassification.NONE;
 
     public TaskWorker(
             TaskExecutionContext context,
@@ -524,7 +525,9 @@ public class TaskWorker implements Callable<ExecutionResult> {
         } catch (Exception e) {
             TrystLog.error(TaskWorker.class, "Task " + task.getId() + " failed: " + e.getMessage(), e);
             if (failureClass == AiFailureClassification.NONE) {
-                failureClass = AiFailureClassification.UNCLASSIFIED_ERROR;
+                failureClass = (agentFailureClassification != AiFailureClassification.NONE)
+                        ? agentFailureClassification
+                        : AiFailureClassification.UNCLASSIFIED_ERROR;
             }
             if (notificationService != null && context.getUserId() != null) {
                 notificationService.notifyUser(
@@ -550,6 +553,9 @@ public class TaskWorker implements Callable<ExecutionResult> {
         if (executionResultRepository != null) {
             executionResultRepository.save(result);
             task.setExecutionResultId(result.getId());
+            // Persist the execution_result_id binding: the final lifecycle transition
+            // happened before this result existed, so save the task again explicitly.
+            lifecycleManager.persist(task);
         }
 
         return result;
@@ -562,8 +568,19 @@ public class TaskWorker implements Callable<ExecutionResult> {
         if (context.isPaused()) {
             Task task = context.getTask();
             lifecycleManager.transition(task, TaskStatus.PAUSED, "Execution safely suspended at stage boundary", null);
-            recordRecoveryCheckpoint(task, TaskStatus.PAUSED, "{\"stage\":\"PAUSED\",\"interruptedAt\":\"" + task.getStatus() + "\"}");
-            throw new TaskCancelledException("Task execution safely paused at stage boundary");
+            recordRecoveryCheckpoint(task, TaskStatus.PAUSED, "{\"stage\":\"PAUSED\"}");
+            TrystLog.info(TaskWorker.class, "Task " + task.getId() + " paused at stage boundary; waiting for resume or cancel");
+            while (context.isPaused() && !context.isCancelled() && !Thread.currentThread().isInterrupted()) {
+                try {
+                    Thread.sleep(500);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+            if (context.isCancelled() || Thread.currentThread().isInterrupted()) {
+                throw new TaskCancelledException("Task execution cancelled while paused");
+            }
         }
     }
 
@@ -571,6 +588,14 @@ public class TaskWorker implements Callable<ExecutionResult> {
         Workspace ws = context.getWorkspace();
         if (ws == null) {
             log.append("[Cloning]: No workspace assigned to task; skipping git clone.\n");
+            return;
+        }
+
+        // Session continuation: the workspace already contains the previous working state
+        // (including uncommitted changes). Never re-clone or fetch over it.
+        if ("true".equalsIgnoreCase(ws.getMetadata().get("skip_clone"))) {
+            log.append("[Cloning]: Workspace reuse (session continuation); preserving existing working state at ")
+                    .append(ws.getRootPath()).append("\n");
             return;
         }
 
@@ -719,7 +744,12 @@ public class TaskWorker implements Callable<ExecutionResult> {
             if (res.failureClassification() == AiFailureClassification.CANCELLATION) {
                 throw new TaskCancelledException("Task was cancelled during AI inference");
             }
+            agentFailureClassification = res.failureClassification() != AiFailureClassification.NONE
+                    ? res.failureClassification()
+                    : AiFailureClassification.UNCLASSIFIED_ERROR;
             log.append("[Agent step issue]: ").append(res.errorMessage()).append("\n");
+            throw new IllegalStateException("AI implementation step failed: "
+                    + res.errorMessage() + " (classification: " + res.failureClassification() + ")");
         }
     }
 

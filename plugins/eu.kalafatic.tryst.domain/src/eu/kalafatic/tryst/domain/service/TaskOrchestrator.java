@@ -73,6 +73,34 @@ public class TaskOrchestrator {
 
     private final Map<String, TaskExecutionContext> activeContexts = new ConcurrentHashMap<>();
     private final Map<String, Future<?>> activeFutures = new ConcurrentHashMap<>();
+    private final Map<String, WorkerRuntime> workerRuntimes = new ConcurrentHashMap<>();
+
+    /**
+     * Runtime accounting for a worker execution slot. Workers are ephemeral per task claim;
+     * this record tracks the live state and outcome of each claimed slot. Historical
+     * aggregates are computed from persisted task rows (tasks.worker_id).
+     */
+    public static final class WorkerRuntime {
+        private final String workerId;
+        private volatile String taskId;
+        private volatile boolean busy;
+        private volatile long startedAtMs;
+        private volatile int completedTasks;
+        private volatile int failedTasks;
+        private volatile long totalDurationMs;
+
+        WorkerRuntime(String workerId) {
+            this.workerId = workerId;
+        }
+
+        public String getWorkerId() { return workerId; }
+        public String getTaskId() { return taskId; }
+        public boolean isBusy() { return busy; }
+        public long getStartedAtMs() { return startedAtMs; }
+        public int getCompletedTasks() { return completedTasks; }
+        public int getFailedTasks() { return failedTasks; }
+        public long getTotalDurationMs() { return totalDurationMs; }
+    }
 
     public TaskOrchestrator(
             TaskQueue taskQueue,
@@ -329,11 +357,11 @@ public class TaskOrchestrator {
         TaskExecutionContext ctx = activeContexts.get(taskId);
         if (ctx != null) {
             ctx.pause();
-            TrystLog.info(TaskOrchestrator.class, "Requested pause for active task " + taskId);
+            TrystLog.info(TaskOrchestrator.class, "Requested pause for active task " + taskId + " (takes effect at next stage boundary)");
             return true;
         }
 
-        // If queued, transition to PAUSED so claimNext won't pick it up
+        // If queued/created, transition to PAUSED so claimNext won't pick it up
         if (task.getStatus() == TaskStatus.QUEUED || task.getStatus() == TaskStatus.CREATED) {
             lifecycleManager.transition(task, TaskStatus.PAUSED, "Paused in queue", null);
             if (notificationService != null && userId != null) {
@@ -354,6 +382,21 @@ public class TaskOrchestrator {
         if (optTask.isEmpty()) return false;
         Task task = optTask.get();
 
+        // Active context: resume the suspended worker at its stage boundary.
+        TaskExecutionContext ctx = activeContexts.get(taskId);
+        if (ctx != null) {
+            if (!ctx.isPaused()) {
+                return false;
+            }
+            ctx.resume();
+            TrystLog.info(TaskOrchestrator.class, "Resumed active task " + taskId);
+            if (notificationService != null && userId != null) {
+                notificationService.notifyUser(userId, "TASK_RESUMED", "Task Resumed: " + task.getTitle(),
+                        "Task execution resumed from paused boundary.", "task", taskId, userId + ":TASK_RESUMED:" + taskId);
+            }
+            return true;
+        }
+
         if (task.getStatus() == TaskStatus.PAUSED) {
             lifecycleManager.transition(task, TaskStatus.QUEUED, "Resuming paused task", null);
             taskQueue.enqueue(task);
@@ -367,6 +410,54 @@ public class TaskOrchestrator {
             return true;
         }
         return false;
+    }
+
+    /**
+     * Re-queues a task parked in RECOVERY_REQUIRED after a server restart, honoring its
+     * recovery decision. Tasks requiring explicit operator confirmation need forceRetry.
+     */
+    public boolean retryRecoveredTask(String taskId, String operatorId) {
+        Objects.requireNonNull(taskId, "taskId must not be null");
+        if (taskRecoveryService == null) {
+            return false;
+        }
+        boolean retried = taskRecoveryService.retryRecoveredTask(taskId);
+        if (retried) {
+            synchronized (this) {
+                notifyAll();
+            }
+        }
+        if (notificationService != null && operatorId != null && retried) {
+            notificationService.notifyUser(operatorId, "TASK_RETRIED", "Task Re-Queued After Recovery",
+                    "Task " + taskId + " was re-queued for execution after recovery reconciliation.", "task", taskId,
+                    operatorId + ":TASK_RETRIED:" + taskId);
+        }
+        return retried;
+    }
+
+    /**
+     * Forces a recovered task back into the queue after explicit operator confirmation,
+     * even when the recovery decision requires user intervention.
+     */
+    public boolean forceRetryRecoveredTask(String taskId, String operatorId) {
+        Objects.requireNonNull(taskId, "taskId must not be null");
+        if (taskRecoveryService == null) {
+            return false;
+        }
+        boolean retried = taskRecoveryService.forceRetryRecoveredTask(taskId, operatorId);
+        if (retried) {
+            synchronized (this) {
+                notifyAll();
+            }
+        }
+        return retried;
+    }
+
+    /**
+     * Live per-worker runtime accounting for the current server session.
+     */
+    public List<WorkerRuntime> getWorkerRuntimes() {
+        return List.copyOf(workerRuntimes.values());
     }
 
     /**
@@ -567,6 +658,17 @@ public class TaskOrchestrator {
             }
         }
 
+        // Project-level build/test commands override auto-detection (persisted project
+        // configuration). Empty values leave the existing technology auto-detection active.
+        if (project != null && workspace != null) {
+            if (project.getBuildCommand() != null && !project.getBuildCommand().isBlank()) {
+                workspace.setMetadata("build_command", project.getBuildCommand().trim());
+            }
+            if (project.getTestCommand() != null && !project.getTestCommand().isBlank()) {
+                workspace.setMetadata("test_command", project.getTestCommand().trim());
+            }
+        }
+
         String userId = project != null ? project.getOwnerId() : "default-user";
         String resolvedModel = modelSelectionService.selectModel(task, null, eu.kalafatic.tryst.domain.model.UserRole.USER);
         TaskExecutionContext context = new TaskExecutionContext(task, project, workspace, userId, workerId, resolvedModel);
@@ -602,10 +704,25 @@ public class TaskOrchestrator {
         worker.setExternalAiDelegator(this.externalAiDelegator);
         worker.setStudioService(this.studioService);
 
+        WorkerRuntime runtime = new WorkerRuntime(workerId);
+        runtime.busy = true;
+        runtime.taskId = task.getId();
+        runtime.startedAtMs = System.currentTimeMillis();
+        workerRuntimes.put(workerId, runtime);
+
         Future<?> future = workerExecutor.submit(() -> {
+            long start = System.currentTimeMillis();
             try {
                 worker.call();
             } finally {
+                runtime.totalDurationMs += (System.currentTimeMillis() - start);
+                runtime.busy = false;
+                runtime.taskId = null;
+                if (task.getStatus() == TaskStatus.WAITING_FOR_REVIEW || task.getStatus() == TaskStatus.COMPLETED) {
+                    runtime.completedTasks++;
+                } else if (task.getStatus() == TaskStatus.FAILED) {
+                    runtime.failedTasks++;
+                }
                 activeContexts.remove(task.getId());
                 activeFutures.remove(task.getId());
                 synchronized (TaskOrchestrator.this) {

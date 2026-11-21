@@ -7,13 +7,17 @@ import eu.kalafatic.tryst.domain.model.EvoConfiguration;
 import eu.kalafatic.tryst.domain.model.EvoExecution;
 import eu.kalafatic.tryst.infrastructure.persistence.SqliteDatabaseManager;
 import org.eclipse.jface.action.Action;
+import org.eclipse.jface.action.ContributionItem;
 import org.eclipse.jface.action.GroupMarker;
 import org.eclipse.jface.action.IMenuManager;
 import org.eclipse.jface.action.MenuManager;
 import org.eclipse.jface.action.Separator;
 import org.eclipse.jface.dialogs.InputDialog;
 import org.eclipse.jface.dialogs.MessageDialog;
+import org.eclipse.swt.SWT;
 import org.eclipse.swt.program.Program;
+import org.eclipse.swt.widgets.Menu;
+import org.eclipse.swt.widgets.MenuItem;
 import org.eclipse.ui.IEditorPart;
 import org.eclipse.ui.IWorkbenchActionConstants;
 import org.eclipse.ui.IWorkbenchWindow;
@@ -701,7 +705,12 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
         teipMenu.add(new GroupMarker(IWorkbenchActionConstants.MB_ADDITIONS));
         menuBar.add(teipMenu);
 
+        // Web Interface menu: lifecycle controls that reflect the actual server
+        // state. All actions route through the single coordinator lifecycle
+        // (startHttpService / stopHttpService / restartHttpService) — no second
+        // server implementation. Rebuilt on every menu open.
         MenuManager webMenu = new MenuManager("&Web", "web");
+        webMenu.add(new WebInterfaceContributionItem());
         webMenu.add(new GroupMarker(IWorkbenchActionConstants.MB_ADDITIONS));
         menuBar.add(webMenu);
 
@@ -781,5 +790,117 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
         helpMenu.add(eu.kalafatic.tryst.application.help.TrystHelpMenuSupport.createAboutInstallationAction(window));
         helpMenu.add(new GroupMarker(IWorkbenchActionConstants.MB_ADDITIONS));
         menuBar.add(helpMenu);
+    }
+
+    /**
+     * Dynamic Web menu content: Open Web Interface / Open configured URL /
+     * Start / Stop / Restart / Check Status. Rebuilt on every menu open so
+     * enablement reflects the actual server state. Every control routes
+     * through the single {@link ApplicationLifecycleCoordinator} lifecycle.
+     */
+    private final class WebInterfaceContributionItem extends ContributionItem {
+
+        WebInterfaceContributionItem() {
+            super("eu.kalafatic.tryst.application.webInterfaceControls");
+        }
+
+        @Override
+        public boolean isDynamic() {
+            return true;
+        }
+
+        @Override
+        public void fill(Menu parent, int index) {
+            IWorkbenchWindow window = getActionBarConfigurer().getWindowConfigurer()
+                    .getWindow();
+            ApplicationLifecycleCoordinator coord = resolveCoordinator();
+            boolean running = coord != null && coord.isHttpServerRunning();
+            boolean disabled = coord == null
+                    || "DISABLED".equals(coord.webServerState());
+            String state = coord == null ? "STOPPED" : coord.webServerState();
+
+            MenuItem openItem = new MenuItem(parent, SWT.PUSH, index++);
+            openItem.setText("Open Web Interface");
+            openItem.setEnabled(running);
+            openItem.addSelectionListener(new org.eclipse.swt.events.SelectionAdapter() {
+                @Override
+                public void widgetSelected(org.eclipse.swt.events.SelectionEvent e) {
+                    eu.kalafatic.tryst.application.launcher.WebInterfaceLauncher
+                            .open(window.getShell());
+                }
+            });
+
+            MenuItem openUrlItem = new MenuItem(parent, SWT.PUSH, index++);
+            openUrlItem.setText("Open Configured Web URL");
+            openUrlItem.setEnabled(running);
+            openUrlItem.addSelectionListener(new org.eclipse.swt.events.SelectionAdapter() {
+                @Override
+                public void widgetSelected(org.eclipse.swt.events.SelectionEvent e) {
+                    Program.launch(eu.kalafatic.tryst.application.launcher
+                            .WebInterfaceLauncher.resolveUrl());
+                }
+            });
+
+            new MenuItem(parent, SWT.SEPARATOR, index++);
+
+            MenuItem startItem = new MenuItem(parent, SWT.PUSH, index++);
+            startItem.setText("Start Web Server");
+            startItem.setEnabled(!running && !disabled);
+            startItem.addSelectionListener(new org.eclipse.swt.events.SelectionAdapter() {
+                @Override
+                public void widgetSelected(org.eclipse.swt.events.SelectionEvent e) {
+                    runServerOperation(window, "start", () -> coord.startHttpServer());
+                }
+            });
+
+            MenuItem stopItem = new MenuItem(parent, SWT.PUSH, index++);
+            stopItem.setText("Stop Web Server");
+            stopItem.setEnabled(running);
+            stopItem.addSelectionListener(new org.eclipse.swt.events.SelectionAdapter() {
+                @Override
+                public void widgetSelected(org.eclipse.swt.events.SelectionEvent e) {
+                    runServerOperation(window, "stop", () -> coord.stopHttpService());
+                }
+            });
+
+            MenuItem restartItem = new MenuItem(parent, SWT.PUSH, index++);
+            restartItem.setText("Restart Web Server");
+            restartItem.setEnabled(running);
+            restartItem.addSelectionListener(new org.eclipse.swt.events.SelectionAdapter() {
+                @Override
+                public void widgetSelected(org.eclipse.swt.events.SelectionEvent e) {
+                    runServerOperation(window, "restart", () -> coord.restartHttpService());
+                }
+            });
+
+            new MenuItem(parent, SWT.SEPARATOR, index++);
+
+            MenuItem statusItem = new MenuItem(parent, SWT.PUSH, index++);
+            statusItem.setText("Check Status");
+            statusItem.addSelectionListener(new org.eclipse.swt.events.SelectionAdapter() {
+                @Override
+                public void widgetSelected(org.eclipse.swt.events.SelectionEvent e) {
+                    String url = eu.kalafatic.tryst.application.launcher
+                            .WebInterfaceLauncher.resolveUrl();
+                    MessageDialog.openInformation(window.getShell(), "Web Server Status",
+                            "State: " + state
+                                    + (running ? "\nURL: " + url : ""));
+                }
+            });
+        }
+
+        private void runServerOperation(IWorkbenchWindow window, String operation,
+                                        ServerOperationBody body) {
+            try {
+                body.run();
+            } catch (Exception e) {
+                MessageDialog.openError(window.getShell(),
+                        "Web Server " + operation + " failed", e.getMessage());
+            }
+        }
+
+        private interface ServerOperationBody {
+            void run() throws Exception;
+        }
     }
 }

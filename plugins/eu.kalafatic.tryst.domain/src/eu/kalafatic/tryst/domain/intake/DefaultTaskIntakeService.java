@@ -6,12 +6,16 @@ import eu.kalafatic.tryst.domain.github.GitHubCredentialRepository;
 import eu.kalafatic.tryst.domain.github.GitHubService;
 import eu.kalafatic.tryst.domain.model.Permission;
 import eu.kalafatic.tryst.domain.model.Project;
+import eu.kalafatic.tryst.domain.model.Session;
+import eu.kalafatic.tryst.domain.model.ConversationMessage;
 import eu.kalafatic.tryst.domain.model.Task;
 import eu.kalafatic.tryst.domain.model.TaskInstruction;
 import eu.kalafatic.tryst.domain.model.TaskPriority;
 import eu.kalafatic.tryst.domain.model.TaskStatus;
 import eu.kalafatic.tryst.domain.model.Workspace;
+import eu.kalafatic.tryst.domain.repository.ConversationMessageRepository;
 import eu.kalafatic.tryst.domain.repository.ProjectRepository;
+import eu.kalafatic.tryst.domain.repository.SessionRepository;
 import eu.kalafatic.tryst.domain.repository.TaskInstructionRepository;
 import eu.kalafatic.tryst.domain.repository.TaskRepository;
 import eu.kalafatic.tryst.domain.security.PermissionManager;
@@ -43,6 +47,8 @@ public class DefaultTaskIntakeService implements TaskIntakeService {
     private final GitHubService gitHubService;
     private final GitHubCredentialRepository gitHubCredentialRepository;
     private final PermissionManager permissionManager;
+    private final SessionRepository sessionRepository;
+    private final ConversationMessageRepository conversationMessageRepository;
 
     public DefaultTaskIntakeService(
             TaskOrchestrator taskOrchestrator,
@@ -54,6 +60,22 @@ public class DefaultTaskIntakeService implements TaskIntakeService {
             GitHubCredentialRepository gitHubCredentialRepository,
             PermissionManager permissionManager
     ) {
+        this(taskOrchestrator, taskRepository, taskInstructionRepository, projectRepository, workspaceService,
+                gitHubService, gitHubCredentialRepository, permissionManager, null, null);
+    }
+
+    public DefaultTaskIntakeService(
+            TaskOrchestrator taskOrchestrator,
+            TaskRepository taskRepository,
+            TaskInstructionRepository taskInstructionRepository,
+            ProjectRepository projectRepository,
+            WorkspaceService workspaceService,
+            GitHubService gitHubService,
+            GitHubCredentialRepository gitHubCredentialRepository,
+            PermissionManager permissionManager,
+            SessionRepository sessionRepository,
+            ConversationMessageRepository conversationMessageRepository
+    ) {
         this.taskOrchestrator = taskOrchestrator;
         this.taskRepository = taskRepository;
         this.taskInstructionRepository = taskInstructionRepository;
@@ -62,6 +84,8 @@ public class DefaultTaskIntakeService implements TaskIntakeService {
         this.gitHubService = gitHubService;
         this.gitHubCredentialRepository = gitHubCredentialRepository;
         this.permissionManager = permissionManager != null ? permissionManager : new PermissionManager();
+        this.sessionRepository = sessionRepository;
+        this.conversationMessageRepository = conversationMessageRepository;
     }
 
     @Override
@@ -236,7 +260,7 @@ public class DefaultTaskIntakeService implements TaskIntakeService {
                 TaskStatus.CREATED,
                 finalPriority != null ? finalPriority : TaskPriority.NORMAL,
                 null,
-                null,
+                "TRYST",
                 null,
                 null,
                 0,
@@ -244,6 +268,17 @@ public class DefaultTaskIntakeService implements TaskIntakeService {
                 java.time.Instant.now(),
                 null
         );
+
+        // 2b. Bind the task to a persistent coding session so it can be reopened and
+        // continued later (session continuation reuses this session identity).
+        if (sessionRepository != null && projectId != null && !projectId.isBlank()) {
+            Session session = new Session(projectId, finalTitle);
+            sessionRepository.save(session);
+            task.setSessionId(session.getId());
+            if (conversationMessageRepository != null) {
+                conversationMessageRepository.save(new ConversationMessage(session.getId(), "user", finalDescription));
+            }
+        }
 
         // 3. Allocate isolated workspace with repository URL and branch if available
         if (workspaceService != null && (repoUrl != null || projectId != null)) {

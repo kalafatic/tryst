@@ -19,8 +19,8 @@ import java.util.Objects;
  */
 public class SchemaMigrationService {
 
-    /** Latest schema version of the forward-only migration chain (V1..V21). */
-    public static final int LATEST_VERSION = 21;
+    /** Latest schema version of the forward-only migration chain (V1..V22). */
+    public static final int LATEST_VERSION = 22;
 
     public record Migration(int version, String description, List<String> sqlStatements) {}
 
@@ -924,6 +924,23 @@ public class SchemaMigrationService {
                 "ALTER TABLE agents ADD COLUMN execution_parameters_json TEXT NOT NULL DEFAULT '{}';"
         );
         migrations.add(new Migration(21, "Unified AI execution environment configuration (providers, execution configurations, snapshots, agent profiles)", v21Statements));
+
+        // V22: Project-level coding configuration (repository URL, default branch,
+        // build/test commands, project instructions) and operational indexes for task,
+        // commit and review queries. Backward-conscious: all new columns have defaults,
+        // existing rows remain valid.
+        List<String> v22Statements = List.of(
+                "ALTER TABLE projects ADD COLUMN repository_url TEXT NOT NULL DEFAULT '';",
+                "ALTER TABLE projects ADD COLUMN default_branch TEXT NOT NULL DEFAULT 'main';",
+                "ALTER TABLE projects ADD COLUMN build_command TEXT NOT NULL DEFAULT '';",
+                "ALTER TABLE projects ADD COLUMN test_command TEXT NOT NULL DEFAULT '';",
+                "ALTER TABLE projects ADD COLUMN instructions TEXT NOT NULL DEFAULT '';",
+                "CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at);",
+                "CREATE INDEX IF NOT EXISTS idx_git_commits_task ON git_commits(task_id);",
+                "CREATE INDEX IF NOT EXISTS idx_code_reviews_created ON code_reviews(created_at);",
+                "CREATE INDEX IF NOT EXISTS idx_execution_results_task ON execution_results(task_id);"
+        );
+        migrations.add(new Migration(22, "Project coding configuration columns and operational indexes", v22Statements));
 
         return migrations;
     }

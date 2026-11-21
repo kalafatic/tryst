@@ -15,7 +15,7 @@ public class Task {
 
     private final String id;
     private final String projectId;
-    private final String sessionId;
+    private String sessionId;
     private final String title;
     private final String description;
     private TaskStatus status;
@@ -77,6 +77,10 @@ public class Task {
 
     public String getSessionId() {
         return sessionId;
+    }
+
+    public synchronized void setSessionId(String sessionId) {
+        this.sessionId = sessionId != null && !sessionId.trim().isEmpty() ? sessionId.trim() : null;
     }
 
     public String getTitle() {

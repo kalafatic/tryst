@@ -214,6 +214,26 @@ public class ConfigurationService {
                 extBaseUrl = props.getProperty("server.externalBaseUrl", publicUrl);
             }
 
+            String webServerEnabledStr = System.getProperty("tryst.webServer.enabled");
+            if (webServerEnabledStr == null || webServerEnabledStr.isBlank()) {
+                webServerEnabledStr = System.getenv("TRYST_WEB_SERVER_ENABLED");
+            }
+            if (webServerEnabledStr == null || webServerEnabledStr.isBlank()) {
+                webServerEnabledStr = props.getProperty("webServer.enabled",
+                        String.valueOf(base.webServerEnabled()));
+            }
+            boolean webServerEnabled = Boolean.parseBoolean(webServerEnabledStr);
+
+            String webServerAutoStartStr = System.getProperty("tryst.webServer.autoStart");
+            if (webServerAutoStartStr == null || webServerAutoStartStr.isBlank()) {
+                webServerAutoStartStr = System.getenv("TRYST_WEB_SERVER_AUTO_START");
+            }
+            if (webServerAutoStartStr == null || webServerAutoStartStr.isBlank()) {
+                webServerAutoStartStr = props.getProperty("webServer.autoStart",
+                        String.valueOf(base.webServerAutoStart()));
+            }
+            boolean webServerAutoStart = Boolean.parseBoolean(webServerAutoStartStr);
+
             ApplicationConfiguration config = new ApplicationConfiguration(
                     base.applicationName(),
                     base.version(),
@@ -240,7 +260,9 @@ public class ConfigurationService {
                     canonicalUrl,
                     netMode,
                     bindAddr,
-                    extBaseUrl
+                    extBaseUrl,
+                    webServerEnabled,
+                    webServerAutoStart
             );
 
             if (migrationRequired) {
@@ -355,6 +377,8 @@ public class ConfigurationService {
             if (config.externalBaseUrl() != null && !config.externalBaseUrl().isBlank()) {
                 props.setProperty("server.externalBaseUrl", config.externalBaseUrl());
             }
+            props.setProperty("webServer.enabled", String.valueOf(config.webServerEnabled()));
+            props.setProperty("webServer.autoStart", String.valueOf(config.webServerAutoStart()));
 
             try (FileOutputStream fos = new FileOutputStream(configFilePath.toFile())) {
                 props.store(fos, "TRYST Configuration Properties");

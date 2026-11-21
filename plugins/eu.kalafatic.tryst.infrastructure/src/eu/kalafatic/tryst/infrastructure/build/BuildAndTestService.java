@@ -72,6 +72,63 @@ public class BuildAndTestService implements BuildAndQualityService {
         return technologyDetector.detectBuildSystem(repositoryRoot);
     }
 
+    /**
+     * Resolves the build command: an explicit project-configured command carried in
+     * workspace metadata takes precedence over filesystem technology auto-detection.
+     */
+    private List<String> resolveBuildCommandWithOverrides(Workspace workspace, Path root) {
+        String configured = workspace.getMetadata().get("build_command");
+        if (configured != null && !configured.isBlank()) {
+            return parseCommandLine(configured.trim());
+        }
+        return technologyDetector.resolveBuildCommand(root);
+    }
+
+    /**
+     * Resolves the test command: explicit project configuration takes precedence over
+     * filesystem technology auto-detection.
+     */
+    private List<String> resolveTestCommandWithOverrides(Workspace workspace, Path root) {
+        String configured = workspace.getMetadata().get("test_command");
+        if (configured != null && !configured.isBlank()) {
+            return parseCommandLine(configured.trim());
+        }
+        return technologyDetector.resolveTestCommand(root);
+    }
+
+    /**
+     * Quote-aware command-line parsing: splits on whitespace while respecting single
+     * and double quotes.
+     */
+    static List<String> parseCommandLine(String commandLine) {
+        List<String> tokens = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        char quote = 0;
+        for (int i = 0; i < commandLine.length(); i++) {
+            char c = commandLine.charAt(i);
+            if (quote != 0) {
+                if (c == quote) {
+                    quote = 0;
+                } else {
+                    current.append(c);
+                }
+            } else if (c == '"' || c == '\'') {
+                quote = c;
+            } else if (Character.isWhitespace(c)) {
+                if (current.length() > 0) {
+                    tokens.add(current.toString());
+                    current.setLength(0);
+                }
+            } else {
+                current.append(c);
+            }
+        }
+        if (current.length() > 0) {
+            tokens.add(current.toString());
+        }
+        return tokens;
+    }
+
     @Override
     public StageExecutionResult executeBuild(
             Workspace workspace,
@@ -91,7 +148,7 @@ public class BuildAndTestService implements BuildAndQualityService {
             return new StageExecutionResult("build", BuildExecutionStatus.FAILED, 1, List.of(), "", e.getMessage(), 0L, e.getMessage());
         }
 
-        List<String> buildCmd = technologyDetector.resolveBuildCommand(root);
+        List<String> buildCmd = resolveBuildCommandWithOverrides(workspace, root);
         if (buildCmd.isEmpty()) {
             return StageExecutionResult.notExecuted("build", "No build command detected for repository");
         }
@@ -119,7 +176,7 @@ public class BuildAndTestService implements BuildAndQualityService {
             return new StageExecutionResult("test", BuildExecutionStatus.FAILED, 1, List.of(), "", e.getMessage(), 0L, e.getMessage());
         }
 
-        List<String> testCmd = technologyDetector.resolveTestCommand(root);
+        List<String> testCmd = resolveTestCommandWithOverrides(workspace, root);
         if (testCmd.isEmpty()) {
             return StageExecutionResult.notExecuted("test", "No test command detected for repository");
         }

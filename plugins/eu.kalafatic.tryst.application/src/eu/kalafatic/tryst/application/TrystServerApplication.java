@@ -303,6 +303,48 @@ public class TrystServerApplication implements IApplication {
                 }
             },
             new ServerCommand() {
+                @Override public String name() { return "agents"; }
+                @Override public String syntax() { return "agents"; }
+                @Override public String summary() { return "List connected coding agents (GET /api/integration/applications)."; }
+                @Override public String topicHelp() {
+                    return """
+                            agents
+
+                              Starts the server when necessary and lists the connected coding
+                              agents — the family coding harnesses (DCode, DStudio, EVO,
+                              OpenCode) of the connected-application registry — with type,
+                              enablement, live status and the current selection
+                              (GET /api/integration/applications). Connection configuration
+                              is never printed.
+
+                              Alias: /agents
+                            """;
+                }
+                @Override public int execute(String[] args) {
+                    ApplicationLifecycleCoordinator coord = ensureServerUp();
+                    String json = httpGet(coord, "/api/integration/applications");
+                    if (json == null) {
+                        return 1;
+                    }
+                    List<Map<String, String>> agents = extractJsonArray(json);
+                    if (agents.isEmpty()) {
+                        System.out.println("No connected coding agents.");
+                        return 0;
+                    }
+                    System.out.println("Connected coding agents (" + agents.size() + "):");
+                    for (Map<String, String> a : agents) {
+                        System.out.printf("  %-24s type=%-8s enabled=%-5s status=%-12s%s%n",
+                                a.getOrDefault("name", a.getOrDefault("id", "?")),
+                                a.getOrDefault("type", "?"),
+                                a.getOrDefault("enabled", "?"),
+                                a.getOrDefault("status", "?"),
+                                "true".equals(a.getOrDefault("selected", "false"))
+                                        ? "  [selected]" : "");
+                    }
+                    return 0;
+                }
+            },
+            new ServerCommand() {
                 @Override public String name() { return "config"; }
                 @Override public String syntax() { return "config [show]"; }
                 @Override public String summary() { return "Print the effective configuration (no secrets)."; }
@@ -1005,8 +1047,59 @@ public class TrystServerApplication implements IApplication {
         return objects;
     }
 
-    private static Map<String, String> extractFlatObject(String objectBody) {
-        Map<String, String> fields = new LinkedHashMap<>();
+    /**
+     * Parses a top-level JSON array of flat objects (as produced by
+     * {@code /api/integration/applications}); same manual style as
+     * {@link #extractJsonObjects(String, String)}, avoiding new dependencies.
+     */
+    private static List<Map<String, String>> extractJsonArray(String json) {
+        List<Map<String, String>> objects = new ArrayList<>();
+        if (json == null) {
+            return objects;
+        }
+        int bracket = json.indexOf('[');
+        if (bracket < 0) {
+            return objects;
+        }
+        int depth = 0;
+        boolean inString = false;
+        StringBuilder current = new StringBuilder();
+        for (int i = bracket; i < json.length(); i++) {
+            char c = json.charAt(i);
+            if (inString) {
+                current.append(c);
+                if (c == '\\' && i + 1 < json.length()) {
+                    current.append(json.charAt(++i));
+                } else if (c == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (c == '"') {
+                inString = true;
+                current.append(c);
+                continue;
+            }
+            if (c == '{') {
+                depth++;
+            } else if (c == '}') {
+                depth--;
+            } else if (c == ']') {
+                break;
+            }
+            if (depth == 0) {
+                continue;
+            }
+            current.append(c);
+            if (depth == 1 && c == '}') {
+                objects.add(extractFlatObject(current.toString()));
+                current.setLength(0);
+            }
+        }
+        return objects;
+    }
+
+    private static Map<String, String> extractFlatObject(String objectBody) {        Map<String, String> fields = new LinkedHashMap<>();
         java.util.regex.Pattern fieldPattern = java.util.regex.Pattern.compile(
                 "\"([^\"]+)\"\\s*:\\s*(\"(?:\\\\\"|[^\"])*\"|-?[0-9a-zA-Z_.]+)");
         java.util.regex.Matcher matcher = fieldPattern.matcher(objectBody);

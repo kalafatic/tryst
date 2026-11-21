@@ -27,18 +27,28 @@ public class SqliteProjectRepository implements ProjectRepository {
         this.databaseManager = Objects.requireNonNull(databaseManager, "databaseManager must not be null");
     }
 
+    private static final String PROJECT_COLUMNS = "id, owner_id, name, description, location, active, "
+            + "repository_url, default_branch, build_command, test_command, instructions, created_at, updated_at";
+
     @Override
     public void save(Project project) {
         Objects.requireNonNull(project, "project must not be null");
         String sql = """
-            INSERT INTO projects (id, owner_id, name, description, location, active, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO projects (id, owner_id, name, description, location, active,
+                                  repository_url, default_branch, build_command, test_command,
+                                  instructions, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 owner_id = excluded.owner_id,
                 name = excluded.name,
                 description = excluded.description,
                 location = excluded.location,
                 active = excluded.active,
+                repository_url = excluded.repository_url,
+                default_branch = excluded.default_branch,
+                build_command = excluded.build_command,
+                test_command = excluded.test_command,
+                instructions = excluded.instructions,
                 updated_at = excluded.updated_at;
         """;
 
@@ -52,8 +62,13 @@ public class SqliteProjectRepository implements ProjectRepository {
                 pstmt.setString(4, project.getDescription() != null ? project.getDescription() : "");
                 pstmt.setString(5, project.getLocation().toAbsolutePath().normalize().toString());
                 pstmt.setInt(6, project.isActive() ? 1 : 0);
-                pstmt.setString(7, now);
-                pstmt.setString(8, now);
+                pstmt.setString(7, project.getRepositoryUrl() != null ? project.getRepositoryUrl() : "");
+                pstmt.setString(8, project.getDefaultBranch() != null ? project.getDefaultBranch() : "main");
+                pstmt.setString(9, project.getBuildCommand() != null ? project.getBuildCommand() : "");
+                pstmt.setString(10, project.getTestCommand() != null ? project.getTestCommand() : "");
+                pstmt.setString(11, project.getInstructions() != null ? project.getInstructions() : "");
+                pstmt.setString(12, project.getCreatedAt().toString());
+                pstmt.setString(13, now);
                 pstmt.executeUpdate();
             } catch (SQLException e) {
                 throw new TrystInfrastructureException("Failed to save project: " + project.getId(), e);
@@ -64,7 +79,7 @@ public class SqliteProjectRepository implements ProjectRepository {
     @Override
     public Optional<Project> findById(String id) {
         Objects.requireNonNull(id, "id must not be null");
-        String sql = "SELECT id, owner_id, name, description, location, active FROM projects WHERE id = ?;";
+        String sql = "SELECT " + PROJECT_COLUMNS + " FROM projects WHERE id = ?;";
 
         synchronized (databaseManager.getLock()) {
             Connection conn = databaseManager.getConnection();
@@ -84,7 +99,7 @@ public class SqliteProjectRepository implements ProjectRepository {
 
     @Override
     public List<Project> findAll() {
-        String sql = "SELECT id, owner_id, name, description, location, active FROM projects ORDER BY name ASC;";
+        String sql = "SELECT " + PROJECT_COLUMNS + " FROM projects ORDER BY name ASC;";
         List<Project> list = new ArrayList<>();
 
         synchronized (databaseManager.getLock()) {
@@ -103,7 +118,7 @@ public class SqliteProjectRepository implements ProjectRepository {
 
     @Override
     public Optional<Project> findActive() {
-        String sql = "SELECT id, owner_id, name, description, location, active FROM projects WHERE active = 1 LIMIT 1;";
+        String sql = "SELECT " + PROJECT_COLUMNS + " FROM projects WHERE active = 1 LIMIT 1;";
 
         synchronized (databaseManager.getLock()) {
             Connection conn = databaseManager.getConnection();
@@ -122,7 +137,7 @@ public class SqliteProjectRepository implements ProjectRepository {
     @Override
     public List<Project> findByOwnerId(String ownerId) {
         Objects.requireNonNull(ownerId, "ownerId must not be null");
-        String sql = "SELECT id, owner_id, name, description, location, active FROM projects WHERE owner_id = ? ORDER BY name ASC;";
+        String sql = "SELECT " + PROJECT_COLUMNS + " FROM projects WHERE owner_id = ? ORDER BY name ASC;";
         List<Project> list = new ArrayList<>();
 
         synchronized (databaseManager.getLock()) {
@@ -167,7 +182,37 @@ public class SqliteProjectRepository implements ProjectRepository {
         String description = rs.getString("description");
         Path location = Path.of(rs.getString("location"));
         boolean active = rs.getInt("active") == 1;
+
+        String repositoryUrl = readNullableColumn(rs, "repository_url");
+        String defaultBranch = readNullableColumn(rs, "default_branch");
+        if (defaultBranch == null || defaultBranch.isBlank()) defaultBranch = "main";
+        String buildCommand = readNullableColumn(rs, "build_command");
+        String testCommand = readNullableColumn(rs, "test_command");
+        String instructions = readNullableColumn(rs, "instructions");
+
+        Instant createdAt;
+        Instant updatedAt;
+        try {
+            createdAt = Instant.parse(rs.getString("created_at"));
+        } catch (Exception e) {
+            createdAt = Instant.now();
+        }
+        try {
+            updatedAt = Instant.parse(rs.getString("updated_at"));
+        } catch (Exception e) {
+            updatedAt = Instant.now();
+        }
+
         return new Project(id, ownerId, name, description != null ? description : "", location,
-                eu.kalafatic.tryst.domain.model.ProjectStatus.ACTIVE, active, Instant.now(), Instant.now());
+                eu.kalafatic.tryst.domain.model.ProjectStatus.ACTIVE, active, createdAt, updatedAt,
+                repositoryUrl, defaultBranch, buildCommand, testCommand, instructions);
+    }
+
+    private static String readNullableColumn(ResultSet rs, String column) {
+        try {
+            return rs.getString(column);
+        } catch (SQLException e) {
+            return "";
+        }
     }
 }

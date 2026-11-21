@@ -36,7 +36,9 @@ public record ApplicationConfiguration(
         String canonicalUrl,
         NetworkMode networkMode,
         String bindAddress,
-        String externalBaseUrl
+        String externalBaseUrl,
+        boolean webServerEnabled,
+        boolean webServerAutoStart
 ) {
     public static final boolean DEFAULT_DYNAMIC_PORT_FALLBACK = true;
     public static final int DEFAULT_PORT_RANGE_START = 38080;
@@ -60,6 +62,13 @@ public record ApplicationConfiguration(
     public static final int DEFAULT_HTTP_PORT = 38080;
     public static final int DEFAULT_TCP_PORT = 38280;
     public static final NetworkMode DEFAULT_NETWORK_MODE = NetworkMode.LOOPBACK;
+    /**
+     * Web server startup configuration. Both headless and RCP modes start the
+     * web server automatically by default; change via tryst.properties keys
+     * {@code webServer.enabled} / {@code webServer.autoStart}.
+     */
+    public static final boolean DEFAULT_WEB_SERVER_ENABLED = true;
+    public static final boolean DEFAULT_WEB_SERVER_AUTO_START = true;
 
     public ApplicationConfiguration {
         Objects.requireNonNull(applicationName, "applicationName must not be null");
@@ -184,7 +193,9 @@ public record ApplicationConfiguration(
                 canonicalUrl,
                 DEFAULT_NETWORK_MODE,
                 null,
-                publicServerUrl
+                publicServerUrl,
+                DEFAULT_WEB_SERVER_ENABLED,
+                DEFAULT_WEB_SERVER_AUTO_START
         );
     }
 
@@ -234,7 +245,12 @@ public record ApplicationConfiguration(
                 publicServerUrl,
                 reverseProxyEnabled,
                 DEFAULT_CONTEXT_PATH,
-                DEFAULT_CANONICAL_URL
+                DEFAULT_CANONICAL_URL,
+                DEFAULT_NETWORK_MODE,
+                null,
+                DEFAULT_PUBLIC_URL,
+                DEFAULT_WEB_SERVER_ENABLED,
+                DEFAULT_WEB_SERVER_AUTO_START
         );
     }
 
@@ -341,7 +357,8 @@ public record ApplicationConfiguration(
                 maxIterations, maxContextTokens, maxOutputTokens, maxRetryAttempts, secureSandboxEnabled,
                 serverHost, httpPort, tcpPort, dynamicPortFallbackEnabled, portRangeStart, portRangeEnd,
                 publicServerUrl, reverseProxyEnabled, contextPath, canonicalUrl,
-                networkMode, bindAddress, externalBaseUrl
+                networkMode, bindAddress, externalBaseUrl,
+                webServerEnabled, webServerAutoStart
         );
     }
 
@@ -352,7 +369,8 @@ public record ApplicationConfiguration(
                 maxIterations, maxContextTokens, maxOutputTokens, maxRetryAttempts, secureSandboxEnabled,
                 serverHost, httpPort, tcpPort, dynamicPortFallbackEnabled, portRangeStart, portRangeEnd,
                 publicServerUrl, reverseProxyEnabled, contextPath, canonicalUrl,
-                networkMode, bindAddress, externalBaseUrl
+                networkMode, bindAddress, externalBaseUrl,
+                webServerEnabled, webServerAutoStart
         );
     }
 
@@ -363,7 +381,8 @@ public record ApplicationConfiguration(
                 iterations, maxContextTokens, maxOutputTokens, retryAttempts, secureSandboxEnabled,
                 serverHost, httpPort, tcpPort, dynamicPortFallbackEnabled, portRangeStart, portRangeEnd,
                 publicServerUrl, reverseProxyEnabled, contextPath, canonicalUrl,
-                networkMode, bindAddress, externalBaseUrl
+                networkMode, bindAddress, externalBaseUrl,
+                webServerEnabled, webServerAutoStart
         );
     }
 
@@ -374,7 +393,8 @@ public record ApplicationConfiguration(
                 maxIterations, maxContextTokens, maxOutputTokens, maxRetryAttempts, secureSandboxEnabled,
                 host, httpPort, tcpPort, dynamicPortFallbackEnabled, portRangeStart, portRangeEnd,
                 publicServerUrl, reverseProxyEnabled, contextPath, canonicalUrl,
-                networkMode, bindAddress, externalBaseUrl
+                networkMode, bindAddress, externalBaseUrl,
+                webServerEnabled, webServerAutoStart
         );
     }
 
@@ -385,7 +405,8 @@ public record ApplicationConfiguration(
                 maxIterations, maxContextTokens, maxOutputTokens, maxRetryAttempts, secureSandboxEnabled,
                 serverHost, httpPort, tcpPort, fallback, startPort, endPort,
                 publicUrl != null ? publicUrl : "", reverseProxy, contextPath, canonicalUrl,
-                networkMode, bindAddress, publicUrl != null ? publicUrl : externalBaseUrl
+                networkMode, bindAddress, publicUrl != null ? publicUrl : externalBaseUrl,
+                webServerEnabled, webServerAutoStart
         );
     }
 
@@ -396,7 +417,8 @@ public record ApplicationConfiguration(
                 maxIterations, maxContextTokens, maxOutputTokens, maxRetryAttempts, secureSandboxEnabled,
                 serverHost, httpPort, tcpPort, dynamicPortFallbackEnabled, portRangeStart, portRangeEnd,
                 externalBaseUrl != null ? externalBaseUrl : publicServerUrl, reverseProxyEnabled, contextPath, canonicalUrl,
-                mode != null ? mode : DEFAULT_NETWORK_MODE, explicitBindAddress, externalBaseUrl
+                mode != null ? mode : DEFAULT_NETWORK_MODE, explicitBindAddress, externalBaseUrl,
+                webServerEnabled, webServerAutoStart
         );
     }
 
@@ -409,7 +431,23 @@ public record ApplicationConfiguration(
                 publicServerUrl, reverseProxyEnabled,
                 contextPath != null ? contextPath : DEFAULT_CONTEXT_PATH,
                 canonicalUrl != null ? canonicalUrl : DEFAULT_CANONICAL_URL,
-                networkMode, bindAddress, externalBaseUrl
+                networkMode, bindAddress, externalBaseUrl,
+                webServerEnabled, webServerAutoStart
+        );
+    }
+
+    /**
+     * Web server startup configuration (webServer.enabled / webServer.autoStart).
+     */
+    public ApplicationConfiguration withWebServerSettings(boolean enabled, boolean autoStart) {
+        return new ApplicationConfiguration(
+                applicationName, version, userHomeDirectory, configurationDirectory,
+                defaultWorkspaceDirectory, ollamaEndpoint, defaultModel, requestTimeoutSeconds,
+                maxIterations, maxContextTokens, maxOutputTokens, maxRetryAttempts, secureSandboxEnabled,
+                serverHost, httpPort, tcpPort, dynamicPortFallbackEnabled, portRangeStart, portRangeEnd,
+                publicServerUrl, reverseProxyEnabled, contextPath, canonicalUrl,
+                networkMode, bindAddress, externalBaseUrl,
+                enabled, autoStart
         );
     }
 

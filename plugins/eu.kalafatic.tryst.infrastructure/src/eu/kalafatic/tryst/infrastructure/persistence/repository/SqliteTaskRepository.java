@@ -29,8 +29,45 @@ public class SqliteTaskRepository implements TaskRepository {
 
     private final SqliteDatabaseManager databaseManager;
 
+    /**
+     * Whether the {@code tasks} table physically has the {@code agent_type} column.
+     * Legacy databases that predate the V7 migration (or whose migration history was
+     * recorded without the ALTER actually executing) must remain fully readable and
+     * writable; the column list is adapted accordingly.
+     */
+    private final boolean hasAgentTypeColumn;
+
+    private final String taskColumns;
+
     public SqliteTaskRepository(SqliteDatabaseManager databaseManager) {
         this.databaseManager = Objects.requireNonNull(databaseManager, "databaseManager must not be null");
+        this.hasAgentTypeColumn = detectAgentTypeColumn(databaseManager);
+        this.taskColumns = hasAgentTypeColumn
+                ? "id, project_id, session_id, title, description, status, "
+                    + "priority, agent_id, agent_type, worker_id, execution_result_id, review_id, "
+                    + "rework_count, failure_reason, created_at, completed_at"
+                : "id, project_id, session_id, title, description, status, "
+                    + "priority, agent_id, worker_id, execution_result_id, review_id, "
+                    + "rework_count, failure_reason, created_at, completed_at";
+    }
+
+    private static boolean detectAgentTypeColumn(SqliteDatabaseManager databaseManager) {
+        try {
+            synchronized (databaseManager.getLock()) {
+                try (var stmt = databaseManager.getConnection().createStatement();
+                     var rs = stmt.executeQuery("PRAGMA table_info(tasks);")) {
+                    while (rs.next()) {
+                        if ("agent_type".equals(rs.getString("name"))) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            eu.kalafatic.tryst.core.log.TrystLog.warn(SqliteTaskRepository.class,
+                    "Failed to introspect tasks table columns: " + e.getMessage());
+        }
+        return false;
     }
 
     @Override
@@ -42,28 +79,52 @@ public class SqliteTaskRepository implements TaskRepository {
     @Override
     public void saveTask(Task task) {
         Objects.requireNonNull(task, "task must not be null");
-        String sql = """
-            INSERT INTO tasks (
-                id, project_id, session_id, title, description, status, priority,
-                agent_id, worker_id, execution_result_id, review_id, rework_count,
-                failure_reason, created_at, completed_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                project_id = excluded.project_id,
-                session_id = excluded.session_id,
-                title = excluded.title,
-                description = excluded.description,
-                status = excluded.status,
-                priority = excluded.priority,
-                agent_id = excluded.agent_id,
-                worker_id = excluded.worker_id,
-                execution_result_id = excluded.execution_result_id,
-                review_id = excluded.review_id,
-                rework_count = excluded.rework_count,
-                failure_reason = excluded.failure_reason,
-                completed_at = excluded.completed_at;
-        """;
+        String sql = hasAgentTypeColumn
+                ? """
+                INSERT INTO tasks (
+                    id, project_id, session_id, title, description, status, priority,
+                    agent_id, agent_type, worker_id, execution_result_id, review_id, rework_count,
+                    failure_reason, created_at, completed_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    project_id = excluded.project_id,
+                    session_id = excluded.session_id,
+                    title = excluded.title,
+                    description = excluded.description,
+                    status = excluded.status,
+                    priority = excluded.priority,
+                    agent_id = excluded.agent_id,
+                    agent_type = excluded.agent_type,
+                    worker_id = excluded.worker_id,
+                    execution_result_id = excluded.execution_result_id,
+                    review_id = excluded.review_id,
+                    rework_count = excluded.rework_count,
+                    failure_reason = excluded.failure_reason,
+                    completed_at = excluded.completed_at;
+                """
+                : """
+                INSERT INTO tasks (
+                    id, project_id, session_id, title, description, status, priority,
+                    agent_id, worker_id, execution_result_id, review_id, rework_count,
+                    failure_reason, created_at, completed_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    project_id = excluded.project_id,
+                    session_id = excluded.session_id,
+                    title = excluded.title,
+                    description = excluded.description,
+                    status = excluded.status,
+                    priority = excluded.priority,
+                    agent_id = excluded.agent_id,
+                    worker_id = excluded.worker_id,
+                    execution_result_id = excluded.execution_result_id,
+                    review_id = excluded.review_id,
+                    rework_count = excluded.rework_count,
+                    failure_reason = excluded.failure_reason,
+                    completed_at = excluded.completed_at;
+                """;
 
         synchronized (databaseManager.getLock()) {
             Connection conn = databaseManager.getConnection();
@@ -76,16 +137,20 @@ public class SqliteTaskRepository implements TaskRepository {
                 pstmt.setString(6, task.getStatus().name());
                 pstmt.setString(7, task.getPriority() != null ? task.getPriority().name() : TaskPriority.NORMAL.name());
                 setNullableString(pstmt, 8, task.getAgentId());
-                setNullableString(pstmt, 9, task.getWorkerId());
-                setNullableString(pstmt, 10, task.getExecutionResultId());
-                setNullableString(pstmt, 11, task.getReviewId());
-                pstmt.setInt(12, task.getReworkCount());
-                setNullableString(pstmt, 13, task.getFailureReason());
-                pstmt.setString(14, task.getCreatedAt().toString());
+                int idx = 9;
+                if (hasAgentTypeColumn) {
+                    setNullableString(pstmt, idx++, task.getAgentType());
+                }
+                setNullableString(pstmt, idx++, task.getWorkerId());
+                setNullableString(pstmt, idx++, task.getExecutionResultId());
+                setNullableString(pstmt, idx++, task.getReviewId());
+                pstmt.setInt(idx++, task.getReworkCount());
+                setNullableString(pstmt, idx++, task.getFailureReason());
+                pstmt.setString(idx++, task.getCreatedAt().toString());
                 if (task.getCompletedAt() != null) {
-                    pstmt.setString(15, task.getCompletedAt().toString());
+                    pstmt.setString(idx, task.getCompletedAt().toString());
                 } else {
-                    pstmt.setNull(15, Types.VARCHAR);
+                    pstmt.setNull(idx, Types.VARCHAR);
                 }
                 pstmt.executeUpdate();
             } catch (SQLException e) {
@@ -102,12 +167,7 @@ public class SqliteTaskRepository implements TaskRepository {
     @Override
     public Optional<Task> findTaskById(String id) {
         Objects.requireNonNull(id, "id must not be null");
-        String sql = """
-            SELECT id, project_id, session_id, title, description, status,
-                   priority, agent_id, worker_id, execution_result_id, review_id,
-                   rework_count, failure_reason, created_at, completed_at
-            FROM tasks WHERE id = ?;
-        """;
+        String sql = "SELECT " + taskColumns + " FROM tasks WHERE id = ?;";
 
         synchronized (databaseManager.getLock()) {
             Connection conn = databaseManager.getConnection();
@@ -128,12 +188,7 @@ public class SqliteTaskRepository implements TaskRepository {
     @Override
     public List<AgentTask> findBySessionId(String sessionId) {
         Objects.requireNonNull(sessionId, "sessionId must not be null");
-        String sql = """
-            SELECT id, project_id, session_id, title, description, status,
-                   priority, agent_id, worker_id, execution_result_id, review_id,
-                   rework_count, failure_reason, created_at, completed_at
-            FROM tasks WHERE session_id = ? ORDER BY created_at ASC;
-        """;
+        String sql = "SELECT " + taskColumns + " FROM tasks WHERE session_id = ? ORDER BY created_at ASC;";
         List<AgentTask> list = new ArrayList<>();
 
         synchronized (databaseManager.getLock()) {
@@ -155,12 +210,7 @@ public class SqliteTaskRepository implements TaskRepository {
     @Override
     public List<AgentTask> findByProjectId(String projectId) {
         Objects.requireNonNull(projectId, "projectId must not be null");
-        String sql = """
-            SELECT id, project_id, session_id, title, description, status,
-                   priority, agent_id, worker_id, execution_result_id, review_id,
-                   rework_count, failure_reason, created_at, completed_at
-            FROM tasks WHERE project_id = ? ORDER BY created_at ASC;
-        """;
+        String sql = "SELECT " + taskColumns + " FROM tasks WHERE project_id = ? ORDER BY created_at ASC;";
         List<AgentTask> list = new ArrayList<>();
 
         synchronized (databaseManager.getLock()) {
@@ -190,12 +240,7 @@ public class SqliteTaskRepository implements TaskRepository {
     @Override
     public List<Task> findTasksByTaskStatus(TaskStatus status) {
         Objects.requireNonNull(status, "status must not be null");
-        String sql = """
-            SELECT id, project_id, session_id, title, description, status,
-                   priority, agent_id, worker_id, execution_result_id, review_id,
-                   rework_count, failure_reason, created_at, completed_at
-            FROM tasks WHERE status = ? ORDER BY created_at ASC;
-        """;
+        String sql = "SELECT " + taskColumns + " FROM tasks WHERE status = ? ORDER BY created_at ASC;";
         List<Task> list = new ArrayList<>();
 
         synchronized (databaseManager.getLock()) {
@@ -221,12 +266,7 @@ public class SqliteTaskRepository implements TaskRepository {
 
     @Override
     public List<Task> findAllTasks() {
-        String sql = """
-            SELECT id, project_id, session_id, title, description, status,
-                   priority, agent_id, worker_id, execution_result_id, review_id,
-                   rework_count, failure_reason, created_at, completed_at
-            FROM tasks ORDER BY created_at ASC;
-        """;
+        String sql = "SELECT " + taskColumns + " FROM tasks ORDER BY created_at ASC;";
         List<Task> list = new ArrayList<>();
 
         synchronized (databaseManager.getLock()) {

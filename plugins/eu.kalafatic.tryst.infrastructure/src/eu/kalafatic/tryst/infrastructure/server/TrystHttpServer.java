@@ -7,6 +7,7 @@ import eu.kalafatic.tryst.core.config.ApplicationConfiguration;
 import eu.kalafatic.tryst.core.config.ConfigurationService;
 import eu.kalafatic.tryst.core.error.TrystInfrastructureException;
 import eu.kalafatic.tryst.core.log.TrystLog;
+import eu.kalafatic.tryst.domain.ai.AiInferenceService;
 import eu.kalafatic.tryst.domain.model.*;
 import eu.kalafatic.tryst.domain.repository.*;
 import eu.kalafatic.tryst.domain.review.CodeReview;
@@ -93,6 +94,11 @@ public class TrystHttpServer implements TrystHttpService {
     private eu.kalafatic.tryst.domain.schedule.TaskScheduleRepository taskScheduleRepository;
     private eu.kalafatic.tryst.domain.service.TaskSchedulerService taskSchedulerService;
     private eu.kalafatic.tryst.domain.studio.StudioService studioService;
+    private SessionRepository codingSessionRepository;
+    private ExecutionResultRepository executionResultRepository;
+    private AiInferenceService aiInferenceService;
+    private ConversationMessageRepository conversationMessageRepository;
+    private eu.kalafatic.tryst.domain.repository.TaskInstructionRepository taskInstructionRepository;
 
     private final RateLimiter authRateLimiter = new RateLimiter(30, 60);
     private final RateLimiter apiRateLimiter = new RateLimiter(300, 60);
@@ -102,6 +108,8 @@ public class TrystHttpServer implements TrystHttpService {
     private ExecutorService httpExecutor;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final Map<String, HttpHandler> pendingHandlers = new java.util.concurrent.ConcurrentHashMap<>();
+    private volatile Instant startedAt;
+    private volatile Instant stoppedAt;
 
     public TrystHttpServer(String host, int port, WorkspaceService workspaceService) {
         this(host, port, workspaceService, null, null, null, null, null, null);
@@ -255,6 +263,34 @@ public class TrystHttpServer implements TrystHttpService {
         this.studioService = studioService;
     }
 
+    /**
+     * Wires the domain Session repository (coding sessions, distinct from auth sessions)
+     * for session listing and continuation.
+     */
+    public void setCodingSessionRepository(SessionRepository codingSessionRepository) {
+        this.codingSessionRepository = codingSessionRepository;
+    }
+
+    public void setExecutionResultRepository(ExecutionResultRepository executionResultRepository) {
+        this.executionResultRepository = executionResultRepository;
+    }
+
+    public void setConversationMessageRepository(ConversationMessageRepository conversationMessageRepository) {
+        this.conversationMessageRepository = conversationMessageRepository;
+    }
+
+    public void setTaskInstructionRepository(eu.kalafatic.tryst.domain.repository.TaskInstructionRepository taskInstructionRepository) {
+        this.taskInstructionRepository = taskInstructionRepository;
+    }
+
+    /**
+     * Wires the legacy inference service used for real AI explanation generation and
+     * operational AI checks (optional; endpoints degrade gracefully when unwired).
+     */
+    public void setAiInferenceService(AiInferenceService aiInferenceService) {
+        this.aiInferenceService = aiInferenceService;
+    }
+
     public eu.kalafatic.tryst.domain.studio.StudioService getStudioService() {
         return this.studioService;
     }
@@ -283,6 +319,8 @@ public class TrystHttpServer implements TrystHttpService {
 
             this.server.start();
             this.running.set(true);
+            this.startedAt = Instant.now();
+            this.stoppedAt = null;
 
             // Publish runtime endpoint and bound port in PortRegistry
             if (portRegistry != null) {
@@ -374,6 +412,8 @@ public class TrystHttpServer implements TrystHttpService {
         if (ctxPath.endsWith("/")) ctxPath = ctxPath.substring(0, ctxPath.length() - 1);
 
         StatusHandler statusH = new StatusHandler();
+        HealthHandler healthH = new HealthHandler();
+        SessionsHandler sessionsH = new SessionsHandler();
         SetupHandler setupH = new SetupHandler();
         AuthHandler authH = new AuthHandler();
         ModelsHandler modelsH = new ModelsHandler();
@@ -391,6 +431,8 @@ public class TrystHttpServer implements TrystHttpService {
 
         // Register default root /api/... routes
         server.createContext("/api/status", statusH);
+        server.createContext("/api/health", healthH);
+        server.createContext("/api/sessions", sessionsH);
         server.createContext("/api/setup", setupH);
         server.createContext("/api/auth", authH);
         server.createContext("/api/models", modelsH);
@@ -408,6 +450,8 @@ public class TrystHttpServer implements TrystHttpService {
         // Register context-path specific routes if not root
         if (!ctxPath.isEmpty() && !"/".equals(ctxPath)) {
             server.createContext(ctxPath + "/api/status", statusH);
+            server.createContext(ctxPath + "/api/health", healthH);
+            server.createContext(ctxPath + "/api/sessions", sessionsH);
             server.createContext(ctxPath + "/api/setup", setupH);
             server.createContext(ctxPath + "/api/auth", authH);
             server.createContext(ctxPath + "/api/models", modelsH);
@@ -480,6 +524,7 @@ public class TrystHttpServer implements TrystHttpService {
         }
 
         TrystLog.info(TrystHttpServer.class, "Stopping HTTP Server...");
+        this.stoppedAt = Instant.now();
         if (server != null) {
             server.stop(1);
             server = null;
@@ -695,17 +740,246 @@ public class TrystHttpServer implements TrystHttpService {
                 return;
             }
             boolean setupReq = authenticationService != null && authenticationService.isSetupRequired();
-            String json = """
-                    {
-                      "status": "UP",
-                      "server": "TRYST",
-                      "host": "%s",
-                      "httpPort": %d,
-                      "setupRequired": %b
-                    }
-                    """.formatted(host, getPort(), setupReq).trim();
+            String json = buildServerOverviewJson(false, setupReq);
             sendJsonResponse(exchange, 200, json);
         }
+    }
+
+    /**
+     * Public operational health endpoint. Reports real component states computed from
+     * live services — never a static "UP". Distinct from liveness (/api/status keeps its
+     * liveness fields for compatibility).
+     */
+    private class HealthHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendJsonResponse(exchange, 204, "");
+                return;
+            }
+            boolean setupReq = authenticationService != null && authenticationService.isSetupRequired();
+            String json = buildServerOverviewJson(true, setupReq);
+            int statusCode = json.contains("\"health\": \"CRITICAL\"") ? 503 : 200;
+            sendJsonResponse(exchange, statusCode, json);
+        }
+    }
+
+    private String resolveApplicationVersion() {
+        String v = System.getProperty("tryst.product.version");
+        if (v == null || v.isBlank()) {
+            Package pkg = TrystHttpServer.class.getPackage();
+            v = (pkg != null && pkg.getImplementationVersion() != null && !pkg.getImplementationVersion().isBlank())
+                    ? pkg.getImplementationVersion()
+                    : "unknown";
+        }
+        return v;
+    }
+
+    private long uptimeSeconds() {
+        Instant since = startedAt;
+        if (since == null) {
+            return 0;
+        }
+        return Math.max(0, java.time.Duration.between(since, Instant.now()).getSeconds());
+    }
+
+    private boolean isDatabaseConnected() {
+        if (databaseManager == null) {
+            return false;
+        }
+        try {
+            synchronized (databaseManager.getLock()) {
+                try (var stmt = databaseManager.getConnection().createStatement();
+                     var rs = stmt.executeQuery("SELECT 1")) {
+                    return rs.next();
+                }
+            }
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * Builds the operational server overview: liveness, version, uptime and per-component
+     * configured/connected/operational states computed from the live services.
+     */
+    private String buildServerOverviewJson(boolean detailed, boolean setupReq) {
+        boolean dbConfigured = databaseManager != null;
+        boolean dbConnected = isDatabaseConnected();
+
+        boolean httpRunning = isRunning();
+
+        boolean authConfigured = authenticationService != null;
+
+        // AI provider: configuration (endpoint/model) vs connectivity (provider health)
+        // vs actual model availability (published model catalog).
+        String aiEndpoint = null;
+        String aiConfiguredModel = null;
+        boolean aiConnected = false;
+        boolean aiModelAvailable = false;
+        int aiAvailableModelCount = 0;
+        if (aiModelRegistryService != null) {
+            var providers = aiModelRegistryService.getAllProviders();
+            for (var p : providers) {
+                if (p.endpoint() != null && !p.endpoint().isBlank() && aiEndpoint == null) {
+                    aiEndpoint = p.endpoint();
+                }
+                if (p.health() == eu.kalafatic.tryst.domain.ai.AiModelRegistryService.ProviderHealth.ONLINE) {
+                    aiConnected = true;
+                }
+            }
+            for (var m : aiModelRegistryService.getAllModels()) {
+                if (m.available()) {
+                    aiAvailableModelCount++;
+                }
+            }
+            aiConfiguredModel = aiModelRegistryService.getDefaultModel();
+            if (aiConfiguredModel != null && !aiConfiguredModel.isBlank()) {
+                final String configuredModel = aiConfiguredModel;
+                aiModelAvailable = aiModelRegistryService.getAllModels().stream()
+                        .anyMatch(m -> m.available() && configuredModel.equals(m.modelIdentifier()));
+            }
+        }
+        if (!aiConnected && aiMonitoringService != null) {
+            // Live probe as a fallback when the registry does not report ONLINE health.
+            try {
+                aiConnected = aiMonitoringService.checkHealth().endpointAvailable();
+            } catch (Exception ignored) {}
+        }
+
+        // Worker subsystem
+        boolean workersConfigured = taskOrchestrator != null;
+        boolean workersRunning = workersConfigured && taskOrchestrator.isRunning();
+        int workerCapacity = workersConfigured ? taskOrchestrator.getConcurrency() : 0;
+        int activeTasks = workersConfigured ? taskOrchestrator.getActiveTaskCount() : 0;
+        int queuedTasks = workersConfigured ? taskOrchestrator.getQueueDepth() : 0;
+
+        // Repository pool
+        boolean poolConfigured = repositoryPoolManager != null;
+        List<eu.kalafatic.tryst.infrastructure.vcs.RepositoryPoolManager.MirrorStatus> mirrorStatuses =
+                poolConfigured ? repositoryPoolManager.listMirrorStatuses() : List.of();
+        long syncedMirrors = mirrorStatuses.stream().filter(m -> "SYNCED".equals(m.syncState())).count();
+        long staleMirrors = mirrorStatuses.stream().filter(m -> "STALE".equals(m.syncState())).count();
+        long missingMirrors = mirrorStatuses.stream().filter(m -> "MISSING".equals(m.syncState())).count();
+
+        // Sandbox subsystem
+        boolean sandboxesConfigured = workspaceService != null;
+        int totalWorkspaces = 0;
+        int activeWorkspaces = 0;
+        if (sandboxesConfigured) {
+            for (Workspace w : workspaceService.getAllWorkspaces()) {
+                totalWorkspaces++;
+                if (w.getStatus() == eu.kalafatic.tryst.domain.model.WorkspaceStatus.ACTIVE
+                        || w.getStatus() == eu.kalafatic.tryst.domain.model.WorkspaceStatus.READY
+                        || w.getStatus() == eu.kalafatic.tryst.domain.model.WorkspaceStatus.WAITING_FOR_REVIEW) {
+                    activeWorkspaces++;
+                }
+            }
+        }
+
+        // Paused / recovery tasks
+        int pausedTasks = 0;
+        int recoveryRequiredTasks = 0;
+        if (taskRepository != null) {
+            for (Task t : taskRepository.findAllTasks()) {
+                if (t.getStatus() == TaskStatus.PAUSED) pausedTasks++;
+                if (t.getStatus() == TaskStatus.RECOVERY_REQUIRED) recoveryRequiredTasks++;
+            }
+        }
+
+        String dbStatus = !dbConfigured ? "NOT_CONFIGURED" : (dbConnected ? "OPERATIONAL" : "FAILED");
+        String httpStatus = httpRunning ? "OPERATIONAL" : "FAILED";
+        String authStatus = !authConfigured ? "NOT_CONFIGURED" : (setupReq ? "DEGRADED" : "OPERATIONAL");
+        String aiStatus = aiEndpoint == null ? "NOT_CONFIGURED" : (!aiConnected ? "FAILED" : (aiModelAvailable ? "OPERATIONAL" : "DEGRADED"));
+        String workerStatus = !workersConfigured ? "NOT_CONFIGURED" : (workersRunning ? "OPERATIONAL" : "FAILED");
+        String poolStatus = !poolConfigured ? "NOT_CONFIGURED" : (missingMirrors > 0 ? "DEGRADED" : "OPERATIONAL");
+        String sandboxStatus = !sandboxesConfigured ? "NOT_CONFIGURED" : "OPERATIONAL";
+
+        boolean critical = dbConfigured && !dbConnected
+                || workersConfigured && !workersRunning
+                || (aiEndpoint != null && !aiConnected && !setupReq);
+        String health = critical ? "CRITICAL" : ((!aiModelAvailable && aiEndpoint != null) || (authConfigured && setupReq)) ? "DEGRADED" : "OK";
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("{");
+        sb.append("\"status\": \"").append(httpRunning ? "UP" : "DOWN").append("\",");
+        sb.append("\"health\": \"").append(health).append("\",");
+        sb.append("\"server\": \"TRYST\",");
+        sb.append("\"version\": \"").append(escapeJson(resolveApplicationVersion())).append("\",");
+        sb.append("\"host\": \"").append(escapeJson(host)).append("\",");
+        sb.append("\"httpPort\": ").append(getPort()).append(",");
+        sb.append("\"uptimeSeconds\": ").append(uptimeSeconds()).append(",");
+        sb.append("\"setupRequired\": ").append(setupReq).append(",");
+        sb.append("\"queue\": {");
+        sb.append("\"queuedTasks\": ").append(queuedTasks).append(",");
+        sb.append("\"activeTasks\": ").append(activeTasks).append(",");
+        sb.append("\"pausedTasks\": ").append(pausedTasks).append(",");
+        sb.append("\"recoveryRequiredTasks\": ").append(recoveryRequiredTasks);
+        sb.append("},");
+        sb.append("\"components\": {");
+        sb.append("\"database\": {\"status\": \"").append(dbStatus).append("\", \"configured\": ").append(dbConfigured)
+                .append(", \"connected\": ").append(dbConnected);
+        if (detailed) {
+            sb.append(", \"schemaVersion\": ").append(resolveSchemaVersion());
+        }
+        sb.append("},");
+        sb.append("\"httpServer\": {\"status\": \"").append(httpStatus).append("\", \"configured\": true, \"running\": ").append(httpRunning).append("},");
+        sb.append("\"authentication\": {\"status\": \"").append(authStatus).append("\", \"configured\": ").append(authConfigured)
+                .append(", \"setupRequired\": ").append(setupReq).append("},");
+        sb.append("\"aiProvider\": {\"status\": \"").append(aiStatus).append("\", \"configured\": ").append(aiEndpoint != null)
+                .append(", \"endpoint\": \"").append(escapeJson(aiEndpoint != null ? aiEndpoint : "")).append("\"")
+                .append(", \"connected\": ").append(aiConnected)
+                .append(", \"modelConfigured\": \"").append(escapeJson(aiConfiguredModel != null ? aiConfiguredModel : "")).append("\"")
+                .append(", \"modelAvailable\": ").append(aiModelAvailable)
+                .append(", \"availableModelCount\": ").append(aiAvailableModelCount).append("},");
+        sb.append("\"workerSubsystem\": {\"status\": \"").append(workerStatus).append("\", \"configured\": ").append(workersConfigured)
+                .append(", \"running\": ").append(workersRunning)
+                .append(", \"capacity\": ").append(workerCapacity)
+                .append(", \"busy\": ").append(activeTasks).append("},");
+        sb.append("\"repositoryPool\": {\"status\": \"").append(poolStatus).append("\", \"configured\": ").append(poolConfigured)
+                .append(", \"mirrorCount\": ").append(mirrorStatuses.size())
+                .append(", \"syncedMirrors\": ").append(syncedMirrors)
+                .append(", \"staleMirrors\": ").append(staleMirrors)
+                .append(", \"missingMirrors\": ").append(missingMirrors).append("},");
+        sb.append("\"sandboxSubsystem\": {\"status\": \"").append(sandboxStatus).append("\", \"configured\": ").append(sandboxesConfigured)
+                .append(", \"totalWorkspaces\": ").append(totalWorkspaces)
+                .append(", \"activeWorkspaces\": ").append(activeWorkspaces).append("}");
+        sb.append("},");
+        // Backward-compatible uppercase component status summary (kept for existing
+        // consumers of the previous /api/admin/server contract).
+        sb.append("\"componentStatus\": {");
+        sb.append("\"DATABASE\": \"").append(legacyComponentLabel(dbStatus)).append("\",");
+        sb.append("\"HTTP_SERVER\": \"").append(legacyComponentLabel(httpStatus)).append("\",");
+        sb.append("\"AI_PROVIDER\": \"").append(legacyComponentLabel(aiStatus)).append("\",");
+        sb.append("\"WORKER_SUBSYSTEM\": \"").append(legacyComponentLabel(workerStatus)).append("\",");
+        sb.append("\"REPOSITORY_POOL\": \"").append(legacyComponentLabel(poolStatus)).append("\",");
+        sb.append("\"SANDBOX_SUBSYSTEM\": \"").append(legacyComponentLabel(sandboxStatus)).append("\"");
+        sb.append("},");
+        sb.append("\"overallStatus\": \"").append(critical ? "DEGRADED" : "READY").append("\"");
+        if (detailed) {
+            sb.append(", \"mirrors\": [");
+            for (int i = 0; i < mirrorStatuses.size(); i++) {
+                var m = mirrorStatuses.get(i);
+                if (i > 0) sb.append(",");
+                sb.append(String.format("{\"remoteUrl\": \"%s\", \"path\": \"%s\", \"defaultBranch\": \"%s\", \"lastSyncedAt\": \"%s\", \"syncState\": \"%s\"}",
+                        escapeJson(m.remoteUrl()), escapeJson(m.mirrorPath() != null ? m.mirrorPath() : ""),
+                        escapeJson(m.defaultBranch() != null ? m.defaultBranch() : "main"),
+                        escapeJson(m.lastSyncedAt() != null ? m.lastSyncedAt() : ""),
+                        escapeJson(m.syncState())));
+            }
+            sb.append("]");
+        }
+        sb.append("}");
+        return sb.toString();
+    }
+
+    private static String legacyComponentLabel(String status) {
+        return switch (status) {
+            case "OPERATIONAL" -> "AVAILABLE";
+            case "DEGRADED" -> "DEGRADED";
+            case "FAILED" -> "UNAVAILABLE";
+            default -> "NOT_CONFIGURED";
+        };
     }
 
     private class SetupHandler implements HttpHandler {
@@ -902,6 +1176,80 @@ public class TrystHttpServer implements TrystHttpService {
             }
             String userId = ctx.map(SecurityContext::getUserId).orElseGet(() -> getUserId(exchange));
             boolean isAdmin = ctx.map(SecurityContext::isAdmin).orElse(false);
+            String path = exchange.getRequestURI().getPath();
+
+            // Sub-resource: /api/projects/{id}
+            int projectsIdx = path.indexOf("/api/projects");
+            String rel = projectsIdx >= 0 ? path.substring(projectsIdx + "/api/projects".length()) : "";
+            if (rel.startsWith("/")) rel = rel.substring(1);
+            if (!rel.isEmpty() && !rel.endsWith("/")) {
+                String projectId = rel.endsWith("/") ? rel.substring(0, rel.length() - 1) : rel;
+                if (projectRepository == null) {
+                    sendJsonResponse(exchange, 503, "{\"error\": \"ProjectRepository unavailable\"}");
+                    return;
+                }
+                Optional<Project> optProj = projectRepository.findById(projectId);
+                if (optProj.isEmpty()) {
+                    sendJsonResponse(exchange, 404, "{\"error\": \"Project not found: " + escapeJson(projectId) + "\"}");
+                    return;
+                }
+                Project p = optProj.get();
+                if (!isAdmin && !userId.equals(p.getOwnerId())) {
+                    sendJsonResponse(exchange, 403, "{\"error\": \"Access denied to project\"}");
+                    return;
+                }
+
+                if ("GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                    sendJsonResponse(exchange, 200, serializeProject(p, true));
+                    return;
+                }
+
+                if ("PUT".equalsIgnoreCase(exchange.getRequestMethod())) {
+                    if (ctx.isPresent() && !ctx.get().user().hasPermission(Permission.CREATE_PROJECTS)) {
+                        permissionManager.recordAudit(userId, "PROJECT_UPDATE", "project", projectId, null, null,
+                                "DENIED", "Lacks CREATE_PROJECTS (project management) permission");
+                        sendJsonResponse(exchange, 403, "{\"error\": \"Permission required to modify project configuration\"}");
+                        return;
+                    }
+                    String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                    String name = extractJsonField(body, "name");
+                    String description = extractJsonField(body, "description");
+                    String repositoryUrl = extractJsonField(body, "repositoryUrl");
+                    String defaultBranch = extractJsonField(body, "defaultBranch");
+                    String buildCommand = extractJsonField(body, "buildCommand");
+                    String testCommand = extractJsonField(body, "testCommand");
+                    String instructions = extractJsonField(body, "instructions");
+                    if (name != null && !name.isBlank()) {
+                        p.setName(name.trim());
+                    }
+                    if (description != null) {
+                        p.setDescription(description.trim());
+                    }
+                    if (repositoryUrl != null) {
+                        p.setRepositoryUrl(repositoryUrl);
+                    }
+                    if (defaultBranch != null && !defaultBranch.isBlank()) {
+                        p.setDefaultBranch(defaultBranch.trim());
+                    }
+                    if (buildCommand != null) {
+                        p.setBuildCommand(buildCommand);
+                    }
+                    if (testCommand != null) {
+                        p.setTestCommand(testCommand);
+                    }
+                    if (instructions != null) {
+                        p.setInstructions(instructions);
+                    }
+                    projectRepository.save(p);
+                    permissionManager.recordAudit(userId, "PROJECT_UPDATE", "project", projectId, projectId, null,
+                            "SUCCESS", "Updated project configuration");
+                    sendJsonResponse(exchange, 200, serializeProject(p, true));
+                    return;
+                }
+
+                sendJsonResponse(exchange, 404, "{\"error\": \"Not Found\"}");
+                return;
+            }
 
             if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
                 if (ctx.isPresent() && !ctx.get().user().hasPermission(Permission.CREATE_PROJECTS)) {
@@ -921,9 +1269,23 @@ public class TrystHttpServer implements TrystHttpService {
                         : Path.of(System.getProperty("user.home"), ".tryst", "projects", name);
 
                 Project project = workspaceService.addProject(userId, name, "", loc);
-                String json = String.format("{\"id\": \"%s\", \"ownerId\": \"%s\", \"name\": \"%s\", \"status\": \"%s\"}",
-                        escapeJson(project.getId()), escapeJson(project.getOwnerId()), escapeJson(project.getName()), project.getStatus().name());
-                sendJsonResponse(exchange, 201, json);
+
+                // Persist optional configuration supplied at creation time
+                String repositoryUrl = extractJsonField(body, "repositoryUrl");
+                String defaultBranch = extractJsonField(body, "defaultBranch");
+                String buildCommand = extractJsonField(body, "buildCommand");
+                String testCommand = extractJsonField(body, "testCommand");
+                String instructions = extractJsonField(body, "instructions");
+                if (repositoryUrl != null && !repositoryUrl.isBlank()) project.setRepositoryUrl(repositoryUrl);
+                if (defaultBranch != null && !defaultBranch.isBlank()) project.setDefaultBranch(defaultBranch.trim());
+                if (buildCommand != null && !buildCommand.isBlank()) project.setBuildCommand(buildCommand);
+                if (testCommand != null && !testCommand.isBlank()) project.setTestCommand(testCommand);
+                if (instructions != null && !instructions.isBlank()) project.setInstructions(instructions);
+                if (projectRepository != null && (project.getRepositoryUrl() != null || project.getBuildCommand() != null)) {
+                    projectRepository.save(project);
+                }
+
+                sendJsonResponse(exchange, 201, serializeProject(project, false));
                 return;
             }
 
@@ -946,11 +1308,27 @@ public class TrystHttpServer implements TrystHttpService {
             for (int i = 0; i < allProjects.size(); i++) {
                 Project p = allProjects.get(i);
                 if (i > 0) sb.append(",");
-                sb.append(String.format("{\"id\": \"%s\", \"ownerId\": \"%s\", \"name\": \"%s\", \"status\": \"%s\", \"location\": \"%s\"}",
-                        escapeJson(p.getId()), escapeJson(p.getOwnerId()), escapeJson(p.getName()), p.getStatus().name(), escapeJson(p.getLocation().toString())));
+                sb.append(serializeProject(p, false));
             }
             sb.append("]}");
             sendJsonResponse(exchange, 200, sb.toString());
+        }
+
+        private String serializeProject(Project p, boolean includeDescription) {
+            String base = String.format("{\"id\": \"%s\", \"ownerId\": \"%s\", \"name\": \"%s\", \"status\": \"%s\", \"location\": \"%s\"",
+                    escapeJson(p.getId()), escapeJson(p.getOwnerId()), escapeJson(p.getName()), p.getStatus().name(),
+                    escapeJson(p.getLocation().toString()));
+            StringBuilder sb = new StringBuilder(base);
+            if (includeDescription) {
+                sb.append(", \"description\": \"").append(escapeJson(p.getDescription())).append("\"");
+            }
+            sb.append(", \"repositoryUrl\": \"").append(escapeJson(p.getRepositoryUrl() != null ? p.getRepositoryUrl() : "")).append("\"");
+            sb.append(", \"defaultBranch\": \"").append(escapeJson(p.getDefaultBranch() != null ? p.getDefaultBranch() : "main")).append("\"");
+            sb.append(", \"buildCommand\": \"").append(escapeJson(p.getBuildCommand() != null ? p.getBuildCommand() : "")).append("\"");
+            sb.append(", \"testCommand\": \"").append(escapeJson(p.getTestCommand() != null ? p.getTestCommand() : "")).append("\"");
+            sb.append(", \"instructions\": \"").append(escapeJson(p.getInstructions() != null ? p.getInstructions() : "")).append("\"");
+            sb.append("}");
+            return sb.toString();
         }
     }
 
@@ -1178,6 +1556,7 @@ public class TrystHttpServer implements TrystHttpService {
                     StringBuilder sb = new StringBuilder("{");
                     sb.append("\"taskId\": \"").append(res.task().getId()).append("\",");
                     sb.append("\"title\": \"").append(escapeJson(res.task().getTitle())).append("\",");
+                    sb.append("\"sessionId\": \"").append(escapeJson(res.task().getSessionId() != null ? res.task().getSessionId() : "")).append("\",");
                     sb.append("\"status\": \"").append(res.task().getStatus().name()).append("\",");
                     sb.append("\"priority\": \"").append(res.task().getPriority().name()).append("\",");
                     sb.append("\"persistedInstructionsCount\": ").append(res.persistedInstructions().size()).append(",");
@@ -1322,6 +1701,27 @@ public class TrystHttpServer implements TrystHttpService {
                 return;
             }
 
+            // Session continuation from an existing task: POST /api/tasks/{id}/continue
+            if (path.contains("/continue") && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                String sub = path.substring(path.indexOf("/api/tasks/") + "/api/tasks/".length());
+                String taskId = sub.substring(0, sub.indexOf("/continue"));
+                String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                String instruction = extractJsonField(body, "instruction");
+                String newTitle = extractJsonField(body, "title");
+                String priorityStr = extractJsonField(body, "priority");
+                TaskPriority priority = null;
+                if (priorityStr != null && !priorityStr.isBlank()) {
+                    try { priority = TaskPriority.valueOf(priorityStr.toUpperCase()); } catch (Exception ignored) {}
+                }
+                try {
+                    String json = continueSessionWork(taskId, true, instruction, newTitle, priority, userId, ctx);
+                    sendJsonResponse(exchange, 201, json);
+                } catch (TrystDomainException e) {
+                    sendJsonResponse(exchange, 400, "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}");
+                }
+                return;
+            }
+
             // Task events: GET /api/tasks/{id}/events
             if (path.contains("/events") && "GET".equalsIgnoreCase(exchange.getRequestMethod())) {
                 String sub = path.substring(path.indexOf("/api/tasks/") + "/api/tasks/".length());
@@ -1401,15 +1801,152 @@ public class TrystHttpServer implements TrystHttpService {
             for (int i = 0; i < tasks.size(); i++) {
                 Task t = tasks.get(i);
                 if (i > 0) sb.append(",");
-                sb.append(String.format("{\"id\": \"%s\", \"projectId\": \"%s\", \"title\": \"%s\", \"status\": \"%s\", \"reviewId\": \"%s\", \"workerId\": \"%s\", \"priority\": \"%s\"}",
+                sb.append(String.format("{\"id\": \"%s\", \"projectId\": \"%s\", \"sessionId\": \"%s\", \"title\": \"%s\", \"status\": \"%s\", \"reviewId\": \"%s\", \"workerId\": \"%s\", \"agentType\": \"%s\", \"priority\": \"%s\", \"reworkCount\": %d, \"createdAt\": \"%s\", \"completedAt\": \"%s\", \"failureReason\": \"%s\"}",
                         escapeJson(t.getId()), escapeJson(t.getProjectId() != null ? t.getProjectId() : ""),
+                        escapeJson(t.getSessionId() != null ? t.getSessionId() : ""),
                         escapeJson(t.getTitle()), t.getStatus().name(),
                         escapeJson(t.getReviewId() != null ? t.getReviewId() : ""),
                         escapeJson(t.getWorkerId() != null ? t.getWorkerId() : ""),
-                        t.getPriority().name()));
+                        escapeJson(t.getAgentType() != null ? t.getAgentType() : ""),
+                        t.getPriority().name(), t.getReworkCount(),
+                        t.getCreatedAt(),
+                        t.getCompletedAt() != null ? t.getCompletedAt().toString() : "",
+                        escapeJson(t.getFailureReason() != null ? t.getFailureReason() : "")));
             }
             sb.append("]}");
             sendJsonResponse(exchange, 200, sb.toString());
+        }
+    }
+
+    /**
+     * Coding-session API: session listing, session detail (with task history) and
+     * session continuation. Coding sessions are distinct from authentication sessions.
+     */
+    private class SessionsHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendJsonResponse(exchange, 204, "");
+                return;
+            }
+            if (!validateCsrfIfCookieAuth(exchange)) {
+                sendJsonResponse(exchange, 403, "{\"error\": \"Invalid or missing CSRF token\"}");
+                return;
+            }
+            Optional<SecurityContext> ctx = resolveSecurityContext(exchange);
+            if (isAuthenticationRequiredAndMissing(ctx)) {
+                sendJsonResponse(exchange, 401, "{\"error\": \"Authentication required\"}");
+                return;
+            }
+            String userId = ctx.map(SecurityContext::getUserId).orElseGet(() -> getUserId(exchange));
+            boolean isAdmin = ctx.map(SecurityContext::isAdmin).orElse(ApplicationConfiguration.isDevelopmentMode());
+            String path = exchange.getRequestURI().getPath();
+
+            int sessionsIdx = path.indexOf("/api/sessions");
+            String rel = sessionsIdx >= 0 ? path.substring(sessionsIdx + "/api/sessions".length()) : "";
+            if (rel.startsWith("/")) rel = rel.substring(1);
+
+            // GET /api/sessions — session list with latest task summary
+            if (rel.isEmpty() && "GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                List<Session> sessions = codingSessionRepository != null ? codingSessionRepository.findAll() : List.of();
+                // User scope: only sessions bound to projects the user owns (admins see all)
+                if (!isAdmin && projectRepository != null) {
+                    sessions = sessions.stream().filter(s -> {
+                        Project p = projectRepository.findById(s.getProjectId()).orElse(null);
+                        return p == null || userId.equals(p.getOwnerId());
+                    }).toList();
+                }
+                StringBuilder sb = new StringBuilder("{\"sessions\": [");
+                for (int i = 0; i < sessions.size(); i++) {
+                    Session s = sessions.get(i);
+                    if (i > 0) sb.append(",");
+                    AgentTask latest = null;
+                    if (taskRepository != null) {
+                        List<AgentTask> ts = taskRepository.findBySessionId(s.getId());
+                        if (!ts.isEmpty()) {
+                            latest = ts.get(ts.size() - 1);
+                        }
+                    }
+                    sb.append(String.format("{\"id\": \"%s\", \"projectId\": \"%s\", \"name\": \"%s\", \"status\": \"%s\", \"createdAt\": \"%s\", \"updatedAt\": \"%s\", \"latestTaskId\": \"%s\", \"latestTaskStatus\": \"%s\", \"taskCount\": %d}",
+                            escapeJson(s.getId()), escapeJson(s.getProjectId()), escapeJson(s.getName()), s.getStatus(),
+                            s.getCreatedAt(), s.getUpdatedAt(),
+                            escapeJson(latest != null ? latest.getId() : ""),
+                            latest != null ? latest.getTaskStatus().name() : "",
+                            taskRepository != null ? taskRepository.findBySessionId(s.getId()).size() : 0));
+                }
+                sb.append("]}");
+                sendJsonResponse(exchange, 200, sb.toString());
+                return;
+            }
+
+            if (!rel.isEmpty()) {
+                String[] parts = rel.split("/");
+                String sessionId = parts[0];
+
+                if (parts.length == 1 && "GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                    // GET /api/sessions/{id} — session detail incl. task history
+                    Session s = codingSessionRepository != null ? codingSessionRepository.findById(sessionId).orElse(null) : null;
+                    if (s == null) {
+                        sendJsonResponse(exchange, 404, "{\"error\": \"Session not found: " + escapeJson(sessionId) + "\"}");
+                        return;
+                    }
+                    if (!isAdmin && projectRepository != null) {
+                        Project p = projectRepository.findById(s.getProjectId()).orElse(null);
+                        if (p != null && !userId.equals(p.getOwnerId())) {
+                            sendJsonResponse(exchange, 403, "{\"error\": \"Access denied to session\"}");
+                            return;
+                        }
+                    }
+                    StringBuilder sb = new StringBuilder("{");
+                    sb.append(String.format("\"id\": \"%s\", \"projectId\": \"%s\", \"name\": \"%s\", \"status\": \"%s\", \"createdAt\": \"%s\", \"updatedAt\": \"%s\"",
+                            escapeJson(s.getId()), escapeJson(s.getProjectId()), escapeJson(s.getName()), s.getStatus(),
+                            s.getCreatedAt(), s.getUpdatedAt()));
+                    sb.append(", \"tasks\": [");
+                    List<AgentTask> ts = taskRepository != null ? taskRepository.findBySessionId(sessionId) : List.of();
+                    for (int i = 0; i < ts.size(); i++) {
+                        Task t = Task.fromAgentTask(ts.get(i));
+                        if (i > 0) sb.append(",");
+                        sb.append(String.format("{\"id\": \"%s\", \"title\": \"%s\", \"status\": \"%s\", \"priority\": \"%s\", \"reviewId\": \"%s\", \"workerId\": \"%s\", \"createdAt\": \"%s\", \"completedAt\": \"%s\"}",
+                                escapeJson(t.getId()), escapeJson(t.getTitle()), t.getStatus().name(), t.getPriority().name(),
+                                escapeJson(t.getReviewId() != null ? t.getReviewId() : ""),
+                                escapeJson(t.getWorkerId() != null ? t.getWorkerId() : ""),
+                                t.getCreatedAt(), t.getCompletedAt() != null ? t.getCompletedAt().toString() : ""));
+                    }
+                    sb.append("], \"messages\": [");
+                    List<ConversationMessage> msgs = conversationMessageRepository != null
+                            ? conversationMessageRepository.findBySessionId(sessionId) : List.of();
+                    for (int i = 0; i < msgs.size(); i++) {
+                        if (i > 0) sb.append(",");
+                        ConversationMessage m = msgs.get(i);
+                        sb.append(String.format("{\"role\": \"%s\", \"content\": \"%s\", \"createdAt\": \"%s\"}",
+                                m.getRole(), escapeJson(m.getContent()), m.getCreatedAt()));
+                    }
+                    sb.append("]}");
+                    sendJsonResponse(exchange, 200, sb.toString());
+                    return;
+                }
+
+                if (parts.length == 2 && "continue".equalsIgnoreCase(parts[1]) && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                    // POST /api/sessions/{id}/continue
+                    String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                    String instruction = extractJsonField(body, "instruction");
+                    String newTitle = extractJsonField(body, "title");
+                    String priorityStr = extractJsonField(body, "priority");
+                    TaskPriority priority = null;
+                    if (priorityStr != null && !priorityStr.isBlank()) {
+                        try { priority = TaskPriority.valueOf(priorityStr.toUpperCase()); } catch (Exception ignored) {}
+                    }
+                    try {
+                        String json = continueSessionWork(sessionId, false, instruction, newTitle, priority, userId, ctx);
+                        sendJsonResponse(exchange, 201, json);
+                    } catch (TrystDomainException e) {
+                        sendJsonResponse(exchange, 400, "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}");
+                    }
+                    return;
+                }
+            }
+
+            sendJsonResponse(exchange, 404, "{\"error\": \"Sessions route not found\"}");
         }
     }
 
@@ -1443,6 +1980,11 @@ public class TrystHttpServer implements TrystHttpService {
             // Route: GET /api/reviews
             if (normPath.equals("/api/reviews") && "GET".equalsIgnoreCase(exchange.getRequestMethod())) {
                 List<CodeReview> list = codeReviewRepository.findAll();
+                Map<String, String> qParams = parseQueryParams(exchange.getRequestURI().getQuery());
+                String projectFilter = qParams.get("projectId");
+                if (projectFilter != null && !projectFilter.isBlank()) {
+                    list = list.stream().filter(r -> projectFilter.equals(r.getProjectId())).toList();
+                }
                 StringBuilder sb = new StringBuilder();
                 sb.append("{\"reviews\": [");
                 for (int i = 0; i < list.size(); i++) {
@@ -1996,6 +2538,19 @@ public class TrystHttpServer implements TrystHttpService {
                                 ws = new eu.kalafatic.tryst.domain.model.Workspace("ws-review-" + review.getId(), repoDir);
                             }
 
+                            // Apply project-level build/test command configuration
+                            if (projectRepository != null && review.getProjectId() != null) {
+                                Project cfg = projectRepository.findById(review.getProjectId()).orElse(null);
+                                if (cfg != null) {
+                                    if (cfg.getBuildCommand() != null && !cfg.getBuildCommand().isBlank()) {
+                                        ws.setMetadata("build_command", cfg.getBuildCommand().trim());
+                                    }
+                                    if (cfg.getTestCommand() != null && !cfg.getTestCommand().isBlank()) {
+                                        ws.setMetadata("test_command", cfg.getTestCommand().trim());
+                                    }
+                                }
+                            }
+
                             eu.kalafatic.tryst.domain.build.QualityReport qReport = buildAndTestService.runQualityAssurance(
                                     ws,
                                     review.getTaskId() != null ? review.getTaskId() : review.getId(),
@@ -2212,15 +2767,34 @@ public class TrystHttpServer implements TrystHttpService {
                                     codeSnippet != null ? codeSnippet : "(whole diff)",
                                     (question != null && !question.isBlank()) ? question : "Explain what changed and the architectural reasoning.");
 
-                            String explanation = "Explanation for " + (filePath != null ? filePath : "changes") + ":\n" +
-                                    "The modification addresses the task requirements by implementing targeted logic updates, preserving invariants, and passing automated validation.";
-
-                            if (review.getAiExplanation() != null && !review.getAiExplanation().isBlank()) {
-                                explanation = review.getAiExplanation() + "\n\nContext: " + (codeSnippet != null ? codeSnippet : "(file changes)");
+                            if (aiInferenceService == null) {
+                                String fallback = review.getAiExplanation() != null && !review.getAiExplanation().isBlank()
+                                        ? review.getAiExplanation()
+                                        : "AI explanation unavailable: no inference service is configured on this server.";
+                                sendJsonResponse(exchange, 200,
+                                        String.format("{\"explanation\": \"%s\", \"aiGenerated\": false}", escapeJson(fallback)));
+                                return;
                             }
 
-                            String json = String.format("{\"explanation\": \"%s\"}", escapeJson(explanation));
-                            sendJsonResponse(exchange, 200, json);
+                            String model = (configurationService != null && configurationService.getConfiguration().defaultModel() != null)
+                                    ? configurationService.getConfiguration().defaultModel()
+                                    : "codellama";
+                            List<AiInferenceService.ChatMessage> messages = List.of(
+                                    new AiInferenceService.ChatMessage("system", "You are a senior code review assistant. Provide a concise, technically precise explanation."),
+                                    new AiInferenceService.ChatMessage("user", prompt)
+                            );
+                            try {
+                                AiInferenceService.InferenceRequest req = new AiInferenceService.InferenceRequest(model, messages, 0.3, 1024, Map.of());
+                                AiInferenceService.InferenceResponse resp = aiInferenceService.generateResponse(req)
+                                        .get(45, java.util.concurrent.TimeUnit.SECONDS);
+                                String json = String.format("{\"explanation\": \"%s\", \"aiGenerated\": true, \"model\": \"%s\"}",
+                                        escapeJson(resp.content()), escapeJson(model));
+                                sendJsonResponse(exchange, 200, json);
+                            } catch (Exception e) {
+                                sendJsonResponse(exchange, 502,
+                                        String.format("{\"explanation\": \"AI explanation failed: %s\", \"aiGenerated\": false}",
+                                                escapeJson(e.getMessage() != null ? e.getMessage() : "inference error")));
+                            }
                             return;
                         }
                     }
@@ -2726,26 +3300,10 @@ public class TrystHttpServer implements TrystHttpService {
             String sub = (adminIdx >= 0) ? path.substring(adminIdx + "/api/admin".length()) : "";
             if (sub.startsWith("/")) sub = sub.substring(1);
 
-            // 1. Server Status: /api/admin/server
+            // 1. Server Status: /api/admin/server (full operational overview)
             if (sub.equals("server")) {
-                boolean dbOk = databaseManager != null;
-                boolean httpOk = isRunning();
-                boolean aiOk = aiMonitoringService != null && aiMonitoringService.checkHealth().endpointAvailable();
-                String json = String.format("""
-                        {
-                          "componentStatus": {
-                            "DATABASE": "%s",
-                            "HTTP_SERVER": "%s",
-                            "AI_PROVIDER": "%s"
-                          },
-                          "overallStatus": "%s"
-                        }
-                        """,
-                        dbOk ? "AVAILABLE" : "UNAVAILABLE",
-                        httpOk ? "AVAILABLE" : "UNAVAILABLE",
-                        aiOk ? "AVAILABLE" : "DEGRADED",
-                        (dbOk && httpOk) ? "READY" : "DEGRADED");
-                sendJsonResponse(exchange, 200, json);
+                boolean setupReq = authenticationService != null && authenticationService.isSetupRequired();
+                sendJsonResponse(exchange, 200, buildServerOverviewJson(true, setupReq));
                 return;
             }
 
@@ -2835,15 +3393,64 @@ public class TrystHttpServer implements TrystHttpService {
                 int capacity = taskOrchestrator != null ? taskOrchestrator.getConcurrency() : 1;
                 int activeWorkers = taskOrchestrator != null ? taskOrchestrator.getActiveTaskCount() : 0;
                 int queueDepth = taskOrchestrator != null ? taskOrchestrator.getQueueDepth() : 0;
-                String json = String.format("""
-                        {
-                          "capacity": %d,
-                          "activeWorkers": %d,
-                          "queuedCount": %d,
-                          "utilizationPercentage": %.2f
-                        }
-                        """, capacity, activeWorkers, queueDepth, capacity > 0 ? (activeWorkers * 100.0 / capacity) : 0.0);
-                sendJsonResponse(exchange, 200, json);
+                int availableWorkers = Math.max(0, capacity - activeWorkers);
+                StringBuilder sb = new StringBuilder();
+                sb.append("{");
+                sb.append("\"capacity\": ").append(capacity).append(",");
+                sb.append("\"busyWorkers\": ").append(activeWorkers).append(",");
+                sb.append("\"availableWorkers\": ").append(availableWorkers).append(",");
+                sb.append("\"activeWorkers\": ").append(activeWorkers).append(",");
+                sb.append("\"queuedCount\": ").append(queueDepth).append(",");
+                sb.append("\"utilizationPercentage\": ").append(String.format(Locale.ROOT, "%.2f",
+                        capacity > 0 ? (activeWorkers * 100.0 / capacity) : 0.0)).append(",");
+                sb.append("\"running\": ").append(taskOrchestrator != null && taskOrchestrator.isRunning()).append(",");
+                sb.append("\"workers\": [");
+                if (taskOrchestrator != null) {
+                    var runtimes = taskOrchestrator.getWorkerRuntimes();
+                    for (int i = 0; i < runtimes.size(); i++) {
+                        TaskOrchestrator.WorkerRuntime wr = runtimes.get(i);
+                        if (i > 0) sb.append(",");
+                        sb.append(String.format("{\"workerId\": \"%s\", \"busy\": %b, \"taskId\": \"%s\", \"completedTasks\": %d, \"failedTasks\": %d, \"totalDurationMs\": %d}",
+                                escapeJson(wr.getWorkerId()), wr.isBusy(),
+                                escapeJson(wr.getTaskId() != null ? wr.getTaskId() : ""),
+                                wr.getCompletedTasks(), wr.getFailedTasks(), wr.getTotalDurationMs()));
+                    }
+                }
+                sb.append("]}");
+                sendJsonResponse(exchange, 200, sb.toString());
+                return;
+            }
+
+            // 5b. Task queue with ordering: /api/admin/queue
+            if (sub.equals("queue")) {
+                List<Task> queued = new ArrayList<>();
+                if (taskRepository != null) {
+                    queued.addAll(taskRepository.findTasksByTaskStatus(TaskStatus.QUEUED));
+                }
+                queued.sort((a, b) -> {
+                    int pa = priorityRank(a.getPriority());
+                    int pb = priorityRank(b.getPriority());
+                    if (pa != pb) {
+                        return Integer.compare(pb, pa);
+                    }
+                    return a.getCreatedAt().compareTo(b.getCreatedAt());
+                });
+                StringBuilder sb = new StringBuilder("{\"queue\": [");
+                for (int i = 0; i < queued.size(); i++) {
+                    Task t = queued.get(i);
+                    if (i > 0) sb.append(",");
+                    sb.append(String.format("{\"position\": %d, \"id\": \"%s\", \"title\": \"%s\", \"priority\": \"%s\", \"projectId\": \"%s\", \"createdAt\": \"%s\"}",
+                            i + 1, escapeJson(t.getId()), escapeJson(t.getTitle()), t.getPriority().name(),
+                            escapeJson(t.getProjectId() != null ? t.getProjectId() : ""), t.getCreatedAt()));
+                }
+                sb.append("], \"queueDepth\": ").append(queued.size()).append("}");
+                sendJsonResponse(exchange, 200, sb.toString());
+                return;
+            }
+
+            // 5c. Execution statistics computed from persisted data: /api/admin/statistics
+            if (sub.equals("statistics")) {
+                sendJsonResponse(exchange, 200, buildStatisticsJson());
                 return;
             }
 
@@ -2857,6 +3464,25 @@ public class TrystHttpServer implements TrystHttpService {
                     boolean cancelled = taskOrchestrator != null && taskOrchestrator.cancelTask(taskId, reason != null ? reason : "Administrative cancellation");
                     permissionManager.recordAudit(userId, "ADMIN_TASK_CANCEL", "task", taskId, null, null, cancelled ? "SUCCESS" : "FAILED", "Reason: " + reason);
                     sendJsonResponse(exchange, cancelled ? 200 : 400, "{\"success\": " + cancelled + "}");
+                    return;
+                }
+                if (sub.endsWith("/retry") && "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                    String[] parts = sub.split("/");
+                    String taskId = parts[1];
+                    String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                    boolean force = body.contains("\"force\": true") || body.contains("\"force\":true");
+                    boolean retried;
+                    if (taskOrchestrator != null) {
+                        retried = force
+                                ? taskOrchestrator.forceRetryRecoveredTask(taskId, userId)
+                                : taskOrchestrator.retryRecoveredTask(taskId, userId);
+                    } else {
+                        retried = false;
+                    }
+                    permissionManager.recordAudit(userId, "ADMIN_TASK_RETRY", "task", taskId, null, null,
+                            retried ? "SUCCESS" : "FAILED", "Force: " + force);
+                    sendJsonResponse(exchange, retried ? 200 : 400,
+                            "{\"success\": " + retried + ", \"taskId\": \"" + escapeJson(taskId) + "\", \"force\": " + force + "}");
                     return;
                 }
                 if (sub.endsWith("/context") && "GET".equalsIgnoreCase(exchange.getRequestMethod())) {
@@ -2900,9 +3526,16 @@ public class TrystHttpServer implements TrystHttpService {
                     for (int i = 0; i < tasks.size(); i++) {
                         Task t = tasks.get(i);
                         if (i > 0) sb.append(",");
-                        sb.append(String.format("{\"id\": \"%s\", \"title\": \"%s\", \"status\": \"%s\", \"priority\": \"%s\", \"projectId\": \"%s\", \"createdAt\": \"%s\"}",
+                        sb.append(String.format("{\"id\": \"%s\", \"title\": \"%s\", \"status\": \"%s\", \"priority\": \"%s\", \"projectId\": \"%s\", \"sessionId\": \"%s\", \"workerId\": \"%s\", \"agentType\": \"%s\", \"reviewId\": \"%s\", \"createdAt\": \"%s\", \"completedAt\": \"%s\", \"failureReason\": \"%s\"}",
                                 t.getId(), escapeJson(t.getTitle()), t.getStatus().name(), t.getPriority().name(),
-                                t.getProjectId() != null ? t.getProjectId() : "", t.getCreatedAt()));
+                                t.getProjectId() != null ? t.getProjectId() : "",
+                                escapeJson(t.getSessionId() != null ? t.getSessionId() : ""),
+                                escapeJson(t.getWorkerId() != null ? t.getWorkerId() : ""),
+                                escapeJson(t.getAgentType() != null ? t.getAgentType() : ""),
+                                escapeJson(t.getReviewId() != null ? t.getReviewId() : ""),
+                                t.getCreatedAt(),
+                                t.getCompletedAt() != null ? t.getCompletedAt().toString() : "",
+                                escapeJson(t.getFailureReason() != null ? t.getFailureReason() : "")));
                     }
                     sb.append("]}");
                     sendJsonResponse(exchange, 200, sb.toString());
@@ -3124,8 +3757,11 @@ public class TrystHttpServer implements TrystHttpService {
                     for (int i = 0; i < snaps.size(); i++) {
                         TelemetrySnapshot s = snaps.get(i);
                         if (i > 0) sb.append(",");
-                        sb.append(String.format("{\"timestamp\": \"%s\", \"cpuSystem\": %f, \"cpuProcess\": %f, \"heapUsed\": %d, \"heapMax\": %d, \"activeSessions\": %d}",
-                                s.timestamp(), s.cpuSystem(), s.cpuProcess(), s.memoryHeapUsed(), s.memoryHeapMax(), s.activeSessions()));
+                        String aiLat = Double.isNaN(s.aiLatencyMs()) ? "null" : String.format(Locale.ROOT, "%f", s.aiLatencyMs());
+                        sb.append(String.format("{\"timestamp\": \"%s\", \"cpuSystem\": %f, \"cpuProcess\": %f, \"heapUsed\": %d, \"heapMax\": %d, \"memorySystemUsed\": %d, \"diskWorkspaceUsed\": %d, \"diskWorkspaceTotal\": %d, \"activeSessions\": %d, \"queuedTasks\": %d, \"runningTasks\": %d, \"aiLatencyMs\": %s}",
+                                s.timestamp(), s.cpuSystem(), s.cpuProcess(), s.memoryHeapUsed(), s.memoryHeapMax(),
+                                s.memorySystemUsed(), s.diskWorkspaceUsed(), s.diskWorkspaceTotal(),
+                                s.activeSessions(), s.queuedTasks(), s.runningTasks(), aiLat));
                     }
                     sb.append("]}");
                     sendJsonResponse(exchange, 200, sb.toString());
@@ -3201,6 +3837,8 @@ public class TrystHttpServer implements TrystHttpService {
                         if (model != null && !model.isBlank()) updated = updated.withDefaultModel(model.trim());
                         if (endpoint != null && !endpoint.isBlank()) updated = updated.withOllamaEndpoint(endpoint.trim());
                         configurationService.updateConfiguration(updated);
+                        permissionManager.recordAudit(userId, "ADMIN_CONFIG_UPDATE", "config", null, null, null,
+                                "SUCCESS", "Updated model/endpoint configuration");
                         cfg = updated;
                     }
                     String json = String.format("{\"ollamaEndpoint\": \"%s\", \"defaultModel\": \"%s\", \"timeoutSecs\": %d, \"maxIterations\": %d}",
@@ -4315,14 +4953,45 @@ public class TrystHttpServer implements TrystHttpService {
             int activeTasks = (taskOrchestrator != null) ? taskOrchestrator.getActiveTaskCount() : 0;
             int queueDepth = (taskOrchestrator != null) ? taskOrchestrator.getQueueDepth() : 0;
             int concurrency = (taskOrchestrator != null) ? taskOrchestrator.getConcurrency() : 1;
-            int activeWorkspaces = (workspaceService != null) ? workspaceService.getAllWorkspaces().size() : 0;
+            int availableWorkers = Math.max(0, concurrency - activeTasks);
             int activeProcesses = (processExecutionManager != null) ? processExecutionManager.getManagedProcesses().size() : 0;
 
-            List<String> mirrors = (repositoryPoolManager != null) ? repositoryPoolManager.listMirrors() : List.of();
+            // Real workspace/sandbox counts by status (never count archived rows as "allocated")
+            int totalWorkspaces = 0;
+            int allocatedWorkspaces = 0;
+            int activeSandboxes = 0;
+            int idleSandboxes = 0;
+            int failedWorkspaces = 0;
+            if (workspaceService != null) {
+                for (Workspace w : workspaceService.getAllWorkspaces()) {
+                    totalWorkspaces++;
+                    switch (w.getStatus()) {
+                        case ACTIVE, READY, WAITING_FOR_REVIEW -> {
+                            allocatedWorkspaces++;
+                            activeSandboxes++;
+                        }
+                        case ALLOCATED, INITIALIZING -> {
+                            allocatedWorkspaces++;
+                            idleSandboxes++;
+                        }
+                        case FAILED -> failedWorkspaces++;
+                        default -> {}
+                    }
+                }
+            }
+
+            // Repository mirrors with real persisted status + filesystem verification
+            List<eu.kalafatic.tryst.infrastructure.vcs.RepositoryPoolManager.MirrorStatus> mirrorStatuses =
+                    (repositoryPoolManager != null) ? repositoryPoolManager.listMirrorStatuses() : List.of();
             StringBuilder mb = new StringBuilder("[");
-            for (int i = 0; i < mirrors.size(); i++) {
+            for (int i = 0; i < mirrorStatuses.size(); i++) {
+                var m = mirrorStatuses.get(i);
                 if (i > 0) mb.append(",");
-                mb.append("\"").append(escapeJson(mirrors.get(i))).append("\"");
+                mb.append(String.format("{\"remoteUrl\": \"%s\", \"path\": \"%s\", \"defaultBranch\": \"%s\", \"lastSyncedAt\": \"%s\", \"syncState\": \"%s\"}",
+                        escapeJson(m.remoteUrl()), escapeJson(m.mirrorPath() != null ? m.mirrorPath() : ""),
+                        escapeJson(m.defaultBranch() != null ? m.defaultBranch() : "main"),
+                        escapeJson(m.lastSyncedAt() != null ? m.lastSyncedAt() : ""),
+                        escapeJson(m.syncState())));
             }
             mb.append("]");
 
@@ -4330,11 +4999,19 @@ public class TrystHttpServer implements TrystHttpService {
                     {
                       "workers": {
                         "active": %d,
+                        "activeTasks": %d,
+                        "available": %d,
+                        "busy": %d,
                         "concurrency": %d,
-                        "queueDepth": %d
+                        "queueDepth": %d,
+                        "utilizationPercentage": %.2f
                       },
                       "workspaces": {
-                        "allocated": %d
+                        "total": %d,
+                        "allocated": %d,
+                        "activeSandboxes": %d,
+                        "idleSandboxes": %d,
+                        "failed": %d
                       },
                       "processes": {
                         "active": %d
@@ -4342,7 +5019,10 @@ public class TrystHttpServer implements TrystHttpService {
                       "repositoryMirrors": %s,
                       "mirrorCount": %d
                     }
-                    """, activeTasks, concurrency, queueDepth, activeWorkspaces, activeProcesses, mb.toString(), mirrors.size());
+                    """, activeTasks, activeTasks, availableWorkers, activeTasks, concurrency, queueDepth,
+                    concurrency > 0 ? (activeTasks * 100.0 / concurrency) : 0.0,
+                    totalWorkspaces, allocatedWorkspaces, activeSandboxes, idleSandboxes, failedWorkspaces,
+                    activeProcesses, mb.toString(), mirrorStatuses.size());
             sendJsonResponse(exchange, 200, json);
         }
     }
@@ -4406,6 +5086,14 @@ public class TrystHttpServer implements TrystHttpService {
                 sb.append("\"description\":\"").append(escapeJson(snap.task().getDescription() != null ? snap.task().getDescription() : "")).append("\",");
                 sb.append("\"status\":\"").append(snap.task().getStatus().name()).append("\",");
                 sb.append("\"priority\":\"").append(snap.task().getPriority().name()).append("\",");
+                sb.append("\"projectId\":\"").append(escapeJson(snap.task().getProjectId() != null ? snap.task().getProjectId() : "")).append("\",");
+                sb.append("\"sessionId\":\"").append(escapeJson(snap.task().getSessionId() != null ? snap.task().getSessionId() : "")).append("\",");
+                sb.append("\"agentType\":\"").append(escapeJson(snap.task().getAgentType() != null ? snap.task().getAgentType() : "")).append("\",");
+                sb.append("\"workerId\":\"").append(escapeJson(snap.task().getWorkerId() != null ? snap.task().getWorkerId() : "")).append("\",");
+                sb.append("\"reviewId\":\"").append(escapeJson(snap.task().getReviewId() != null ? snap.task().getReviewId() : "")).append("\",");
+                sb.append("\"reworkCount\":").append(snap.task().getReworkCount()).append(",");
+                sb.append("\"createdAt\":\"").append(snap.task().getCreatedAt()).append("\",");
+                sb.append("\"failureReason\":\"").append(escapeJson(snap.task().getFailureReason() != null ? snap.task().getFailureReason() : "")).append("\",");
                 sb.append("\"repositoryName\":\"").append(escapeJson(snap.repositoryName())).append("\",");
                 sb.append("\"currentBranch\":\"").append(escapeJson(snap.currentBranch())).append("\",");
                 sb.append("\"isRunning\":").append(snap.isRunning()).append(",");
@@ -4473,7 +5161,39 @@ public class TrystHttpServer implements TrystHttpService {
                 sb.append("],");
 
                 // fullDiff
-                sb.append("\"fullDiff\":\"").append(escapeJson(snap.fullDiff())).append("\"");
+                sb.append("\"fullDiff\":\"").append(escapeJson(snap.fullDiff())).append("\",");
+
+                // Real build/test results from the task's code review (never fabricated)
+                String buildStatus = "";
+                String testSummary = "";
+                if (codeReviewRepository != null) {
+                    Optional<CodeReview> optRev = codeReviewRepository.findByTaskId(taskId);
+                    if (optRev.isPresent()) {
+                        buildStatus = optRev.get().getBuildStatus() != null ? optRev.get().getBuildStatus() : "";
+                        testSummary = optRev.get().getTestSummary() != null ? optRev.get().getTestSummary() : "";
+                    }
+                }
+                sb.append("\"buildStatus\":\"").append(escapeJson(buildStatus)).append("\",");
+                sb.append("\"testSummary\":\"").append(escapeJson(testSummary)).append("\",");
+
+                // Real execution result (log output, exit code, duration)
+                sb.append("\"executionResult\":");
+                if (executionResultRepository != null) {
+                    Optional<ExecutionResult> optRes = executionResultRepository.findLatestByTaskId(taskId);
+                    if (optRes.isPresent()) {
+                        ExecutionResult res = optRes.get();
+                        sb.append(String.format("{\"id\": \"%s\", \"exitCode\": %d, \"durationMs\": %d, \"output\": \"%s\", \"errorOutput\": \"%s\", \"diagnosticInfo\": \"%s\", \"completedAt\": \"%s\"}",
+                                escapeJson(res.getId()), res.getExitCode(), res.getDurationMs(),
+                                escapeJson(res.getOutput() != null ? res.getOutput() : ""),
+                                escapeJson(res.getErrorOutput() != null ? res.getErrorOutput() : ""),
+                                escapeJson(res.getDiagnosticInfo() != null ? res.getDiagnosticInfo() : ""),
+                                res.getCompletedAt() != null ? res.getCompletedAt().toString() : ""));
+                    } else {
+                        sb.append("null");
+                    }
+                } else {
+                    sb.append("null");
+                }
                 sb.append("}");
 
                 sendJsonResponse(exchange, 200, sb.toString());
@@ -4622,68 +5342,85 @@ public class TrystHttpServer implements TrystHttpService {
                     <title>TRYST – Production Platform Administration & Code Review Center</title>
                     <style>
                         :root {
-                            --bg: #f8fafc; --panel: #ffffff; --sidebar-bg: #f1f5f9;
-                            --border: #cbd5e1; --border-subtle: #e2e8f0;
-                            --text: #0f172a; --muted: #475569; --primary: #0284c7;
-                            --primary-dark: #0369a1; --primary-light: #e0f2fe;
-                            --green: #16a34a; --red: #dc2626; --yellow: #d97706;
+                            /* UPM design standard tokens (UniversalProjectManager/web/app.css) — light theme */
+                            --bg: #f4f6f9; --bg2: #eceff4; --panel: var(--panel); --panel2: #f7f9fb;
+                            --border: #d7dce4; --border-strong: #c3cad5; --text: #1b2434;
+                            --muted: #5c6a7e; --faint: #8b96a8; --accent: #2f6bd8;
+                            --accent-soft: #e8effa; --ok: #1f8a4c; --ok-soft: #e7f4ec;
+                            --warn: #a86a00; --warn-soft: #fdf3e2; --err: #c23b2e;
+                            --err-soft: #fbeceb; --info: #2b7fbe; --info-soft: #e7f1f9;
+                            --sel: #e8effa; --shadow: 0 1px 2px rgba(16, 24, 40, .06);
+                            /* TRYST legacy aliases */
+                            --sidebar-bg: var(--bg2); --border-subtle: var(--border);
+                            --primary: var(--accent); --primary-dark: var(--accent);
+                            --primary-light: var(--accent-soft); --green: var(--ok);
+                            --red: var(--err); --yellow: var(--warn);
+                        }
+                        [data-theme="dark"] {
+                            --bg: #12161f; --bg2: #181d29; --panel: #1c2230; --panel2: #232b3c;
+                            --border: #2e394c; --border-strong: #3c4a61; --text: #e7ebf3;
+                            --muted: #93a0b4; --faint: #6b7789; --accent: #5b8feb;
+                            --accent-soft: #24344e; --ok: #46c58a; --ok-soft: #1d3a2c;
+                            --warn: #e2ad4e; --warn-soft: #3d3320; --err: #ef7a6f;
+                            --err-soft: #432422; --info: #62b6ea; --info-soft: #1f3a4d;
+                            --sel: #26334c; --shadow: 0 1px 2px rgba(0, 0, 0, .3);
                         }
                         * { box-sizing: border-box; }
                         body { font-family: "Segoe UI", Arial, -apple-system, BlinkMacSystemFont, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); font-size: 13px; line-height: 1.4; }
-                        header { background: #ffffff; padding: 10px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+                        header { background: var(--panel); padding: 10px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
                         h1 { margin: 0; font-size: 16px; color: var(--text); font-weight: 600; display: flex; align-items: center; gap: 8px; }
                         h2, h3, h4 { color: var(--text); font-weight: 600; margin: 0 0 8px 0; }
                         .top-nav { display: flex; gap: 10px; align-items: center; }
-                        .nav-btn { background: #ffffff; border: 1px solid var(--border); color: var(--muted); padding: 5px 12px; border-radius: 3px; cursor: pointer; font-size: 12px; font-weight: 500; }
-                        .nav-btn:hover { background: #f8fafc; color: var(--text); border-color: #94a3b8; }
-                        .nav-btn.active { background: var(--primary); color: #ffffff; border-color: var(--primary-dark); font-weight: 600; }
+                        .nav-btn { background: var(--panel); border: 1px solid var(--border); color: var(--muted); padding: 5px 12px; border-radius: 3px; cursor: pointer; font-size: 12px; font-weight: 500; }
+                        .nav-btn:hover { background: var(--bg); color: var(--text); border-color: var(--border-strong); }
+                        .nav-btn.active { background: var(--primary); color: #fff; border-color: var(--primary-dark); font-weight: 600; }
                         .container { display: flex; height: calc(100vh - 50px); }
                         .sidebar { width: 280px; min-width: 250px; border-right: 1px solid var(--border); background: var(--sidebar-bg); display: flex; flex-direction: column; overflow-y: auto; }
                         .main-content { flex: 1; display: flex; flex-direction: column; overflow-y: auto; padding: 20px; background: var(--bg); }
                         .card { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
                         .section-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); margin-bottom: 10px; }
                         .list-item { padding: 8px 12px; border-radius: 3px; cursor: pointer; border: 1px solid transparent; margin-bottom: 4px; color: var(--text); font-size: 12px; }
-                        .list-item:hover { background: #e2e8f0; border-color: #334155; }
-                        .list-item.active { background: #e0f2fe; border-color: #0284c7; color: #0369a1; font-weight: 600; }
+                        .list-item:hover { background: var(--bg2); border-color: var(--muted); }
+                        .list-item.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
                         .badge { padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600; text-transform: uppercase; }
-                        .badge-success { background: #dcfce7; color: var(--green); border: 1px solid #86efac; }
-                        .badge-warning { background: #fef9c3; color: var(--yellow); border: 1px solid #fde047; }
-                        .badge-error { background: #fee2e2; color: var(--red); border: 1px solid #fca5a5; }
-                        .badge-info { background: #e0f2fe; color: var(--primary); border: 1px solid #7dd3fc; }
+                        .badge-success { background: var(--ok-soft); color: var(--green); border: 1px solid var(--ok); }
+                        .badge-warning { background: var(--warn-soft); color: var(--yellow); border: 1px solid var(--warn); }
+                        .badge-error { background: var(--err-soft); color: var(--red); border: 1px solid var(--err); }
+                        .badge-info { background: var(--accent-soft); color: var(--primary); border: 1px solid var(--info); }
                         .btn { padding: 6px 14px; border-radius: 3px; font-weight: 600; cursor: pointer; border: 1px solid transparent; font-size: 12px; font-family: inherit; }
-                        .btn-primary { background: #0284c7; color: white; border-color: #0369a1; }
-                        .btn-primary:hover { background: #0369a1; }
-                        .btn-success { background: #16a34a; color: white; border-color: #15803d; }
-                        .btn-success:hover { background: #15803d; }
-                        .btn-danger { background: #dc2626; color: white; border-color: #b91c1c; }
-                        .btn-danger:hover { background: #b91c1c; }
-                        .btn-warning { background: #d97706; color: white; border-color: #b45309; }
-                        .btn-warning:hover { background: #b45309; }
-                        .btn-default { background: #ffffff; color: var(--text); border-color: var(--border); }
-                        .btn-default:hover { background: #f1f5f9; }
+                        .btn-primary { background: var(--accent); color: white; border-color: var(--accent); }
+                        .btn-primary:hover { background: var(--accent); }
+                        .btn-success { background: var(--ok); color: white; border-color: var(--ok); }
+                        .btn-success:hover { background: var(--ok); }
+                        .btn-danger { background: var(--err); color: white; border-color: var(--err); }
+                        .btn-danger:hover { background: var(--err); }
+                        .btn-warning { background: var(--warn); color: white; border-color: var(--warn); }
+                        .btn-warning:hover { background: var(--warn); }
+                        .btn-default { background: var(--panel); color: var(--text); border-color: var(--border); }
+                        .btn-default:hover { background: var(--bg2); }
                         .btn-sm { padding: 3px 8px; font-size: 11px; border-radius: 3px; }
-                        pre.diff-view { background: #ffffff; border: 1px solid var(--border); border-radius: 3px; padding: 12px; font-family: Consolas, "Courier New", monospace; font-size: 12px; overflow-x: auto; line-height: 1.5; margin: 0; }
+                        pre.diff-view { background: var(--panel); border: 1px solid var(--border); border-radius: 3px; padding: 12px; font-family: Consolas, "Courier New", monospace; font-size: 12px; overflow-x: auto; line-height: 1.5; margin: 0; }
                         .diff-line { display: flex; cursor: pointer; user-select: none; }
-                        .diff-line:hover { background: #f1f5f9; }
-                        .diff-line.selected { background: #fef08a !important; border-left: 3px solid var(--yellow); }
+                        .diff-line:hover { background: var(--bg2); }
+                        .diff-line.selected { background: var(--warn-soft) !important; border-left: 3px solid var(--yellow); }
                         .diff-line-num { width: 50px; text-align: right; padding-right: 12px; color: var(--muted); border-right: 1px solid var(--border); user-select: none; font-size: 11px; }
                         .diff-line-code { padding-left: 12px; flex: 1; white-space: pre-wrap; font-family: Consolas, "Courier New", monospace; }
-                        .diff-add { color: #15803d; background: #ecfdf5; }
-                        .diff-del { color: #b91c1c; background: #fef2f2; }
-                        .diff-hdr { color: #475569; font-weight: bold; background: #f1f5f9; }
-                        textarea.code-editor { width: 100%; height: 130px; background: #ffffff; border: 1px solid var(--border); color: var(--text); font-family: Consolas, "Courier New", monospace; font-size: 12px; padding: 10px; border-radius: 3px; resize: vertical; }
+                        .diff-add { color: var(--ok); background: var(--ok-soft); }
+                        .diff-del { color: var(--err); background: var(--err-soft); }
+                        .diff-hdr { color: var(--muted); font-weight: bold; background: var(--bg2); }
+                        textarea.code-editor { width: 100%; height: 130px; background: var(--panel); border: 1px solid var(--border); color: var(--text); font-family: Consolas, "Courier New", monospace; font-size: 12px; padding: 10px; border-radius: 3px; resize: vertical; }
                         textarea.code-editor:focus, select.input-ctrl:focus, input.input-ctrl:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
                         table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12px; }
                         th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border-subtle); }
-                        th { color: var(--muted); font-weight: 600; background: #f8fafc; border-bottom: 1px solid var(--border); }
-                        tr:hover td { background: #f8fafc; }
+                        th { color: var(--muted); font-weight: 600; background: var(--bg); border-bottom: 1px solid var(--border); }
+                        tr:hover td { background: var(--bg); }
                         .grid-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px; }
                         .stat-card { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 14px; box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
                         .stat-val { font-size: 22px; font-weight: 700; color: var(--primary); margin-top: 4px; }
                         .flex-row { display: flex; gap: 8px; align-items: center; }
-                        .comment-box { background: #f8fafc; border: 1px solid var(--border); border-radius: 4px; padding: 12px; margin-top: 8px; }
-                        .comment-box.resolved { opacity: 0.7; border-color: var(--green); background: #f0fdf4; }
-                        select.input-ctrl, input.input-ctrl { background: #ffffff; border: 1px solid var(--border); color: var(--text); padding: 5px 8px; border-radius: 3px; font-size: 12px; font-family: inherit; }
+                        .comment-box { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 12px; margin-top: 8px; }
+                        .comment-box.resolved { opacity: 0.7; border-color: var(--green); background: var(--ok-soft); }
+                        select.input-ctrl, input.input-ctrl { background: var(--panel); border: 1px solid var(--border); color: var(--text); padding: 5px 8px; border-radius: 3px; font-size: 12px; font-family: inherit; }
 
 
                         /* Task Lifecycle 13-Stage Stepper Component */
@@ -4691,40 +5428,40 @@ public class TrystHttpServer implements TrystHttpService {
                         .stepper-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
                         .stepper-track { display: flex; align-items: center; justify-content: space-between; position: relative; overflow-x: auto; padding-bottom: 4px; }
                         .stepper-step { display: flex; flex-direction: column; align-items: center; min-width: 80px; flex: 1; position: relative; z-index: 2; text-align: center; }
-                        .stepper-icon { width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold; background: #ffffff; border: 2px solid #cbd5e1; color: var(--muted); }
+                        .stepper-icon { width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold; background: var(--panel); border: 2px solid var(--border); color: var(--muted); }
                         .stepper-label { font-size: 9px; font-weight: 600; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.3px; text-align: center; white-space: nowrap; }
-                        .stepper-step.completed .stepper-icon { background: var(--green); border-color: var(--green); color: #ffffff; }
+                        .stepper-step.completed .stepper-icon { background: var(--green); border-color: var(--green); color: #fff; }
                         .stepper-step.completed .stepper-label { color: var(--green); }
-                        .stepper-step.active .stepper-icon { background: #e0f2fe; border-color: var(--primary); color: var(--primary); box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.2); }
+                        .stepper-step.active .stepper-icon { background: var(--accent-soft); border-color: var(--primary); color: var(--primary); box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.2); }
                         .stepper-step.active .stepper-label { color: var(--primary); font-weight: 700; }
-                        .stepper-step.failed .stepper-icon { background: var(--red); border-color: var(--red); color: #ffffff; }
+                        .stepper-step.failed .stepper-icon { background: var(--red); border-color: var(--red); color: #fff; }
                         .stepper-step.failed .stepper-label { color: var(--red); }
-                        .stepper-line { flex: 1; height: 2px; background: #e2e8f0; margin: 0 2px 16px 2px; }
+                        .stepper-line { flex: 1; height: 2px; background: var(--bg2); margin: 0 2px 16px 2px; }
                         .stepper-line.completed { background: var(--green); }
 
                         /* Visual Workflow Designer Styles */
                         .wf-container { display: flex; height: calc(100vh - 50px); width: 100%; overflow: hidden; }
                         .wf-palette { width: 260px; min-width: 240px; background: var(--sidebar-bg); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto; padding: 14px; }
-                        .wf-canvas-area { flex: 1; display: flex; flex-direction: column; position: relative; background: #f8fafc; overflow: hidden; }
-                        .wf-toolbar { height: 42px; background: #ffffff; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; padding: 0 14px; gap: 8px; z-index: 10; }
-                        .wf-canvas-viewport { flex: 1; position: relative; overflow: hidden; background: radial-gradient(circle, #cbd5e1 1px, transparent 1px); background-size: 20px 20px; cursor: grab; }
+                        .wf-canvas-area { flex: 1; display: flex; flex-direction: column; position: relative; background: var(--bg); overflow: hidden; }
+                        .wf-toolbar { height: 42px; background: var(--panel); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; padding: 0 14px; gap: 8px; z-index: 10; }
+                        .wf-canvas-viewport { flex: 1; position: relative; overflow: hidden; background: radial-gradient(circle, var(--border) 1px, transparent 1px); background-size: 20px 20px; cursor: grab; }
                         .wf-canvas-viewport.grabbing { cursor: grabbing; }
-                        .wf-props-panel { width: 320px; min-width: 280px; background: #ffffff; border-left: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto; padding: 14px; }
-                        .wf-palette-item { background: #ffffff; border: 1px solid var(--border); border-radius: 3px; padding: 8px 10px; margin-bottom: 6px; cursor: grab; user-select: none; display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; }
-                        .wf-palette-item:hover { border-color: var(--primary); background: #f0f9ff; }
-                        .wf-node { position: absolute; min-width: 170px; background: #ffffff; border: 1px solid var(--border); border-radius: 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.06); user-select: none; cursor: move; z-index: 5; }
+                        .wf-props-panel { width: 320px; min-width: 280px; background: var(--panel); border-left: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto; padding: 14px; }
+                        .wf-palette-item { background: var(--panel); border: 1px solid var(--border); border-radius: 3px; padding: 8px 10px; margin-bottom: 6px; cursor: grab; user-select: none; display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; }
+                        .wf-palette-item:hover { border-color: var(--primary); background: var(--accent-soft); }
+                        .wf-node { position: absolute; min-width: 170px; background: var(--panel); border: 1px solid var(--border); border-radius: 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.06); user-select: none; cursor: move; z-index: 5; }
                         .wf-node.selected { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(2, 132, 199, 0.4); }
                         .wf-node.node-running { border-color: var(--yellow); }
                         .wf-node.node-completed { border-color: var(--green); }
                         .wf-node.node-failed { border-color: var(--red); }
-                        .wf-node-header { padding: 6px 10px; font-size: 11px; font-weight: 700; border-bottom: 1px solid var(--border-subtle); background: #f8fafc; border-top-left-radius: 3px; border-top-right-radius: 3px; display: flex; align-items: center; justify-content: space-between; }
+                        .wf-node-header { padding: 6px 10px; font-size: 11px; font-weight: 700; border-bottom: 1px solid var(--border-subtle); background: var(--bg); border-top-left-radius: 3px; border-top-right-radius: 3px; display: flex; align-items: center; justify-content: space-between; }
                         .wf-node-body { padding: 8px 10px; font-size: 11px; color: var(--muted); }
-                        .wf-port { width: 10px; height: 10px; border-radius: 50%; background: #0284c7; border: 2px solid #ffffff; position: absolute; cursor: crosshair; }
-                        .wf-port-in { left: -5px; top: calc(50% - 5px); background: #0284c7; }
-                        .wf-port-out { right: -5px; top: calc(50% - 5px); background: #16a34a; }
-                        .wf-port-fail { right: -5px; top: calc(80% - 5px); background: #dc2626; }
+                        .wf-port { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); border: 2px solid var(--panel); position: absolute; cursor: crosshair; }
+                        .wf-port-in { left: -5px; top: calc(50% - 5px); background: var(--accent); }
+                        .wf-port-out { right: -5px; top: calc(50% - 5px); background: var(--ok); }
+                        .wf-port-fail { right: -5px; top: calc(80% - 5px); background: var(--err); }
                         svg.wf-connections-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; }
-                        svg.wf-connections-layer path { pointer-events: stroke; cursor: pointer; fill: none; stroke: #94a3b8; stroke-width: 2; }
+                        svg.wf-connections-layer path { pointer-events: stroke; cursor: pointer; fill: none; stroke: var(--border-strong); stroke-width: 2; }
                         svg.wf-connections-layer path:hover { stroke: var(--primary); stroke-width: 3; }
                     </style>
                 </head>
@@ -4749,7 +5486,9 @@ public class TrystHttpServer implements TrystHttpService {
                             <button id="navPools" class="nav-btn" onclick="switchNavSection('pools')">Resource Pools</button>
                             <button id="navWorkflows" class="nav-btn" onclick="switchNavSection('workflows')">Workflows</button>
                             <button id="navStudio" class="nav-btn" onclick="switchNavSection('studio')">Studio</button>
+                            <button id="navEvo" class="nav-btn" onclick="switchNavSection('evo')">EVO</button>
                             <button id="navAdmin" class="nav-btn" onclick="switchNavSection('admin')">Administration</button>
+                            <button id="navHelp" class="nav-btn" onclick="window.open(apiUrl('/help.html'), '_blank')" title="Help and documentation">Help</button>
                             <div style="position: relative; display: inline-block;">
                                 <button id="btnNotifBell" class="nav-btn" onclick="toggleNotificationDropdown()" title="Notifications">
                                     Alerts <span id="notifBadge" class="badge badge-warning" style="display:none; font-size:10px; padding:2px 5px;">0</span>
@@ -4770,6 +5509,7 @@ public class TrystHttpServer implements TrystHttpService {
                             <div style="display: flex; align-items: center; gap: 8px; border-left: 1px solid var(--border); padding-left: 10px;">
                                 <span id="userStatus" style="font-size: 12px; font-weight: 500; color: var(--text);">User: Local</span>
                                 <button id="btnAuthAction" class="btn btn-sm btn-default" onclick="toggleAuthModal()">Login</button>
+                                <button id="trystThemeBtn" class="btn btn-sm btn-default" onclick="toggleTrystTheme()" title="Toggle light/dark theme (UPM design standard)">Theme</button>
                             </div>
                         </div>
                     </header>
@@ -4783,6 +5523,10 @@ public class TrystHttpServer implements TrystHttpService {
                                 <div class="stat-card"><div>Isolated Workspaces</div><div id="dashWorkspaces" class="stat-val">0</div></div>
                                 <div class="stat-card"><div>Mirror Cache Pools</div><div id="dashMirrors" class="stat-val">0</div></div>
                                 <div class="stat-card"><div>Code Reviews Pending</div><div id="dashReviews" class="stat-val">0</div></div>
+                            </div>
+                            <div class="card" style="margin-bottom: 16px;">
+                                <div class="section-title">Server Health <button class="btn btn-sm btn-default" style="margin-left: 10px;" onclick="loadDashboardStats()">↻ Refresh</button></div>
+                                <div id="dashHealth" style="font-size: 12px;">Loading server health...</div>
                             </div>
                             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
                                 <div class="card">
@@ -4798,9 +5542,9 @@ public class TrystHttpServer implements TrystHttpService {
                     </div>
 
                     <!-- TRYST Studio Tab -->
-                    <div id="studioTab" class="container" style="display: none; flex-direction: column; height: calc(100vh - 50px); overflow: hidden; background: #ffffff;">
+                    <div id="studioTab" class="container" style="display: none; flex-direction: column; height: calc(100vh - 50px); overflow: hidden; background: var(--panel);">
                         <!-- Studio Top Header -->
-                        <div id="studioHeader" style="background: #ffffff; border-bottom: 1px solid var(--border); padding: 8px 16px; display: flex; align-items: center; justify-content: space-between; font-size: 12px;">
+                        <div id="studioHeader" style="background: var(--panel); border-bottom: 1px solid var(--border); padding: 8px 16px; display: flex; align-items: center; justify-content: space-between; font-size: 12px;">
                             <div style="display: flex; align-items: center; gap: 14px;">
                                 <div style="font-weight: 700; color: var(--primary); display: flex; align-items: center; gap: 6px;">
                                     <span style="font-size: 14px;">⚡</span> TRYST STUDIO
@@ -4808,11 +5552,11 @@ public class TrystHttpServer implements TrystHttpService {
                                 <div style="display: flex; align-items: center; gap: 8px; border-left: 1px solid var(--border); padding-left: 12px;">
                                     <span style="color: var(--muted);">Task:</span>
                                     <span id="stHeaderTaskId" style="font-family: monospace; font-weight: 600;">-</span>
-                                    <span id="stHeaderTaskTitle" style="font-weight: 600; color: #1e293b; max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">-</span>
+                                    <span id="stHeaderTaskTitle" style="font-weight: 600; color: var(--text); max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">-</span>
                                 </div>
                                 <div style="display: flex; align-items: center; gap: 6px; border-left: 1px solid var(--border); padding-left: 12px;">
                                     <span style="color: var(--muted);">Branch:</span>
-                                    <code id="stHeaderBranch" style="background: #f1f5f9; padding: 2px 6px; border-radius: 3px;">master</code>
+                                    <code id="stHeaderBranch" style="background: var(--bg2); padding: 2px 6px; border-radius: 3px;">master</code>
                                 </div>
                                 <div style="display: flex; align-items: center; gap: 6px; border-left: 1px solid var(--border); padding-left: 12px;">
                                     <span id="stHeaderStatusBadge" class="badge badge-info">IDLE</span>
@@ -4824,6 +5568,7 @@ public class TrystHttpServer implements TrystHttpService {
                                 <button id="btnStudioResume" class="btn btn-sm btn-success" style="display: none;" onclick="studioLifecycleAction('resume')">▶ Resume</button>
                                 <button id="btnStudioStop" class="btn btn-sm btn-danger" onclick="studioLifecycleAction('stop')">⏹ Stop</button>
                                 <button class="btn btn-sm btn-default" onclick="refreshStudioState()">🔄 Refresh</button>
+                                <button class="btn btn-sm btn-success" onclick="openContinueSessionModal()">▶ Continue Session</button>
                                 <button class="btn btn-sm btn-primary" onclick="switchNavSection('queue')">← Return to Tasks</button>
                             </div>
                         </div>
@@ -4831,8 +5576,8 @@ public class TrystHttpServer implements TrystHttpService {
                         <!-- Studio Workspace Main 3-Column Layout -->
                         <div style="flex: 1; display: flex; overflow: hidden; position: relative;">
                             <!-- Left Column: Activity Feed & Files -->
-                            <div id="studioLeftPanel" style="width: 280px; min-width: 200px; border-right: 1px solid var(--border); background: #f8fafc; display: flex; flex-direction: column; overflow: hidden;">
-                                <div style="display: flex; border-bottom: 1px solid var(--border); background: #f1f5f9;">
+                            <div id="studioLeftPanel" style="width: 280px; min-width: 200px; border-right: 1px solid var(--border); background: var(--bg); display: flex; flex-direction: column; overflow: hidden;">
+                                <div style="display: flex; border-bottom: 1px solid var(--border); background: var(--bg2);">
                                     <button id="btnStudioSubActivity" class="nav-btn active" style="flex: 1; border: none; border-radius: 0; padding: 8px;" onclick="switchStudioSubLeft('activity')">Activity</button>
                                     <button id="btnStudioSubFiles" class="nav-btn" style="flex: 1; border: none; border-radius: 0; padding: 8px;" onclick="switchStudioSubLeft('files')">Files (<span id="stFilesCount">0</span>)</button>
                                 </div>
@@ -4845,9 +5590,9 @@ public class TrystHttpServer implements TrystHttpService {
                             </div>
 
                             <!-- Center Column: Code & Diff Editor -->
-                            <div id="studioCenterPanel" style="flex: 1; display: flex; flex-direction: column; background: #ffffff; overflow: hidden;">
+                            <div id="studioCenterPanel" style="flex: 1; display: flex; flex-direction: column; background: var(--panel); overflow: hidden;">
                                 <!-- Editor Toolbar -->
-                                <div style="background: #ffffff; border-bottom: 1px solid var(--border); padding: 6px 14px; display: flex; align-items: center; justify-content: space-between; font-size: 12px;">
+                                <div style="background: var(--panel); border-bottom: 1px solid var(--border); padding: 6px 14px; display: flex; align-items: center; justify-content: space-between; font-size: 12px;">
                                     <div style="display: flex; align-items: center; gap: 8px;">
                                         <b id="stCurrentFileLabel" style="color: var(--primary);">Full Workspace Changes</b>
                                         <span id="stDiffStatsBadge" style="font-size: 11px; color: var(--muted);"></span>
@@ -4861,11 +5606,11 @@ public class TrystHttpServer implements TrystHttpService {
                                     </div>
                                 </div>
                                 <!-- Editor Body -->
-                                <div id="studioEditorBody" style="flex: 1; overflow: auto; background: #ffffff; font-family: Consolas, monospace; font-size: 12px;">
+                                <div id="studioEditorBody" style="flex: 1; overflow: auto; background: var(--panel); font-family: Consolas, monospace; font-size: 12px;">
                                     <div style="color: var(--muted); padding: 24px; text-align: center;">Select a file to inspect modifications.</div>
                                 </div>
                                 <!-- Inline Comment Insertion Box -->
-                                <div id="studioInlineCommentBox" style="display: none; background: #f8fafc; border-top: 1px solid var(--border); padding: 10px 14px;">
+                                <div id="studioInlineCommentBox" style="display: none; background: var(--bg); border-top: 1px solid var(--border); padding: 10px 14px;">
                                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
                                         <span style="font-weight: 600; font-size: 11px; color: var(--primary);">💬 Comment on Line <span id="stCommentLineNum">1</span></span>
                                         <button class="btn btn-sm btn-default" onclick="closeStudioInlineComment()">✕</button>
@@ -4878,8 +5623,8 @@ public class TrystHttpServer implements TrystHttpService {
                             </div>
 
                             <!-- Right Column: AI Assistant & Collaboration -->
-                            <div id="studioRightPanel" style="width: 340px; min-width: 260px; border-left: 1px solid var(--border); background: #ffffff; display: flex; flex-direction: column; overflow: hidden;">
-                                <div style="padding: 10px 14px; background: #f8fafc; border-bottom: 1px solid var(--border); font-size: 12px; font-weight: 700; color: #1e293b; display: flex; align-items: center; justify-content: space-between;">
+                            <div id="studioRightPanel" style="width: 340px; min-width: 260px; border-left: 1px solid var(--border); background: var(--panel); display: flex; flex-direction: column; overflow: hidden;">
+                                <div style="padding: 10px 14px; background: var(--bg); border-bottom: 1px solid var(--border); font-size: 12px; font-weight: 700; color: var(--text); display: flex; align-items: center; justify-content: space-between;">
                                     <span>🤖 AI ASSISTANT</span>
                                     <span id="stAiActivityState" style="font-size: 11px; font-weight: 500; color: var(--muted);">Ready</span>
                                 </div>
@@ -4887,12 +5632,12 @@ public class TrystHttpServer implements TrystHttpService {
                                     <div style="color: var(--muted); text-align: center; padding: 20px;">AI conversation and explanations will appear here.</div>
                                 </div>
                                 <!-- Interactive Alternatives Box -->
-                                <div id="studioAlternativesContainer" style="display: none; border-top: 1px solid var(--border); background: #fefce8; padding: 10px 14px; max-height: 180px; overflow-y: auto;">
-                                    <div style="font-weight: 700; font-size: 11px; color: #854d0e; margin-bottom: 6px;">⚡ IMPLEMENTATION ALTERNATIVES</div>
+                                <div id="studioAlternativesContainer" style="display: none; border-top: 1px solid var(--border); background: var(--warn-soft); padding: 10px 14px; max-height: 180px; overflow-y: auto;">
+                                    <div style="font-weight: 700; font-size: 11px; color: var(--warn); margin-bottom: 6px;">⚡ IMPLEMENTATION ALTERNATIVES</div>
                                     <div id="studioAlternativesList" style="font-size: 11px;"></div>
                                 </div>
                                 <!-- User Instruction Input Area -->
-                                <div style="border-top: 1px solid var(--border); padding: 12px; background: #f8fafc;">
+                                <div style="border-top: 1px solid var(--border); padding: 12px; background: var(--bg);">
                                     <div style="display: flex; gap: 6px;">
                                         <textarea id="stUserInstructionInput" class="input-ctrl" style="flex: 1; height: 54px; resize: none; font-size: 12px; padding: 8px;" placeholder="Send guidance or instruction while task is running..."></textarea>
                                         <button class="btn btn-primary" style="height: 54px; padding: 0 14px; font-weight: 600;" onclick="sendStudioUserInstruction()">Send</button>
@@ -4902,14 +5647,14 @@ public class TrystHttpServer implements TrystHttpService {
                         </div>
 
                         <!-- Studio Bottom Panel: Console, Build, Tests, Events -->
-                        <div id="studioBottomPanel" style="height: 180px; min-height: 100px; border-top: 1px solid var(--border); background: #ffffff; display: flex; flex-direction: column;">
-                            <div style="display: flex; background: #f8fafc; border-bottom: 1px solid var(--border); padding: 0 12px;">
+                        <div id="studioBottomPanel" style="height: 180px; min-height: 100px; border-top: 1px solid var(--border); background: var(--panel); display: flex; flex-direction: column;">
+                            <div style="display: flex; background: var(--bg); border-bottom: 1px solid var(--border); padding: 0 12px;">
                                 <button id="btnStBottomConsole" class="nav-btn active" style="border: none; border-radius: 0; padding: 6px 12px;" onclick="switchStudioBottomTab('console')">Console</button>
                                 <button id="btnStBottomBuild" class="nav-btn" style="border: none; border-radius: 0; padding: 6px 12px;" onclick="switchStudioBottomTab('build')">Build</button>
                                 <button id="btnStBottomTests" class="nav-btn" style="border: none; border-radius: 0; padding: 6px 12px;" onclick="switchStudioBottomTab('tests')">Tests</button>
                                 <button id="btnStBottomEvents" class="nav-btn" style="border: none; border-radius: 0; padding: 6px 12px;" onclick="switchStudioBottomTab('events')">Server Events</button>
                             </div>
-                            <div id="studioBottomContent" style="flex: 1; overflow: auto; padding: 10px 14px; font-family: Consolas, monospace; font-size: 11px; background: #ffffff; color: #334155; line-height: 1.4;">
+                            <div id="studioBottomContent" style="flex: 1; overflow: auto; padding: 10px 14px; font-family: Consolas, monospace; font-size: 11px; background: var(--panel); color: var(--muted); line-height: 1.4;">
                                 <div>Ready.</div>
                             </div>
                         </div>
@@ -4980,7 +5725,7 @@ public class TrystHttpServer implements TrystHttpService {
                     <div id="poolsTab" class="container" style="display: none;">
                         <div class="main-content">
                             <div class="grid-stats">
-                                <div class="stat-card"><div>Active Workers</div><div id="poolActiveWorkers" class="stat-val">0</div></div>
+                                <div class="stat-card"><div>Active Tasks (Busy Workers)</div><div id="poolActiveWorkers" class="stat-val">0</div></div>
                                 <div class="stat-card"><div>Concurrency Limit</div><div id="poolConcurrency" class="stat-val">1</div></div>
                                 <div class="stat-card"><div>Bare Mirror Pools</div><div id="poolMirrorsCount" class="stat-val">0</div></div>
                                 <div class="stat-card"><div>Allocated Workspaces</div><div id="poolAllocWorkspaces" class="stat-val">0</div></div>
@@ -5109,7 +5854,7 @@ public class TrystHttpServer implements TrystHttpService {
 
                             <!-- Validation & Simulation Feedback -->
                             <div class="section-title" style="margin-top: 16px; border-top: 1px solid var(--border); padding-top: 12px;">Validation & Simulation</div>
-                            <div id="wfValidationOutput" style="font-size: 11px; color: var(--muted); background: #ffffff; border: 1px solid var(--border); border-radius: 6px; padding: 10px; min-height: 80px;">
+                            <div id="wfValidationOutput" style="font-size: 11px; color: var(--muted); background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 10px; min-height: 80px;">
                                 Ready to validate workflow.
                             </div>
                         </div>
@@ -5174,7 +5919,7 @@ public class TrystHttpServer implements TrystHttpService {
                                 <!-- AI Explanation Drawer / Card -->
                                 <div class="card" id="aiExplanationCard" style="display: none;">
                                     <div class="section-title">AI Change Explanation & Architectural Reasoning</div>
-                                    <div id="aiExplanationText" style="font-size: 13px; line-height: 1.5; color: #334155; white-space: pre-wrap;"></div>
+                                    <div id="aiExplanationText" style="font-size: 13px; line-height: 1.5; color: var(--muted); white-space: pre-wrap;"></div>
                                 </div>
 
                                 <!-- Interactive Diff Viewer -->
@@ -5182,6 +5927,8 @@ public class TrystHttpServer implements TrystHttpService {
                                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                                         <div class="section-title" style="margin: 0;">Interactive Code Diff (Click or select lines to comment or ask AI)</div>
                                         <div class="flex-row">
+                                            <button id="btnDiffViewUnified" class="btn btn-sm btn-primary" onclick="setDiffViewMode('unified')">Unified</button>
+                                            <button id="btnDiffViewSide" class="btn btn-sm btn-default" onclick="setDiffViewMode('side')">Side-by-Side</button>
                                             <button class="btn btn-sm btn-primary" onclick="openCommentModal(null, null, null)">+ Add Global Comment</button>
                                         </div>
                                     </div>
@@ -5195,7 +5942,7 @@ public class TrystHttpServer implements TrystHttpService {
                                     <div class="section-title">Feedback & Rework Instructions Composer</div>
                                     <div id="selectedCodeSnippetContainer" style="display: none; margin-bottom: 10px;">
                                         <label style="font-size: 12px; color: var(--muted);">Selected Code Context:</label>
-                                        <pre id="selectedCodeSnippet" style="background: #f8fafc; border: 1px solid var(--border); padding: 8px; font-size: 12px; border-radius: 4px; margin-top: 4px; max-height: 120px; overflow-y: auto;"></pre>
+                                        <pre id="selectedCodeSnippet" style="background: var(--bg); border: 1px solid var(--border); padding: 8px; font-size: 12px; border-radius: 4px; margin-top: 4px; max-height: 120px; overflow-y: auto;"></pre>
                                     </div>
                                     <div class="flex-row" style="margin-bottom: 8px; flex-wrap: wrap;">
                                         <input id="commentFilePath" class="input-ctrl" type="text" placeholder="File path (optional for global instructions)..." style="flex: 2; min-width: 200px;" />
@@ -5224,7 +5971,7 @@ public class TrystHttpServer implements TrystHttpService {
 
                                 <div class="card">
                                     <div class="section-title">Manual Edit Proposed Changes (Alternative)</div>
-                                    <input id="editFilePath" type="text" placeholder="Relative file path..." style="width: 100%; padding: 8px; background: #ffffff; border: 1px solid var(--border); color: #0f172a; margin-bottom: 8px; border-radius: 4px;" />
+                                    <input id="editFilePath" type="text" placeholder="Relative file path..." style="width: 100%; padding: 8px; background: var(--panel); border: 1px solid var(--border); color: var(--text); margin-bottom: 8px; border-radius: 4px;" />
                                     <textarea id="fileEditor" class="code-editor" placeholder="Adjust proposed content..."></textarea>
                                     <div style="margin-top: 8px; text-align: right;">
                                         <button class="btn btn-primary" onclick="saveFileEdit()">Save Changes & Invalidate Approval</button>
@@ -5360,9 +6107,9 @@ public class TrystHttpServer implements TrystHttpService {
                     <div id="newTaskModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(15, 23, 42, 0.45); z-index: 2000; align-items: center; justify-content: center; backdrop-filter: blur(1px);">
                         <div id="newTaskModalPanel" style="background: var(--panel); border: 1px solid var(--border); border-radius: 6px; width: 880px; max-width: 95vw; max-height: 94vh; min-width: 520px; min-height: 440px; resize: both; overflow: auto; display: flex; flex-direction: column; box-shadow: 0 8px 30px rgba(0,0,0,0.2); position: relative;">
                             <!-- Header -->
-                            <div style="display: flex; justify-content: space-between; align-items: flex-start; padding: 16px 20px 12px 20px; border-bottom: 1px solid var(--border); background: #fafbfc;">
+                            <div style="display: flex; justify-content: space-between; align-items: flex-start; padding: 16px 20px 12px 20px; border-bottom: 1px solid var(--border); background: var(--panel2);">
                                 <div>
-                                    <h2 style="margin: 0; font-size: 16px; font-weight: 700; letter-spacing: 0.5px; color: #1e293b; text-transform: uppercase;">NEW TASK</h2>
+                                    <h2 style="margin: 0; font-size: 16px; font-weight: 700; letter-spacing: 0.5px; color: var(--text); text-transform: uppercase;">NEW TASK</h2>
                                     <div style="font-size: 12px; color: var(--muted); margin-top: 3px;">Create and configure a repository development task.</div>
                                 </div>
                                 <button class="btn btn-sm btn-default" onclick="closeNewTaskModal()" title="Close dialog" style="font-size: 14px; padding: 2px 8px; border: none; background: transparent; cursor: pointer;">✕</button>
@@ -5373,7 +6120,7 @@ public class TrystHttpServer implements TrystHttpService {
 
                                 <!-- SECTION A: REPOSITORY -->
                                 <div style="border: 1px solid var(--border-subtle); border-radius: 4px; padding: 12px; background: #fff;">
-                                    <div style="font-size: 11px; font-weight: 700; color: #475569; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 8px;">REPOSITORY</div>
+                                    <div style="font-size: 11px; font-weight: 700; color: var(--muted); letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 8px;">REPOSITORY</div>
                                     <div style="display: grid; grid-template-columns: 2fr 1.5fr 1fr; gap: 8px; align-items: center;">
                                         <div>
                                             <input id="intakeCustomRepoUrl" list="repoHistoryDatalist" class="input-ctrl" type="text" placeholder="https://git repository URL or local server path" style="width: 100%; font-size: 12px;" oninput="onRepoInputChanged()" autocomplete="off" />
@@ -5407,7 +6154,7 @@ public class TrystHttpServer implements TrystHttpService {
                                 <!-- SECTION B: TASK INSTRUCTIONS -->
                                 <div style="border: 1px solid var(--border-subtle); border-radius: 4px; padding: 12px; background: #fff; display: flex; flex-direction: column; gap: 8px;">
                                     <div style="display: flex; justify-content: space-between; align-items: center;">
-                                        <div style="font-size: 11px; font-weight: 700; color: #475569; letter-spacing: 0.5px; text-transform: uppercase;">TASK INSTRUCTIONS</div>
+                                        <div style="font-size: 11px; font-weight: 700; color: var(--muted); letter-spacing: 0.5px; text-transform: uppercase;">TASK INSTRUCTIONS</div>
                                         <div class="flex-row" style="gap: 6px;">
                                             <button id="btnVoiceDictate" class="btn btn-sm btn-default" onclick="toggleVoiceDictation()" style="padding: 2px 8px; font-size: 11px;">🎙️ Dictate</button>
                                             <span id="voiceStatus" style="font-size: 11px; color: var(--yellow); display: none;">Listening...</span>
@@ -5432,13 +6179,13 @@ public class TrystHttpServer implements TrystHttpService {
                                 <!-- SECTION C: ATTACHMENTS -->
                                 <div style="border: 1px solid var(--border-subtle); border-radius: 4px; padding: 12px; background: #fff;">
                                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                                        <div style="font-size: 11px; font-weight: 700; color: #475569; letter-spacing: 0.5px; text-transform: uppercase;">ATTACHMENTS</div>
+                                        <div style="font-size: 11px; font-weight: 700; color: var(--muted); letter-spacing: 0.5px; text-transform: uppercase;">ATTACHMENTS</div>
                                         <div style="font-size: 11px; color: var(--muted);">Additional context (.md, .txt, documentation)</div>
                                     </div>
 
                                     <!-- Drag and drop zone -->
-                                    <div id="attachmentDropZone" ondragover="onAttachmentDragOver(event)" ondragleave="onAttachmentDragLeave(event)" ondrop="onAttachmentDrop(event)" style="border: 2px dashed #cbd5e1; border-radius: 4px; padding: 14px 20px; background: #f8fafc; text-align: center; display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: background 0.2s, border-color 0.2s;" onclick="document.getElementById('attachmentFileInput').click()">
-                                        <div style="font-size: 12px; color: #64748b; text-align: left;">
+                                    <div id="attachmentDropZone" ondragover="onAttachmentDragOver(event)" ondragleave="onAttachmentDragLeave(event)" ondrop="onAttachmentDrop(event)" style="border: 2px dashed var(--border); border-radius: 4px; padding: 14px 20px; background: var(--bg); text-align: center; display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: background 0.2s, border-color 0.2s;" onclick="document.getElementById('attachmentFileInput').click()">
+                                        <div style="font-size: 12px; color: var(--muted); text-align: left;">
                                             Drag and drop files or use a file picker. Supported: .md, .txt, source files.
                                         </div>
                                         <button type="button" class="btn btn-sm btn-default" style="font-size: 11px; padding: 4px 12px; background: #fff;" onclick="event.stopPropagation(); document.getElementById('attachmentFileInput').click()">File picker</button>
@@ -5449,7 +6196,7 @@ public class TrystHttpServer implements TrystHttpService {
                                     <div id="attachmentsContainer" style="margin-top: 10px; display: none;">
                                         <table style="width: 100%; border-collapse: collapse; font-size: 11px; text-align: left;">
                                             <thead>
-                                                <tr style="border-bottom: 1px solid var(--border); color: #64748b;">
+                                                <tr style="border-bottom: 1px solid var(--border); color: var(--muted);">
                                                     <th style="padding: 6px 8px;">Filename</th>
                                                     <th style="padding: 6px 8px; width: 90px;">Type</th>
                                                     <th style="padding: 6px 8px; width: 70px;">Size</th>
@@ -5466,12 +6213,12 @@ public class TrystHttpServer implements TrystHttpService {
 
                                 <!-- SECTION D: EXECUTION OPTIONS -->
                                 <div style="border: 1px solid var(--border-subtle); border-radius: 4px; padding: 12px; background: #fff;">
-                                    <div style="font-size: 11px; font-weight: 700; color: #475569; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 10px;">EXECUTION OPTIONS</div>
+                                    <div style="font-size: 11px; font-weight: 700; color: var(--muted); letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 10px;">EXECUTION OPTIONS</div>
                                     <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; font-size: 12px;">
 
                                         <!-- Column 1: Notifications -->
-                                        <div style="background: #f8fafc; border: 1px solid var(--border-subtle); border-radius: 4px; padding: 10px;">
-                                            <div style="font-weight: 600; margin-bottom: 8px; color: #334155; font-size: 11px; text-transform: uppercase;">Notifications</div>
+                                        <div style="background: var(--bg); border: 1px solid var(--border-subtle); border-radius: 4px; padding: 10px;">
+                                            <div style="font-weight: 600; margin-bottom: 8px; color: var(--muted); font-size: 11px; text-transform: uppercase;">Notifications</div>
                                             <div style="display: flex; flex-direction: column; gap: 6px;">
                                                 <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
                                                     <input type="checkbox" id="optNotifyProgress" checked /> Progress
@@ -5486,8 +6233,8 @@ public class TrystHttpServer implements TrystHttpService {
                                         </div>
 
                                         <!-- Column 2: Code Review -->
-                                        <div style="background: #f8fafc; border: 1px solid var(--border-subtle); border-radius: 4px; padding: 10px;">
-                                            <div style="font-weight: 600; margin-bottom: 8px; color: #334155; font-size: 11px; text-transform: uppercase;">Code Review</div>
+                                        <div style="background: var(--bg); border: 1px solid var(--border-subtle); border-radius: 4px; padding: 10px;">
+                                            <div style="font-weight: 600; margin-bottom: 8px; color: var(--muted); font-size: 11px; text-transform: uppercase;">Code Review</div>
                                             <div style="display: flex; flex-direction: column; gap: 6px;">
                                                 <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
                                                     <input type="checkbox" id="optGenerateReview" checked /> Generate
@@ -5499,8 +6246,8 @@ public class TrystHttpServer implements TrystHttpService {
                                         </div>
 
                                         <!-- Column 3: Automation -->
-                                        <div style="background: #f8fafc; border: 1px solid var(--border-subtle); border-radius: 4px; padding: 10px;">
-                                            <div style="font-weight: 600; margin-bottom: 8px; color: #334155; font-size: 11px; text-transform: uppercase;">Automation & Git Operations</div>
+                                        <div style="background: var(--bg); border: 1px solid var(--border-subtle); border-radius: 4px; padding: 10px;">
+                                            <div style="font-weight: 600; margin-bottom: 8px; color: var(--muted); font-size: 11px; text-transform: uppercase;">Automation & Git Operations</div>
                                             <div style="display: flex; flex-direction: column; gap: 6px;">
                                                 <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
                                                     <input type="checkbox" id="optAutoExecute" checked /> Auto execute
@@ -5524,7 +6271,7 @@ public class TrystHttpServer implements TrystHttpService {
 
                                 <!-- Collapsible Supplementary Details (Execution Mode, Limits, Acceptance Criteria) -->
                                 <details style="border: 1px solid var(--border-subtle); border-radius: 4px; padding: 8px 12px; background: #fff; font-size: 12px;">
-                                    <summary style="font-size: 11px; font-weight: 600; color: #64748b; cursor: pointer; user-select: none;">Advanced Orchestration & Acceptance Criteria (Optional)</summary>
+                                    <summary style="font-size: 11px; font-weight: 600; color: var(--muted); cursor: pointer; user-select: none;">Advanced Orchestration & Acceptance Criteria (Optional)</summary>
                                     <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 10px;">
                                         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
                                             <div>
@@ -5569,7 +6316,7 @@ public class TrystHttpServer implements TrystHttpService {
                                 </details>
 
                                 <!-- Preliminary Analysis & Validation Feedback Banner -->
-                                <div id="intakeAnalysisCard" style="display: none; padding: 12px; border-radius: 4px; border: 1px solid var(--border); font-size: 12px; background: #f8fafc;">
+                                <div id="intakeAnalysisCard" style="display: none; padding: 12px; border-radius: 4px; border: 1px solid var(--border); font-size: 12px; background: var(--bg);">
                                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
                                         <b id="intakeAnalysisHeading">Intake Pre-check & Architecture Analysis</b>
                                         <span id="intakeClassificationBadge" class="badge badge-info">FEATURE</span>
@@ -5581,10 +6328,46 @@ public class TrystHttpServer implements TrystHttpService {
                             </div>
 
                             <!-- Footer Actions Bar -->
-                            <div style="display: flex; justify-content: flex-end; align-items: center; gap: 10px; padding: 12px 20px; border-top: 1px solid var(--border); background: #fafbfc;">
+                            <div style="display: flex; justify-content: flex-end; align-items: center; gap: 10px; padding: 12px 20px; border-top: 1px solid var(--border); background: var(--panel2);">
                                 <button type="button" class="btn btn-default" onclick="closeNewTaskModal()" style="font-size: 12px; padding: 6px 14px;">Cancel</button>
                                 <button type="button" class="btn btn-default" onclick="validateAndAnalyzeIntake()" style="font-size: 12px; padding: 6px 14px;">Validate & Analyze</button>
                                 <button id="btnSubmitIntakeTask" type="button" class="btn btn-primary" onclick="submitIntakeTask()" style="font-size: 12px; font-weight: 700; padding: 6px 18px; letter-spacing: 0.5px; text-transform: uppercase;">CREATE AND SUBMIT TASK</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="continueSessionModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(15, 23, 42, 0.45); z-index: 2100; align-items: center; justify-content: center; backdrop-filter: blur(1px);">
+                        <div style="background: var(--panel); border: 1px solid var(--border); border-radius: 6px; width: 640px; max-width: 95vw; display: flex; flex-direction: column; box-shadow: 0 8px 30px rgba(0,0,0,0.2);">
+                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 14px 20px; border-bottom: 1px solid var(--border);">
+                                <div style="font-weight: 700; color: var(--primary);">▶ Continue Session</div>
+                                <button class="btn btn-sm btn-default" onclick="document.getElementById('continueSessionModal').style.display='none';">✕</button>
+                            </div>
+                            <div style="padding: 16px 20px; display: flex; flex-direction: column; gap: 10px;">
+                                <div style="font-size: 12px; color: var(--muted);">Continue this coding session with an additional instruction. The same session, project and sandbox are reused &mdash; previous uncommitted changes are preserved and the new diff accumulates on top of them.</div>
+                                <div style="font-size: 12px;"><b>Session:</b> <span id="continueSessionSource" style="font-family: monospace;">-</span></div>
+                                <div>
+                                    <label style="font-size: 11px; color: var(--muted);">Instruction / Correction:</label>
+                                    <textarea id="continueInstructionInput" class="input-ctrl" style="width: 100%; height: 90px; resize: vertical; margin-top: 4px;" placeholder="e.g. Add input validation to the new endpoint and update the tests"></textarea>
+                                </div>
+                                <div style="display: flex; gap: 12px;">
+                                    <div style="flex: 1;">
+                                        <label style="font-size: 11px; color: var(--muted);">Follow-up Title (optional):</label>
+                                        <input id="continueTitleInput" class="input-ctrl" style="width: 100%; margin-top: 4px;" placeholder="Continue: ...">
+                                    </div>
+                                    <div style="width: 160px;">
+                                        <label style="font-size: 11px; color: var(--muted);">Priority:</label>
+                                        <select id="continuePrioritySelect" class="input-ctrl" style="width: 100%; margin-top: 4px;">
+                                            <option value="NORMAL" selected>Normal</option>
+                                            <option value="URGENT">Urgent</option>
+                                            <option value="HIGH">High</option>
+                                            <option value="LOW">Low</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div id="continueSessionError" style="color: var(--red); font-size: 12px; display: none;"></div>
+                            </div>
+                            <div style="display: flex; justify-content: flex-end; gap: 10px; padding: 12px 20px; border-top: 1px solid var(--border);">
+                                <button class="btn btn-default" onclick="document.getElementById('continueSessionModal').style.display='none';">Cancel</button>
+                                <button class="btn btn-primary" onclick="submitContinueSession()">Continue Session</button>
                             </div>
                         </div>
                     </div>
@@ -5661,8 +6444,52 @@ public class TrystHttpServer implements TrystHttpService {
                                 renderStudioAiFeed(state.instructions, state.comments, state.alternatives);
                                 renderStudioAlternatives(state.alternatives);
                                 renderStudioEditor(state);
+                                switchStudioBottomTab(studioBottomTab);
                             } catch (e) {
                                 console.error('Error loading Studio task state:', e);
+                            }
+                        }
+
+                        function openContinueSessionModal() {
+                            if (!studioTaskState) return;
+                            const src = document.getElementById('continueSessionSource');
+                            src.textContent = (studioTaskState.sessionId || '(task ' + studioTaskState.taskId.substring(0, 8) + ')') + ' — ' + (studioTaskState.title || '');
+                            document.getElementById('continueInstructionInput').value = '';
+                            document.getElementById('continueTitleInput').value = 'Continue: ' + (studioTaskState.title || '');
+                            document.getElementById('continueSessionError').style.display = 'none';
+                            document.getElementById('continueSessionModal').style.display = 'flex';
+                        }
+
+                        async function submitContinueSession() {
+                            const instruction = document.getElementById('continueInstructionInput').value.trim();
+                            if (!instruction) {
+                                document.getElementById('continueSessionError').textContent = 'An instruction is required.';
+                                document.getElementById('continueSessionError').style.display = 'block';
+                                return;
+                            }
+                            if (!studioActiveTaskId) return;
+                            const payload = {
+                                instruction: instruction,
+                                title: document.getElementById('continueTitleInput').value.trim() || null,
+                                priority: document.getElementById('continuePrioritySelect').value
+                            };
+                            try {
+                                const res = await fetch(apiUrl('/api/tasks/' + studioActiveTaskId + '/continue'), {
+                                    method: 'POST',
+                                    headers: getAuthHeaders(),
+                                    body: JSON.stringify(payload)
+                                });
+                                const data = await res.json();
+                                if (res.ok) {
+                                    document.getElementById('continueSessionModal').style.display = 'none';
+                                    openTaskInStudio(data.taskId);
+                                } else {
+                                    document.getElementById('continueSessionError').textContent = data.error || ('HTTP ' + res.status);
+                                    document.getElementById('continueSessionError').style.display = 'block';
+                                }
+                            } catch (e) {
+                                document.getElementById('continueSessionError').textContent = 'Error: ' + e;
+                                document.getElementById('continueSessionError').style.display = 'block';
                             }
                         }
 
@@ -5682,6 +6509,29 @@ public class TrystHttpServer implements TrystHttpService {
                             else if (st.status === 'PAUSED') badge.className = 'badge badge-warning';
                             else badge.className = 'badge badge-info';
 
+                            // Honest execution state badge (never a static "CONNECTED")
+                            const connBadge = document.getElementById('stHeaderConnBadge');
+                            if (st.executionResult) {
+                                connBadge.textContent = st.executionResult.exitCode === 0 ? 'EXECUTED' : 'EXECUTED (FAILED)';
+                                connBadge.className = st.executionResult.exitCode === 0 ? 'badge badge-success' : 'badge badge-error';
+                            } else if (st.isRunning) {
+                                connBadge.textContent = 'RUNNING';
+                                connBadge.className = 'badge badge-info';
+                            } else {
+                                connBadge.textContent = 'QUEUED / IDLE';
+                                connBadge.className = 'badge badge-warning';
+                            }
+
+                            // Diff statistics from the actual workspace diff
+                            const statsBadge = document.getElementById('stDiffStatsBadge');
+                            if (st.fullDiff) {
+                                const addLines = (st.fullDiff.match(/^\\+[^+]/gm) || []).length;
+                                const delLines = (st.fullDiff.match(/^-[^-]/gm) || []).length;
+                                statsBadge.textContent = `+${addLines} −${delLines}`;
+                            } else {
+                                statsBadge.textContent = '';
+                            }
+
                             const btnPause = document.getElementById('btnStudioPause');
                             const btnResume = document.getElementById('btnStudioResume');
                             if (st.status === 'PAUSED') {
@@ -5700,12 +6550,12 @@ public class TrystHttpServer implements TrystHttpService {
                                 return;
                             }
                             container.innerHTML = events.map(e => `
-                                <div style="background:#ffffff; border:1px solid var(--border); border-radius:3px; padding:6px 8px; margin-bottom:6px;">
+                                <div style="background:var(--panel); border:1px solid var(--border); border-radius:3px; padding:6px 8px; margin-bottom:6px;">
                                     <div style="display:flex; justify-content:space-between; align-items:center;">
                                         <b style="color:var(--primary);">${escapeHtml(e.status)}</b>
                                         <small style="color:var(--muted);">${e.timestamp ? e.timestamp.substring(11,19) : ''}</small>
                                     </div>
-                                    <div style="margin-top:3px; color:#334155;">${escapeHtml(e.message)}</div>
+                                    <div style="margin-top:3px; color:var(--muted);">${escapeHtml(e.message)}</div>
                                 </div>
                             `).join('');
                         }
@@ -5807,14 +6657,25 @@ public class TrystHttpServer implements TrystHttpService {
                                     body.innerHTML = '<div style="color:var(--red); padding:16px;">Failed to load file content: ' + e + '</div>';
                                 }
                             } else if (studioCurrentViewMode === 'hist') {
-                                body.innerHTML = `
-                                    <div style="padding:16px;">
-                                        <h4 style="margin:0 0 10px 0; color:var(--primary);">Revision History</h4>
-                                        <div style="color:var(--muted); font-size:12px;">Tracking incremental file modifications applied during AI execution.</div>
-                                        <div style="margin-top:10px;"><b>Task Initial State:</b> Base sandbox checkout</div>
-                                        ${(state.modifiedFiles || []).map(f => `<div style="margin-top:6px;">📄 <b>${escapeHtml(f)}</b> - Live updated</div>`).join('')}
-                                    </div>
-                                `;
+                                // Real execution history: persisted task events + execution record
+                                const events = state.events || [];
+                                const ex = state.executionResult;
+                                let html = '<div style="padding:16px;">';
+                                html += '<h4 style="margin:0 0 10px 0; color:var(--primary);">Execution History</h4>';
+                                html += '<div style="color:var(--muted); font-size:12px;">Persisted task lifecycle events and execution records for this session task.</div>';
+                                html += '<div style="margin-top:10px; font-size:12px;">';
+                                if (events.length === 0) {
+                                    html += '<div style="color:var(--muted);">No persisted events.</div>';
+                                } else {
+                                    html += events.map(e => `<div style="margin-top:4px;"><span style="color:var(--primary);">${escapeHtml(e.status)}</span> <span style="color:var(--muted);">${e.timestamp || ''}</span> — ${escapeHtml(e.message)}</div>`).join('');
+                                }
+                                if (ex) {
+                                    html += `<div style="margin-top:12px;"><b>Execution result:</b> exit code ${ex.exitCode}, duration ${ex.durationMs} ms, completed ${ex.completedAt || ''}</div>`;
+                                } else {
+                                    html += '<div style="margin-top:12px; color:var(--muted);"><b>Execution result:</b> not recorded yet.</div>';
+                                }
+                                html += '</div></div>';
+                                body.innerHTML = html;
                             }
                         }
 
@@ -5865,7 +6726,7 @@ public class TrystHttpServer implements TrystHttpService {
                             if (instructions && instructions.length > 0) {
                                 instructions.forEach(inItem => {
                                     html += `
-                                        <div style="background:#f1f5f9; border-radius:4px; padding:8px 10px; border-left:3px solid var(--primary);">
+                                        <div style="background:var(--bg2); border-radius:4px; padding:8px 10px; border-left:3px solid var(--primary);">
                                             <div style="font-size:10px; color:var(--muted); font-weight:600; text-transform:uppercase;">User Instruction (${escapeHtml(inItem.type)})</div>
                                             <div style="margin-top:4px;">${escapeHtml(inItem.content)}</div>
                                         </div>
@@ -5876,9 +6737,9 @@ public class TrystHttpServer implements TrystHttpService {
                             if (comments && comments.length > 0) {
                                 comments.forEach(c => {
                                     html += `
-                                        <div style="background:#fef3c7; border-radius:4px; padding:8px 10px; border-left:3px solid #d97706;">
-                                            <div style="font-size:10px; color:#92400e; font-weight:600;">Code Comment [${escapeHtml(c.filePath || 'Workspace')}:${c.line}]</div>
-                                            <div style="margin-top:4px; color:#78350f;">${escapeHtml(c.content)}</div>
+                                        <div style="background:var(--warn-soft); border-radius:4px; padding:8px 10px; border-left:3px solid var(--warn);">
+                                            <div style="font-size:10px; color:var(--warn); font-weight:600;">Code Comment [${escapeHtml(c.filePath || 'Workspace')}:${c.line}]</div>
+                                            <div style="margin-top:4px; color:var(--warn);">${escapeHtml(c.content)}</div>
                                         </div>
                                     `;
                                 });
@@ -5899,9 +6760,9 @@ public class TrystHttpServer implements TrystHttpService {
                             }
                             box.style.display = 'block';
                             listEl.innerHTML = alternatives.map(alt => `
-                                <div style="background:#ffffff; border:1px solid #fde047; border-radius:4px; padding:8px; margin-bottom:6px;">
+                                <div style="background:var(--panel); border:1px solid var(--warn); border-radius:4px; padding:8px; margin-bottom:6px;">
                                     <b>${escapeHtml(alt.title)}</b> (${alt.status})
-                                    <div style="margin:3px 0; color:#475569;">${escapeHtml(alt.description)}</div>
+                                    <div style="margin:3px 0; color:var(--muted);">${escapeHtml(alt.description)}</div>
                                     ${alt.status === 'PROPOSED' ? `<button class="btn btn-sm btn-success" onclick="selectStudioAlternative('${alt.id}')">Select Alternative</button>` : ''}
                                 </div>
                             `).join('');
@@ -5957,14 +6818,37 @@ public class TrystHttpServer implements TrystHttpService {
                                 }
                             });
                             const container = document.getElementById('studioBottomContent');
+                            if (!container) return;
+                            const st = studioTaskState;
+                            const ex = st ? st.executionResult : null;
+                            const esc = escapeHtml;
+                            const muted = '<div style="color:var(--muted); padding: 8px;">';
                             if (tab === 'console') {
-                                container.innerHTML = '<div>[TaskWorker] Stream active for task ' + (studioActiveTaskId || '-') + '</div>';
+                                if (!ex) {
+                                    container.innerHTML = muted + 'No execution recorded yet. The console shows the worker execution log once the task has run.</div>';
+                                } else if (ex.output && ex.output.trim()) {
+                                    container.innerHTML = ex.output.split('\n').map(l => `<div>${esc(l)}</div>`).join('');
+                                } else {
+                                    container.innerHTML = muted + 'Execution finished (exit code ' + ex.exitCode + ', ' + ex.durationMs + ' ms) with no console output.</div>';
+                                }
                             } else if (tab === 'build') {
-                                container.innerHTML = '<div>Build status: Verified. Compiler verified workspace changes.</div>';
+                                if (st && st.buildStatus) {
+                                    container.innerHTML = `<div><b>Build status:</b> <span class="badge ${st.buildStatus.indexOf('SUCCESS') >= 0 || st.buildStatus === 'SUCCESSFUL' ? 'badge-success' : 'badge-error'}">${esc(st.buildStatus)}</span></div>`;
+                                } else {
+                                    container.innerHTML = muted + 'No build status recorded for this task yet.</div>';
+                                }
                             } else if (tab === 'tests') {
-                                container.innerHTML = '<div>Tests execution: Passed. Zero regression errors detected.</div>';
+                                if (st && st.testSummary) {
+                                    container.innerHTML = st.testSummary.split('\n').map(l => `<div>${esc(l)}</div>`).join('');
+                                } else {
+                                    container.innerHTML = muted + 'No test summary recorded for this task yet.</div>';
+                                }
                             } else if (tab === 'events') {
-                                container.innerHTML = '<div>SSE Event stream active. Listening for real-time task notifications.</div>';
+                                if (st && st.events && st.events.length > 0) {
+                                    container.innerHTML = st.events.map(e => `<div><span style="color:var(--primary);">${esc(e.status)}</span> <span style="color:var(--muted);">${e.timestamp ? e.timestamp.substring(11,19) : ''}</span> — ${esc(e.message)}</div>`).join('');
+                                } else {
+                                    container.innerHTML = muted + 'No persisted task events yet.</div>';
+                                }
                             }
                         }
 
@@ -5999,7 +6883,7 @@ public class TrystHttpServer implements TrystHttpService {
 
                         function switchNavSection(section) {
                             currentNavSection = section;
-                            const tabIds = ['dashboardTab', 'projectsTab', 'queueTab', 'reviewsTab', 'workspacesTab', 'poolsTab', 'workflowsTab', 'adminTab', 'studioTab'];
+                            const tabIds = ['dashboardTab', 'projectsTab', 'queueTab', 'reviewsTab', 'workspacesTab', 'poolsTab', 'workflowsTab', 'adminTab', 'studioTab', 'evoTab'];
                             tabIds.forEach(id => {
                                 const el = document.getElementById(id);
                                 if (el) el.style.display = 'none';
@@ -6008,7 +6892,7 @@ public class TrystHttpServer implements TrystHttpService {
                             const targetTab = document.getElementById(section + 'Tab');
                             if (targetTab) targetTab.style.display = 'flex';
 
-                            const navButtons = ['navDashboard', 'navProjects', 'navQueue', 'navReviews', 'navWorkspaces', 'navPools', 'navWorkflows', 'navStudio', 'navAdmin'];
+                            const navButtons = ['navDashboard', 'navProjects', 'navQueue', 'navReviews', 'navWorkspaces', 'navPools', 'navWorkflows', 'navStudio', 'navEvo', 'navAdmin'];
                             navButtons.forEach(btnId => {
                                 const btn = document.getElementById(btnId);
                                 if (btn) btn.classList.remove('active');
@@ -6033,6 +6917,9 @@ public class TrystHttpServer implements TrystHttpService {
                                 loadSavedWorkflows();
                             } else if (section === 'studio') {
                                 if (studioActiveTaskId) loadStudioTask(studioActiveTaskId);
+                            } else if (section === 'evo') {
+                                loadEvoConfig();
+                                refreshEvoExecutions();
                             } else if (section === 'admin') {
                                 loadAdminOverview();
                             }
@@ -6052,14 +6939,15 @@ public class TrystHttpServer implements TrystHttpService {
 
                         async function loadDashboardStats() {
                             try {
-                                const [poolsRes, revsRes] = await Promise.all([
+                                const [poolsRes, revsRes, healthRes] = await Promise.all([
                                     fetch(apiUrl('/api/pools'), { headers: getAuthHeaders() }),
-                                    fetch(apiUrl('/api/reviews'), { headers: getAuthHeaders() })
+                                    fetch(apiUrl('/api/reviews'), { headers: getAuthHeaders() }),
+                                    fetch(apiUrl('/api/health'), { headers: getAuthHeaders() })
                                 ]);
 
                                 if (poolsRes.ok) {
                                     const poolData = await poolsRes.json();
-                                    document.getElementById('dashActiveTasks').textContent = poolData.workers.active;
+                                    document.getElementById('dashActiveTasks').textContent = poolData.workers.activeTasks;
                                     document.getElementById('dashQueueDepth').textContent = poolData.workers.queueDepth;
                                     document.getElementById('dashWorkspaces').textContent = poolData.workspaces.allocated;
                                     document.getElementById('dashMirrors').textContent = poolData.mirrorCount;
@@ -6069,6 +6957,38 @@ public class TrystHttpServer implements TrystHttpService {
                                     const revData = await revsRes.json();
                                     document.getElementById('dashReviews').textContent = revData.reviews ? revData.reviews.length : 0;
                                 }
+
+                                const healthEl = document.getElementById('dashHealth');
+                                if (healthRes.ok) {
+                                    const health = await healthRes.json();
+                                    const comps = health.components || {};
+                                    const statusBadge = (s) => {
+                                        if (s === 'OPERATIONAL') return '<span class="badge badge-success">OPERATIONAL</span>';
+                                        if (s === 'DEGRADED') return '<span class="badge badge-warning">DEGRADED</span>';
+                                        if (s === 'FAILED') return '<span class="badge badge-error">FAILED</span>';
+                                        return '<span class="badge badge-info">' + escapeHtml(s || '?') + '</span>';
+                                    };
+                                    const rows = Object.entries(comps).map(([name, c]) => {
+                                        let detail = '';
+                                        if (name === 'aiProvider') {
+                                            detail = ` &middot; model <b>${escapeHtml(c.modelConfigured || '-')}</b> ${c.modelAvailable ? '(available)' : c.connected ? '(configured model not verified)' : '(offline)'}`;
+                                        } else if (name === 'workerSubsystem') {
+                                            detail = ` &middot; ${c.busy}/${c.capacity} busy`;
+                                        } else if (name === 'repositoryPool') {
+                                            detail = ` &middot; ${c.mirrorCount} mirrors (${c.syncedMirrors} synced${c.staleMirrors ? ', ' + c.staleMirrors + ' stale' : ''}${c.missingMirrors ? ', ' + c.missingMirrors + ' missing' : ''})`;
+                                        } else if (name === 'sandboxSubsystem') {
+                                            detail = ` &middot; ${c.activeWorkspaces}/${c.totalWorkspaces} active workspaces`;
+                                        } else if (name === 'database') {
+                                            detail = c.schemaVersion ? ` &middot; schema V${c.schemaVersion}` : '';
+                                        }
+                                        return `<div style="display:flex; justify-content:space-between; padding:4px 0; border-bottom: 1px solid var(--border);"><b>${escapeHtml(name)}</b><span>${detail} ${statusBadge(c.status)}</span></div>`;
+                                    }).join('');
+                                    const q = health.queue || {};
+                                    healthEl.innerHTML = rows +
+                                        `<div style="margin-top:8px; color:var(--muted);">TRYST v${escapeHtml(health.version || '?')} &middot; uptime ${Math.floor((health.uptimeSeconds || 0) / 60)}m ${(health.uptimeSeconds || 0) % 60}s &middot; health <b>${escapeHtml(health.health || '?')}</b> &middot; queue: ${q.queuedTasks} queued / ${q.activeTasks} running / ${q.pausedTasks} paused / ${q.recoveryRequiredTasks} recovery</div>`;
+                                } else {
+                                    healthEl.innerHTML = '<span style="color:var(--err);">Health endpoint unavailable (HTTP ' + healthRes.status + ')</span>';
+                                }
                             } catch (e) {
                                 console.warn('Failed to load dashboard stats:', e);
                             }
@@ -6077,7 +6997,7 @@ public class TrystHttpServer implements TrystHttpService {
                         function renderDashboardError(containerId, loaderName) {
                             const container = document.getElementById(containerId);
                             if (container) {
-                                container.innerHTML = '<span style="color:#d9534f; cursor:pointer;" onclick="' + loaderName + '()">Failed to load &mdash; retry</span>';
+                                container.innerHTML = '<span style="color:var(--err); cursor:pointer;" onclick="' + loaderName + '()">Failed to load &mdash; retry</span>';
                             }
                         }
 
@@ -6159,42 +7079,138 @@ public class TrystHttpServer implements TrystHttpService {
                         function selectProjectById(id) {
                             const p = projectsRegistry.get(id);
                             if (!p) return;
-                            selectProjectDetail(p.id, p.name, p.location);
+                            loadProjectDetail(id);
                         }
 
-                        function selectProjectDetail(id, name, location) {
+                        async function loadProjectDetail(id) {
+                            try {
+                                const res = await fetch(apiUrl('/api/projects/' + id), { headers: getAuthHeaders() });
+                                if (!res.ok) {
+                                    renderProjectDetail(projectsRegistry.get(id) || { id: id, name: id }, {});
+                                    return;
+                                }
+                                const p = await res.json();
+                                renderProjectDetail(p, p);
+                            } catch (e) {
+                                console.warn('Failed to load project detail:', e);
+                            }
+                        }
+
+                        function renderProjectDetail(meta, p) {
                             const nameEl = document.getElementById('projDetailName');
                             const metaEl = document.getElementById('projDetailMeta');
                             const container = document.getElementById('projReposContainer');
-                            if (nameEl) nameEl.textContent = name || '';
-                            if (metaEl) metaEl.textContent = `Project ID: ${id || ''} | Location: ${location || ''}`;
+                            if (nameEl) nameEl.textContent = meta.name || '';
+                            if (metaEl) metaEl.textContent = `Project ID: ${meta.id || ''} | Location: ${meta.location || ''} | Owner: ${meta.ownerId || ''}`;
                             if (container) {
+                                const repoUrl = p.repositoryUrl || '';
+                                const branch = p.defaultBranch || 'main';
+                                const buildCmd = p.buildCommand || '';
+                                const testCmd = p.testCommand || '';
+                                const instructions = p.instructions || '';
                                 container.innerHTML = `
-                                    <table>
-                                        <tr><th>VCS Provider</th><th>Branch / Ref</th><th>Path / URL</th><th>Isolation Mode</th></tr>
-                                        <tr><td><b>Git</b> (Local / Remote)</td><td><code>main</code></td><td>${escapeHtml(location || '')}</td><td><span class="badge badge-success">Bare Mirror & Worktree Sandbox</span></td></tr>
+                                    <table style="width: 100%;">
+                                        <tr><th style="width: 160px;">VCS Provider</th><th>Branch / Ref</th><th>Isolation Mode</th></tr>
+                                        <tr><td><b>Git</b> (Local / Remote)</td><td><code>${escapeHtml(branch)}</code></td><td><span class="badge badge-success">Bare Mirror &amp; Task Sandbox</span></td></tr>
                                     </table>
+                                    <div class="section-title" style="margin-top: 20px;">Project Configuration</div>
+                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 8px;">
+                                        <div>
+                                            <label style="font-size: 11px; color: var(--muted);">Repository URL (Git HTTPS / SSH / local path)</label>
+                                            <input id="projCfgRepoUrl" class="input-ctrl" style="width: 100%; margin-top: 4px;" value="${escapeHtml(repoUrl)}" placeholder="https://github.com/org/repo.git">
+                                        </div>
+                                        <div>
+                                            <label style="font-size: 11px; color: var(--muted);">Default Branch</label>
+                                            <input id="projCfgBranch" class="input-ctrl" style="width: 100%; margin-top: 4px;" value="${escapeHtml(branch)}" placeholder="main">
+                                        </div>
+                                        <div>
+                                            <label style="font-size: 11px; color: var(--muted);">Build Command (empty = auto-detect)</label>
+                                            <input id="projCfgBuild" class="input-ctrl" style="width: 100%; margin-top: 4px;" value="${escapeHtml(buildCmd)}" placeholder="e.g. mvn -q compile">
+                                        </div>
+                                        <div>
+                                            <label style="font-size: 11px; color: var(--muted);">Test Command (empty = auto-detect)</label>
+                                            <input id="projCfgTest" class="input-ctrl" style="width: 100%; margin-top: 4px;" value="${escapeHtml(testCmd)}" placeholder="e.g. mvn -q test">
+                                        </div>
+                                    </div>
+                                    <div style="margin-top: 12px;">
+                                        <label style="font-size: 11px; color: var(--muted);">Project-Specific Instructions (sent to the AI on every task for this project)</label>
+                                        <textarea id="projCfgInstructions" class="input-ctrl" style="width: 100%; height: 70px; resize: vertical; margin-top: 4px;">${escapeHtml(instructions)}</textarea>
+                                    </div>
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 12px;">
+                                        <span id="projCfgStatus" style="font-size: 12px; color: var(--muted);"></span>
+                                        <button class="btn btn-primary" onclick="saveProjectConfig('${escapeHtml(meta.id || '')}')">Save Project Configuration</button>
+                                    </div>
                                 `;
+                            }
+                        }
+
+                        async function saveProjectConfig(id) {
+                            if (!id) return;
+                            const statusEl = document.getElementById('projCfgStatus');
+                            const payload = {
+                                repositoryUrl: document.getElementById('projCfgRepoUrl').value.trim(),
+                                defaultBranch: document.getElementById('projCfgBranch').value.trim(),
+                                buildCommand: document.getElementById('projCfgBuild').value.trim(),
+                                testCommand: document.getElementById('projCfgTest').value.trim(),
+                                instructions: document.getElementById('projCfgInstructions').value.trim()
+                            };
+                            try {
+                                const res = await fetch(apiUrl('/api/projects/' + id), {
+                                    method: 'PUT',
+                                    headers: getAuthHeaders(),
+                                    body: JSON.stringify(payload)
+                                });
+                                if (res.ok) {
+                                    statusEl.textContent = '✓ Configuration saved';
+                                    statusEl.style.color = 'var(--green)';
+                                    const p = await res.json();
+                                    if (p) {
+                                        projectsRegistry.set(p.id, p);
+                                        loadProjectDetail(id);
+                                    }
+                                } else {
+                                    const data = await res.json().catch(() => ({}));
+                                    statusEl.textContent = 'Save failed: ' + (data.error || ('HTTP ' + res.status));
+                                    statusEl.style.color = 'var(--err)';
+                                }
+                            } catch (e) {
+                                statusEl.textContent = 'Save failed: ' + e;
+                                statusEl.style.color = 'var(--err)';
                             }
                         }
 
                         async function refreshQueueAndSchedules() {
                             try {
-                                const [tasksRes, schedRes] = await Promise.all([
+                                const [queueRes, tasksRes, schedRes] = await Promise.all([
+                                    fetch(apiUrl('/api/admin/queue'), { headers: getAuthHeaders() }),
                                     fetch(apiUrl('/api/tasks'), { headers: getAuthHeaders() }),
                                     fetch(apiUrl('/api/schedules'), { headers: getAuthHeaders() })
                                 ]);
 
                                 const qList = document.getElementById('queueTasksList');
-                                if (tasksRes.ok) {
-                                    const data = await tasksRes.json();
-                                    const tasks = data.tasks || [];
-                                    if (tasks.length === 0) {
-                                        qList.innerHTML = '<span style="color:var(--muted);">No tasks in queue.</span>';
-                                    } else {
-                                        qList.innerHTML = '<table><tr><th>ID</th><th>Title</th><th>Status</th><th>Priority</th><th>Action</th></tr>' +
-                                            tasks.map(t => `<tr class="ctx-target" data-ctx-type="task" data-ctx-id="${t.id}" data-ctx-label="${escapeHtml(t.title)}" data-ctx-status="${t.status}"><td>${t.id.substring(0,8)}</td><td><b>${escapeHtml(t.title)}</b></td><td><span class="badge badge-info">${t.status}</span></td><td>${t.priority}</td><td><button class="btn btn-sm btn-primary" style="margin-right:4px;" onclick="openTaskInStudio('${t.id}')">⚡ Studio</button><button class="btn btn-sm btn-danger" onclick="cancelAdminTask('${t.id}')">Cancel</button></td></tr>`).join('') + '</table>';
-                                    }
+                                const allTasks = tasksRes.ok ? (await tasksRes.json()).tasks || [] : [];
+                                const queuedIds = queueRes.ok ? new Set(((await queueRes.json()).queue || []).map(q => q.id)) : new Set();
+                                if (allTasks.length === 0) {
+                                    qList.innerHTML = '<span style="color:var(--muted);">No tasks recorded.</span>';
+                                } else {
+                                    const rows = allTasks.map(t => {
+                                        const position = queuedIds.has(t.id) ? '<span class="badge badge-warning">QUEUED</span>' : '';
+                                        const continueable = ['WAITING_FOR_REVIEW', 'COMPLETED', 'FAILED', 'CANCELLED', 'APPROVED', 'REJECTED'].indexOf(t.status) >= 0;
+                                        const statusBadge = t.status === 'FAILED' ? 'badge-error' : t.status === 'COMPLETED' ? 'badge-success' : t.status === 'RECOVERY_REQUIRED' ? 'badge-warning' : 'badge-info';
+                                        return `<tr class="ctx-target" data-ctx-type="task" data-ctx-id="${t.id}" data-ctx-label="${escapeHtml(t.title)}" data-ctx-status="${t.status}">
+                                            <td>${t.id.substring(0,8)}</td>
+                                            <td><b>${escapeHtml(t.title)}</b>${t.sessionId ? ` <span style="color:var(--muted); font-size:10px;">(session ${t.sessionId.substring(0,6)})</span>` : ''}</td>
+                                            <td>${position}<span class="badge ${statusBadge}">${t.status}</span></td>
+                                            <td>${t.priority}</td>
+                                            <td>
+                                                <button class="btn btn-sm btn-primary" style="margin-right:4px;" onclick="openTaskInStudio('${t.id}')">⚡ Studio</button>
+                                                ${continueable ? `<button class="btn btn-sm btn-success" style="margin-right:4px;" onclick="openContinueFromQueue('${t.id}')">▶ Continue</button>` : ''}
+                                                ${t.status === 'RECOVERY_REQUIRED' ? `<button class="btn btn-sm btn-warning" style="margin-right:4px;" onclick="retryRecoveredTask('${t.id}')">↻ Retry</button>` : ''}
+                                                <button class="btn btn-sm btn-danger" onclick="cancelAdminTask('${t.id}')">Cancel</button>
+                                            </td>
+                                        </tr>`;
+                                    }).join('');
+                                    qList.innerHTML = '<table><tr><th>ID</th><th>Title</th><th>Status</th><th>Priority</th><th>Action</th></tr>' + rows + '</table>';
                                 }
 
                                 const sList = document.getElementById('schedulesList');
@@ -6210,6 +7226,32 @@ public class TrystHttpServer implements TrystHttpService {
                                 }
                             } catch (e) {
                                 console.warn('Queue refresh error:', e);
+                                const qList = document.getElementById('queueTasksList');
+                                qList.innerHTML = '<span style="color:var(--err);">Failed to load tasks &mdash; <a href="#" onclick="refreshQueueAndSchedules(); return false;">retry</a></span>';
+                            }
+                        }
+
+                        function openContinueFromQueue(taskId) {
+                            openTaskInStudio(taskId);
+                            setTimeout(() => openContinueSessionModal(), 400);
+                        }
+
+                        async function retryRecoveredTask(taskId) {
+                            try {
+                                const res = await fetch(apiUrl('/api/admin/tasks/' + taskId + '/retry'), {
+                                    method: 'POST',
+                                    headers: getAuthHeaders(),
+                                    body: JSON.stringify({ force: false })
+                                });
+                                const data = await res.json().catch(() => ({}));
+                                if (res.ok && data.success) {
+                                    alert('Task re-queued for execution.');
+                                    refreshQueueAndSchedules();
+                                } else {
+                                    alert('Retry failed: ' + (data.error || ('HTTP ' + res.status)));
+                                }
+                            } catch (e) {
+                                alert('Retry failed: ' + e);
                             }
                         }
 
@@ -6234,7 +7276,7 @@ public class TrystHttpServer implements TrystHttpService {
                             try {
                                 const res = await fetch(apiUrl('/api/pools'), { headers: getAuthHeaders() });
                                 const data = await res.json();
-                                document.getElementById('poolActiveWorkers').textContent = data.workers.active;
+                                document.getElementById('poolActiveWorkers').textContent = data.workers.activeTasks;
                                 document.getElementById('poolConcurrency').textContent = data.workers.concurrency;
                                 document.getElementById('poolMirrorsCount').textContent = data.mirrorCount;
                                 document.getElementById('poolAllocWorkspaces').textContent = data.workspaces.allocated;
@@ -6245,8 +7287,13 @@ public class TrystHttpServer implements TrystHttpService {
                                 if (mirrors.length === 0) {
                                     container.innerHTML = '<span style="color:var(--muted);">No bare repository mirrors cached yet. Mirrors are created automatically when remote repositories are referenced in tasks.</span>';
                                 } else {
-                                    container.innerHTML = '<table><tr><th>Mirror Directory Name</th><th>Shared Objects Cache</th></tr>' +
-                                        mirrors.map(m => `<tr><td><code>${escapeHtml(m)}</code></td><td><span class="badge badge-success">Ready for Worktree Clones</span></td></tr>`).join('') + '</table>';
+                                    const stateBadge = (s) => {
+                                        if (s === 'SYNCED') return '<span class="badge badge-success">SYNCED</span>';
+                                        if (s === 'STALE') return '<span class="badge badge-warning">STALE</span>';
+                                        return '<span class="badge badge-error">' + escapeHtml(s) + '</span>';
+                                    };
+                                    container.innerHTML = '<table><tr><th>Repository URL</th><th>Branch</th><th>Last Synced</th><th>State</th></tr>' +
+                                        mirrors.map(m => `<tr><td><code>${escapeHtml(m.remoteUrl)}</code></td><td>${escapeHtml(m.defaultBranch || 'main')}</td><td>${m.lastSyncedAt ? m.lastSyncedAt.substring(0, 19) : '-'}</td><td>${stateBadge(m.syncState)}</td></tr>`).join('') + '</table>';
                                 }
                             } catch (e) {
                                 document.getElementById('poolMirrorsList').textContent = 'Error loading resource pools: ' + e;
@@ -6256,7 +7303,7 @@ public class TrystHttpServer implements TrystHttpService {
                         function onGlobalProjectChanged() {
                             const sel = document.getElementById('globalProjectSelector');
                             const projId = sel.value;
-                            loadReviews();
+                            loadReviews(projId || null);
                         }
 
                         // --- Visual Workflow Designer Canvas & Interaction Engine ---
@@ -6401,7 +7448,7 @@ public class TrystHttpServer implements TrystHttpService {
                                 const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
                                 path.setAttribute('d', d);
                                 if (edge.sourcePort === 'failure') {
-                                    path.setAttribute('stroke', '#ef4444');
+                                    path.setAttribute('stroke', 'var(--err)');
                                     path.setAttribute('stroke-dasharray', '4,4');
                                 }
                                 path.title = 'Click to remove connection';
@@ -6859,12 +7906,19 @@ public class TrystHttpServer implements TrystHttpService {
                                 } else if (sub === 'workers') {
                                     const res = await fetch(apiUrl('/api/admin/workers'), { headers: getAuthHeaders() });
                                     const data = await res.json();
-                                    container.innerHTML = `<div><p><b>Worker Thread Capacity:</b> ${data.capacity}</p><p><b>Active Workers:</b> ${data.activeWorkers}</p><p><b>Queued Tasks:</b> ${data.queuedCount}</p><p><b>Utilization:</b> ${data.utilizationPercentage}%</p></div>`;
+                                    let html = `<div><p><b>Worker Thread Capacity:</b> ${data.capacity}</p><p><b>Busy Workers:</b> ${data.activeWorkers}</p><p><b>Available Workers:</b> ${data.availableWorkers}</p><p><b>Queued Tasks:</b> ${data.queuedCount}</p><p><b>Utilization:</b> ${data.utilizationPercentage}%</p><p><b>Orchestrator Running:</b> ${data.running}</p></div>`;
+                                    if (data.workers && data.workers.length > 0) {
+                                        html += '<div class="section-title">Live Worker Slots (this server session)</div><table><tr><th>Worker</th><th>Busy</th><th>Current Task</th><th>Completed</th><th>Failed</th><th>Total Duration</th></tr>' +
+                                            data.workers.map(w => `<tr><td><code>${escapeHtml(w.workerId)}</code></td><td>${w.busy ? '<span class="badge badge-info">BUSY</span>' : '<span class="badge badge-success">IDLE</span>'}</td><td>${w.taskId ? w.taskId.substring(0,8) : '-'}</td><td>${w.completedTasks}</td><td>${w.failedTasks}</td><td>${(w.totalDurationMs/1000).toFixed(1)}s</td></tr>`).join('') + '</table>';
+                                    } else {
+                                        html += '<p style="color:var(--muted);">No tasks executed since this server session started.</p>';
+                                    }
+                                    container.innerHTML = html;
                                 } else if (sub === 'tasks') {
                                     const res = await fetch(apiUrl('/api/admin/tasks'), { headers: getAuthHeaders() });
                                     const data = await res.json();
-                                    container.innerHTML = '<table><tr><th>ID</th><th>Title</th><th>Status</th><th>Priority</th><th>Action</th></tr>' +
-                                        data.tasks.map(t => `<tr><td>${t.id.substring(0,8)}</td><td>${t.title}</td><td><span class="badge badge-info">${t.status}</span></td><td>${t.priority}</td><td><button class="btn btn-sm btn-danger" onclick="cancelAdminTask('${t.id}')">Cancel</button></td></tr>`).join('') + '</table>';
+                                    container.innerHTML = '<table><tr><th>ID</th><th>Title</th><th>Status</th><th>Priority</th><th>Session</th><th>Worker</th><th>Failure Reason</th><th>Action</th></tr>' +
+                                        data.tasks.map(t => `<tr><td>${t.id.substring(0,8)}</td><td>${escapeHtml(t.title)}</td><td><span class="badge ${t.status === 'RECOVERY_REQUIRED' ? 'badge-warning' : 'badge-info'}">${t.status}</span></td><td>${t.priority}</td><td>${t.sessionId ? t.sessionId.substring(0,6) : '-'}</td><td>${t.workerId ? t.workerId.substring(0,8) : '-'}</td><td style="color:var(--err);">${escapeHtml(t.failureReason || '')}</td><td>${t.status === 'RECOVERY_REQUIRED' ? `<button class="btn btn-sm btn-warning" style="margin-right:4px;" onclick="retryRecoveredTask('${t.id}')">↻ Retry</button>` : ''}<button class="btn btn-sm btn-danger" onclick="cancelAdminTask('${t.id}')">Cancel</button></td></tr>`).join('') + '</table>';
                                 } else if (sub === 'workspaces') {
                                     const res = await fetch(apiUrl('/api/admin/workspaces'), { headers: getAuthHeaders() });
                                     const data = await res.json();
@@ -6873,8 +7927,23 @@ public class TrystHttpServer implements TrystHttpService {
                                 } else if (sub === 'users') {
                                     const res = await fetch(apiUrl('/api/admin/users'), { headers: getAuthHeaders() });
                                     const data = await res.json();
-                                    container.innerHTML = '<table><tr><th>ID</th><th>Username</th><th>Role</th><th>Active</th><th>Locked</th><th>Created</th></tr>' +
-                                        data.users.map(u => `<tr><td>${u.id.substring(0,8)}</td><td>${u.username}</td><td>${u.role}</td><td>${u.active}</td><td>${u.locked}</td><td>${u.createdAt}</td></tr>`).join('') + '</table>';
+                                    const stateBadge = u => u.locked ? '<span class="badge badge-error">LOCKED</span>' : (u.active ? '<span class="badge badge-success">ACTIVE</span>' : '<span class="badge badge-warning">INACTIVE</span>');
+                                    container.innerHTML = `
+                                        <div style="display:flex; gap:8px; margin-bottom:12px; align-items:center;">
+                                            <input id="newUserName" placeholder="Username" style="padding:6px; border:1px solid var(--border); border-radius:4px;" />
+                                            <input id="newUserPassword" type="password" placeholder="Password" style="padding:6px; border:1px solid var(--border); border-radius:4px;" />
+                                            <select id="newUserRole" style="padding:6px; border:1px solid var(--border); border-radius:4px;">
+                                                <option value="USER">USER</option>
+                                                <option value="ADMIN">ADMIN</option>
+                                            </select>
+                                            <button class="btn btn-sm btn-primary" onclick="createAdminUser()">+ Create User</button>
+                                        </div>
+                                        <table><tr><th>ID</th><th>Username</th><th>Role</th><th>State</th><th>Created</th><th>Actions</th></tr>` +
+                                        data.users.map(u => `<tr><td>${u.id.substring(0,8)}</td><td><b>${escapeHtml(u.username)}</b></td><td>${u.role}</td><td>${stateBadge(u)}</td><td>${u.createdAt || ''}</td><td>
+                                            <button class="btn btn-sm btn-default" onclick="adminUserAction('${u.id}','${u.role === 'ADMIN' ? 'user' : 'admin'}')">${u.role === 'ADMIN' ? 'Make User' : 'Make Admin'}</button>
+                                            <button class="btn btn-sm btn-default" onclick="adminUserAction('${u.id}','${u.active ? 'deactivate' : 'activate'}')">${u.active ? 'Deactivate' : 'Activate'}</button>
+                                            <button class="btn btn-sm btn-default" onclick="adminUserAction('${u.id}','${u.locked ? 'unlock' : 'lock'}')">${u.locked ? 'Unlock' : 'Lock'}</button>
+                                        </td></tr>`).join('') + '</table>';
                                 } else if (sub === 'sessions') {
                                     const res = await fetch(apiUrl('/api/admin/sessions'), { headers: getAuthHeaders() });
                                     const data = await res.json();
@@ -6928,7 +7997,7 @@ public class TrystHttpServer implements TrystHttpService {
                                 const yesNoBadge = v => v ? 'badge-success' : 'badge-error';
                                 const harnessBadge = s => s === 'CONNECTED' ? 'badge-success' : (s === 'UNKNOWN' ? 'badge-warning' : 'badge-error');
                                 const provRows = (data.providers || []).map(p => `<tr><td><b>${p.name}</b><br><code>${p.id}</code></td><td>${p.type}</td><td><code>${p.endpoint}</code></td><td>${p.enabled ? 'yes' : 'no'}</td><td><span class="badge ${healthBadge(p.health)}">${p.health}</span></td><td>${p.modelCount}</td><td><button class="btn btn-sm btn-primary" onclick="aiProviderAction('${p.id}','scan')">Scan</button> <button class="btn btn-sm btn-default" onclick="aiProviderAction('${p.id}','${p.enabled ? 'disable' : 'enable'}')">${p.enabled ? 'Disable' : 'Enable'}</button> <button class="btn btn-sm btn-default" onclick="aiProviderAction('${p.id}','default')">Default</button> <button class="btn btn-sm btn-danger" onclick="aiProviderAction('${p.id}','remove')">Remove</button></td></tr>`).join('');
-                                const modelRows = (data.models || []).map(m => `<tr><td><b>${m.model}</b><br><code>${m.id}</code></td><td>${m.providerId}</td><td><span class="badge ${yesNoBadge(m.available)}">${m.available ? 'available' : 'offline'}</span></td><td><span class="badge ${m.published ? 'badge-success' : 'badge-warning'}">${m.published ? 'published' : 'hidden'}</span></td><td><button class="btn btn-sm btn-primary" onclick="aiModelAction('${m.id}','${m.providerId}','${m.model}','show')">Browse</button> <button class="btn btn-sm btn-default" onclick="aiModelAction('${m.id}','${m.providerId}','${m.model}','load')">Load</button> <button class="btn btn-sm btn-default" onclick="aiModelAction('${m.id}','${m.providerId}','${m.model}','unload')">Unload</button> <button class="btn btn-sm btn-warning" onclick="aiModelAction('${m.id}','${m.providerId}','${m.model}','remove')">Remove</button> <button class="btn btn-sm btn-danger" onclick="aiModelAction('${m.id}','${m.providerId}','${m.model}','delete')">Delete</button></td></tr>`).join('');
+                                const modelRows = (data.models || []).map(m => `<tr><td><b>${m.model}</b><br><code>${m.id}</code></td><td>${m.providerId}</td><td><span class="badge ${yesNoBadge(m.available)}">${m.available ? 'available' : 'offline'}</span></td><td><span class="badge ${m.published ? 'badge-success' : 'badge-warning'}">${m.published ? 'published' : 'hidden'}</span></td><td><button class="btn btn-sm btn-primary" onclick="aiProviderAction('${m.providerId}','scan')">Rescan Provider</button> <button class="btn btn-sm btn-default" onclick="aiModelAction('${m.id}','${m.providerId}','${m.model}','load')">Load</button> <button class="btn btn-sm btn-default" onclick="aiModelAction('${m.id}','${m.providerId}','${m.model}','unload')">Unload</button> <button class="btn btn-sm btn-warning" onclick="aiModelAction('${m.id}','${m.providerId}','${m.model}','remove')">Remove</button> <button class="btn btn-sm btn-danger" onclick="aiModelAction('${m.id}','${m.providerId}','${m.model}','delete')">Delete</button></td></tr>`).join('');
                                 const harnessRes = await fetch(apiUrl('/api/admin/harnesses'), { headers: getAuthHeaders() });
                                 const harnessData = await harnessRes.json();
                                 const harnessRows = (harnessData.harnesses || []).map(h => `<tr><td><b>${h.name}</b><br><code>${h.id}</code></td><td>${h.type}</td><td>${h.enabled ? 'yes' : 'no'}</td><td><span class="badge ${harnessBadge(h.status)}">${h.status}</span></td><td>${h.selected ? '<span class="badge badge-success">selected</span>' : ''}</td><td><button class="btn btn-sm btn-primary" onclick="harnessAction('${h.id}','scan')">Scan</button> <button class="btn btn-sm btn-default" onclick="harnessAction('${h.id}','${h.enabled ? 'disable' : 'enable'}')">${h.enabled ? 'Disable' : 'Enable'}</button> <button class="btn btn-sm btn-default" onclick="harnessAction('${h.id}','select')">Select</button> <button class="btn btn-sm btn-danger" onclick="harnessAction('${h.id}','remove')">Remove</button></td></tr>`).join('');
@@ -7039,7 +8108,7 @@ public class TrystHttpServer implements TrystHttpService {
                                         <div>
                                             <h3>Connect GitHub Account</h3>
                                             <p>Enter a GitHub Personal Access Token (classic or fine-grained) with <code>repo</code> permissions to enable cloning private and public repositories and authorized pushes.</p>
-                                            <input id="ghTokenInput" type="password" placeholder="ghp_..." style="width: 320px; padding: 8px; background: #ffffff; border: 1px solid var(--border); color: #0f172a; margin-bottom: 8px; border-radius: 4px;" /><br>
+                                            <input id="ghTokenInput" type="password" placeholder="ghp_..." style="width: 320px; padding: 8px; background: var(--panel); border: 1px solid var(--border); color: var(--text); margin-bottom: 8px; border-radius: 4px;" /><br>
                                             <button class="btn btn-primary" onclick="connectGitHub()">Connect GitHub Account</button>
                                         </div>
                                     `;
@@ -7138,12 +8207,64 @@ public class TrystHttpServer implements TrystHttpService {
                             }
                         }
 
-                        async function loadAdminOverview() {
+                        async function adminUserAction(userId, action) {
                             try {
-                                const res = await fetch(apiUrl('/api/admin/overview'), { headers: getAuthHeaders() });
+                                const res = await fetch(apiUrl(`/api/admin/users/${userId}/${action}`), {
+                                    method: 'POST',
+                                    headers: getAuthHeaders(),
+                                    body: JSON.stringify(action === 'admin' || action === 'user' ? { role: action.toUpperCase() } : {})
+                                });
+                                const data = await res.json().catch(() => ({}));
+                                if (res.ok) {
+                                    switchAdminSub('users');
+                                } else {
+                                    alert('User action failed: ' + (data.error || ('HTTP ' + res.status)));
+                                }
+                            } catch (e) {
+                                alert('User action error: ' + e);
+                            }
+                        }
+
+                        async function createAdminUser() {
+                            const username = document.getElementById('newUserName').value.trim();
+                            const password = document.getElementById('newUserPassword').value;
+                            const role = document.getElementById('newUserRole').value;
+                            if (!username || !password) {
+                                alert('Username and password are required.');
+                                return;
+                            }
+                            try {
+                                const res = await fetch(apiUrl('/api/admin/users'), {
+                                    method: 'POST',
+                                    headers: getAuthHeaders(),
+                                    body: JSON.stringify({ username: username, password: password, role: role })
+                                });
+                                const data = await res.json().catch(() => ({}));
+                                if (res.ok) {
+                                    switchAdminSub('users');
+                                } else {
+                                    alert('User creation failed: ' + (data.error || ('HTTP ' + res.status)));
+                                }
+                            } catch (e) {
+                                alert('User creation error: ' + e);
+                            }
+                        }
+
+                        async function loadAdminOverview() {
+                            const container = document.getElementById('adminTableContainer');
+                            try {
+                                const [res, healthRes, statsRes] = await Promise.all([
+                                    fetch(apiUrl('/api/admin/overview'), { headers: getAuthHeaders() }),
+                                    fetch(apiUrl('/api/health'), { headers: getAuthHeaders() }),
+                                    fetch(apiUrl('/api/admin/statistics'), { headers: getAuthHeaders() })
+                                ]);
                                 if (res.status === 403 || res.status === 401) {
-                                    document.getElementById('adminTableContainer').innerHTML =
+                                    container.innerHTML =
                                         '<div style="color:var(--yellow); padding: 16px;">Authentication as Administrator required. <button class="btn btn-primary" onclick="promptLogin()">Login with Token / Password</button></div>';
+                                    return;
+                                }
+                                if (!res.ok) {
+                                    container.innerHTML = '<div style="color:var(--err); padding: 16px;">Failed to load server overview (HTTP ' + res.status + ') &mdash; <a href="#" onclick="loadAdminOverview(); return false;">retry</a></div>';
                                     return;
                                 }
                                 const data = await res.json();
@@ -7152,8 +8273,45 @@ public class TrystHttpServer implements TrystHttpService {
                                 document.getElementById('stProjects').textContent = data.totalProjects;
                                 document.getElementById('stTasks').textContent = data.totalTasks;
                                 document.getElementById('stAudit').textContent = data.totalAuditRecords;
-                                document.getElementById('adminTableContainer').innerHTML = `<p><b>AI Inference Endpoint:</b> ${data.aiEndpoint} (Status: ${data.aiAvailable ? 'ONLINE' : 'OFFLINE'})</p><p><b>Default AI Model:</b> ${data.aiModel}</p>`;
-                            } catch(e) {}
+
+                                let html = `<p><b>AI Inference Endpoint:</b> ${escapeHtml(data.aiEndpoint || '-')} (Status: ${data.aiAvailable ? 'ONLINE' : 'OFFLINE'})</p><p><b>Default AI Model:</b> ${escapeHtml(data.aiModel || '-')}</p>`;
+
+                                if (healthRes.ok) {
+                                    const health = await healthRes.json();
+                                    const comps = health.components || {};
+                                    const badge = s => s === 'OPERATIONAL' ? 'badge-success' : (s === 'DEGRADED' ? 'badge-warning' : (s === 'FAILED' ? 'badge-error' : 'badge-info'));
+                                    html += `<div class="section-title" style="margin-top:16px;">Component Health &mdash; ${escapeHtml(health.health || '?')} (v${escapeHtml(health.version || '?')}, uptime ${Math.floor((health.uptimeSeconds||0)/60)}m)</div><table><tr><th>Component</th><th>State</th><th>Details</th></tr>` +
+                                        Object.entries(comps).map(([name, c]) => {
+                                            let details = '';
+                                            if (name === 'aiProvider') details = `endpoint ${escapeHtml(c.endpoint || '-')}, model "${escapeHtml(c.modelConfigured || '-')}" ${c.modelAvailable ? 'available' : 'not verified'}, ${c.availableModelCount} models online`;
+                                            else if (name === 'workerSubsystem') details = `${c.busy}/${c.capacity} busy, running: ${c.running}`;
+                                            else if (name === 'repositoryPool') details = `${c.mirrorCount} mirrors (${c.syncedMirrors} synced, ${c.staleMirrors} stale, ${c.missingMirrors} missing)`;
+                                            else if (name === 'sandboxSubsystem') details = `${c.activeWorkspaces}/${c.totalWorkspaces} active workspaces`;
+                                            else if (name === 'database') details = `connected: ${c.connected}${c.schemaVersion ? ', schema V' + c.schemaVersion : ''}`;
+                                            else if (name === 'httpServer') details = `running: ${c.running}`;
+                                            else if (name === 'authentication') details = `setupRequired: ${c.setupRequired}`;
+                                            return `<tr><td><b>${escapeHtml(name)}</b></td><td><span class="badge ${badge(c.status)}">${escapeHtml(c.status)}</span></td><td style="color:var(--muted);">${details}</td></tr>`;
+                                        }).join('') + '</table>';
+                                } else {
+                                    html += '<div style="color:var(--err); margin-top:12px;">Health endpoint unavailable.</div>';
+                                }
+
+                                if (statsRes.ok) {
+                                    const stats = await statsRes.json();
+                                    const t = stats.tasks || {};
+                                    const w = stats.workers || {};
+                                    const p = stats.pool || {};
+                                    const ratio = t.successFailureRatio === null ? 'n/a' : t.successFailureRatio;
+                                    html += `<div class="section-title" style="margin-top:16px;">Execution Statistics (persisted data)</div>
+                                        <p>Tasks: total <b>${t.total}</b> &middot; queued ${t.queued} &middot; running ${t.running} &middot; waiting review ${t.waitingForReview} &middot; completed <b>${t.completed}</b> &middot; failed ${t.failed} &middot; cancelled ${t.cancelled} &middot; recovery ${t.recoveryRequired}</p>
+                                        <p>Durations: avg ${(t.averageExecutionDurationMs/1000).toFixed(1)}s &middot; &lt;1m: ${t.durationDistribution.under1m}, 1–5m: ${t.durationDistribution.between1and5m}, 5–15m: ${t.durationDistribution.between5and15m}, &gt;15m: ${t.durationDistribution.over15m} &middot; success/failure ratio ${ratio}</p>
+                                        <p>Workers: capacity ${w.capacity}, busy ${w.busy}, available ${w.available}${w.perWorker && w.perWorker.length ? ' &middot; per worker: ' + w.perWorker.map(pw => `${pw.workerId.substring(0,8)}(${pw.tasksExecuted} tasks, ${pw.failures} failures)`).join(', ') : ''}</p>
+                                        <p>Pool: ${p.repositoryMirrors.total} mirrors (${p.repositoryMirrors.synced} synced, ${p.repositoryMirrors.stale} stale, ${p.repositoryMirrors.missing} missing) &middot; sandboxes: ${p.sandboxes.total} total, ${p.sandboxes.active} active, ${p.sandboxes.idle} idle, ${p.sandboxes.failed} failed</p>`;
+                                }
+                                container.innerHTML = html;
+                            } catch(e) {
+                                container.innerHTML = 'Error loading server overview: ' + e;
+                            }
                         }
 
                         async function loadProjects() {
@@ -7161,13 +8319,21 @@ public class TrystHttpServer implements TrystHttpService {
                                 const res = await fetch(apiUrl('/api/projects'));
                                 const data = await res.json();
                                 const list = document.getElementById('projectList');
-                                list.innerHTML = data.projects.map(p => `<div class="list-item"><strong>${escapeHtml(p.name)}</strong><br><small style="color:var(--muted);">${p.id.substring(0,8)}</small></div>`).join('');
+                                list.innerHTML = data.projects.map(p => `<div class="list-item" onclick="filterReviewsByProject('${escapeHtml(p.id)}')" style="cursor:pointer;"><strong>${escapeHtml(p.name)}</strong><br><small style="color:var(--muted);">${p.id.substring(0,8)}</small></div>`).join('');
                             } catch(e) {}
                         }
 
-                        async function loadReviews() {
+                        function filterReviewsByProject(projectId) {
+                            const sel = document.getElementById('globalProjectSelector');
+                            if (sel) sel.value = projectId;
+                            loadReviews(projectId);
+                        }
+
+                        async function loadReviews(projectId) {
                             try {
-                                const res = await fetch(apiUrl('/api/reviews'));
+                                let url = '/api/reviews';
+                                if (projectId) url += '?projectId=' + encodeURIComponent(projectId);
+                                const res = await fetch(apiUrl(url));
                                 const data = await res.json();
                                 const list = document.getElementById('reviewList');
                                 if (!list) return;
@@ -7297,11 +8463,28 @@ public class TrystHttpServer implements TrystHttpService {
                             loadReviewDiff();
                         }
 
+                        let diffViewMode = 'unified';
+
+                        function setDiffViewMode(mode) {
+                            diffViewMode = mode;
+                            const bU = document.getElementById('btnDiffViewUnified');
+                            const bS = document.getElementById('btnDiffViewSide');
+                            if (mode === 'side') {
+                                bU.className = 'btn btn-sm btn-default';
+                                bS.className = 'btn btn-sm btn-primary';
+                            } else {
+                                bU.className = 'btn btn-sm btn-primary';
+                                bS.className = 'btn btn-sm btn-default';
+                            }
+                            if (activeReview) loadReviewDiff();
+                        }
+
                         async function loadReviewDiff() {
                             if (!activeReview) return;
                             const rev = document.getElementById('selRevision').value;
                             const base = document.getElementById('selBaseRevision').value;
-                            let url = `/api/reviews/${activeReview.id}/diff?view=unified`;
+                            const view = diffViewMode === 'side' ? 'side' : 'unified';
+                            let url = `/api/reviews/${activeReview.id}/diff?view=${view}`;
                             if (rev) url += `&revision=${rev}`;
                             if (base) url += `&baseRevision=${base}`;
 
@@ -7330,6 +8513,11 @@ public class TrystHttpServer implements TrystHttpService {
                                 totDel += f.deletions;
                             });
                             document.getElementById('diffStatsBadge').textContent = `Files: ${diffData.files.length} | +${totAdd} -${totDel}`;
+
+                            if (diffViewMode === 'side') {
+                                renderSideBySideDiff(diffData, viewer);
+                                return;
+                            }
 
                             diffData.files.forEach(f => {
                                 const fHdr = document.createElement('div');
@@ -7360,6 +8548,64 @@ public class TrystHttpServer implements TrystHttpService {
                                         viewer.appendChild(lineEl);
                                     });
                                 });
+                            });
+                        }
+
+                        function renderSideBySideDiff(diffData, viewer) {
+                            diffData.files.forEach(f => {
+                                const fHdr = document.createElement('div');
+                                fHdr.className = 'diff-line diff-hdr';
+                                fHdr.innerHTML = `<span class="diff-line-code" style="font-weight:bold; color:var(--primary); padding:6px 12px;">📄 ${escapeHtml(f.newPath || f.oldPath)} (+${f.additions} -${f.deletions})</span>`;
+                                viewer.appendChild(fHdr);
+
+                                const grid = document.createElement('div');
+                                grid.style.cssText = 'display:grid; grid-template-columns: 44px 1fr 44px 1fr; font-family: Consolas, monospace; font-size: 12px;';
+                                const colHead = document.createElement('div');
+                                colHead.style.cssText = 'grid-column: 1 / -1; background: var(--bg2); color: var(--muted); padding: 4px 8px; border-bottom: 1px solid var(--border);';
+                                colHead.textContent = 'Original (base revision)                                  Modified (this revision)';
+                                grid.appendChild(colHead);
+
+                                f.hunks.forEach(h => {
+                                    const hHdr = document.createElement('div');
+                                    hHdr.style.cssText = 'grid-column: 1 / -1; color: var(--muted); padding: 4px 8px; background: var(--bg);';
+                                    hHdr.textContent = h.header;
+                                    grid.appendChild(hHdr);
+
+                                    (h.sideBySide || []).forEach(row => {
+                                        const filePath = f.newPath || f.oldPath;
+                                        const leftCls = row.leftType === 'DELETE' ? 'diff-del' : 'diff-plain';
+                                        const rightCls = row.rightType === 'ADD' ? 'diff-add' : 'diff-plain';
+                                        const leftNum = row.leftNum > 0 ? row.leftNum : '';
+                                        const rightNum = row.rightNum > 0 ? row.rightNum : '';
+
+                                        const ln = document.createElement('div');
+                                        ln.className = leftCls;
+                                        ln.style.cssText = 'padding:1px 6px; text-align:right; border-right:1px solid var(--border); color:var(--muted);';
+                                        ln.textContent = leftNum;
+                                        grid.appendChild(ln);
+
+                                        const lc = document.createElement('div');
+                                        lc.className = leftCls;
+                                        lc.style.cssText = 'padding:1px 8px; border-right:1px solid var(--border); white-space:pre-wrap;';
+                                        lc.textContent = row.leftContent;
+                                        lc.onclick = (e) => onLineClicked(filePath, leftNum, 'LEFT', row.leftContent, lc, e.shiftKey);
+                                        grid.appendChild(lc);
+
+                                        const rn = document.createElement('div');
+                                        rn.className = rightCls;
+                                        rn.style.cssText = 'padding:1px 6px; text-align:right; border-right:1px solid var(--border); color:var(--muted);';
+                                        rn.textContent = rightNum;
+                                        grid.appendChild(rn);
+
+                                        const rc = document.createElement('div');
+                                        rc.className = rightCls;
+                                        rc.style.cssText = 'padding:1px 8px; white-space:pre-wrap;';
+                                        rc.textContent = row.rightContent;
+                                        rc.onclick = (e) => onLineClicked(filePath, rightNum, 'RIGHT', row.rightContent, rc, e.shiftKey);
+                                        grid.appendChild(rc);
+                                    });
+                                });
+                                viewer.appendChild(grid);
                             });
                         }
 
@@ -7472,8 +8718,8 @@ public class TrystHttpServer implements TrystHttpService {
                                                 <button class="btn btn-sm btn-danger" onclick="deleteComment('${c.id}')">Delete</button>
                                             </div>
                                         </div>
-                                        ${c.codeContext ? `<pre style="background:#090d16; border:1px solid var(--border); padding:6px; font-size:11px; border-radius:4px; margin:4px 0;">${escapeHtml(c.codeContext)}</pre>` : ''}
-                                        <div style="font-size: 13px; color: #0f172a; margin-top: 6px; white-space: pre-wrap;">${escapeHtml(c.content)}</div>
+                                        ${c.codeContext ? `<pre style="background:var(--bg); border:1px solid var(--border); padding:6px; font-size:11px; border-radius:4px; margin:4px 0;">${escapeHtml(c.codeContext)}</pre>` : ''}
+                                        <div style="font-size: 13px; color: var(--text); margin-top: 6px; white-space: pre-wrap;">${escapeHtml(c.content)}</div>
                                         <div style="font-size: 11px; color: var(--muted); margin-top: 4px;">Rev: ${c.revisionNumber} | Author: ${escapeHtml(c.authorId)} | ${c.createdAt}</div>
                                     </div>
                                 `;
@@ -7719,7 +8965,7 @@ public class TrystHttpServer implements TrystHttpService {
                                         <span class="badge badge-info" style="font-size:10px;">${escapeHtml(n.type)}</span>
                                         <span style="font-size:11px; color:var(--muted);">${time}</span>
                                     </div>
-                                    <div style="margin-top: 4px; color: #0f172a;">${escapeHtml(n.title)}</div>
+                                    <div style="margin-top: 4px; color: var(--text);">${escapeHtml(n.title)}</div>
                                     <div style="color:var(--muted); font-size:11px; margin-top:2px;">${escapeHtml(n.message)}</div>
                                 </div>`;
                             }).join('');
@@ -7824,7 +9070,7 @@ public class TrystHttpServer implements TrystHttpService {
                             }
 
                             if (!projectId && !repoUrl) {
-                                statusIndicator.style.color = '#64748b';
+                                statusIndicator.style.color = 'var(--muted)';
                                 statusIcon.textContent = '○';
                                 statusText.textContent = 'Specify Git URL or select an existing project.';
                                 return;
@@ -7855,7 +9101,7 @@ public class TrystHttpServer implements TrystHttpService {
                                     statusText.textContent = 'Validation service unavailable.';
                                 }
                             } catch (e) {
-                                statusIndicator.style.color = '#64748b';
+                                statusIndicator.style.color = 'var(--muted)';
                                 statusIcon.textContent = '○';
                                 statusText.textContent = 'Status: ' + (repoUrl || 'Project selected');
                             }
@@ -7866,21 +9112,21 @@ public class TrystHttpServer implements TrystHttpService {
                             e.preventDefault();
                             e.stopPropagation();
                             const zone = document.getElementById('attachmentDropZone');
-                            if (zone) zone.style.background = '#e2e8f0';
+                            if (zone) zone.style.background = 'var(--bg2)';
                         }
 
                         function onAttachmentDragLeave(e) {
                             e.preventDefault();
                             e.stopPropagation();
                             const zone = document.getElementById('attachmentDropZone');
-                            if (zone) zone.style.background = '#f8fafc';
+                            if (zone) zone.style.background = 'var(--bg)';
                         }
 
                         function onAttachmentDrop(e) {
                             e.preventDefault();
                             e.stopPropagation();
                             const zone = document.getElementById('attachmentDropZone');
-                            if (zone) zone.style.background = '#f8fafc';
+                            if (zone) zone.style.background = 'var(--bg)';
                             if (e.dataTransfer && e.dataTransfer.files) {
                                 handleAttachmentFiles(e.dataTransfer.files);
                             }
@@ -8391,6 +9637,20 @@ public class TrystHttpServer implements TrystHttpService {
                             }
                         }
 
+                        // Theme toggle: UPM design standard light/dark pair (default light).
+                        window.toggleTrystTheme = function() {
+                            const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+                            document.documentElement.dataset.theme = next;
+                            try { localStorage.setItem('tryst.theme', next); } catch (e) { /* ignore */ }
+                        };
+                        (function() {
+                            let saved = null;
+                            try { saved = localStorage.getItem('tryst.theme'); } catch (e) { /* ignore */ }
+                            if (saved === 'light' || saved === 'dark') {
+                                document.documentElement.dataset.theme = saved;
+                            }
+                        })();
+
                         // Structured DOMContentLoaded initialization with isolated component error boundaries
                         document.addEventListener('DOMContentLoaded', () => {
                             // 1. Initialize authentication status
@@ -8454,7 +9714,7 @@ public class TrystHttpServer implements TrystHttpService {
                         .ctx-menu-tryst button:hover:not(:disabled) { background: var(--panel2); }
                         .ctx-menu-tryst button:disabled { color: var(--muted); cursor: not-allowed; }
                         .ctx-menu-tryst .ctx-sep { height: 1px; margin: 4px 0; background: var(--border); }
-                        .ctx-menu-tryst .ctx-danger { color: #ff7b72; }
+                        .ctx-menu-tryst .ctx-danger { color: var(--err); }
                     </style>
                     <div id="trystCtxMenu" class="ctx-menu-tryst" role="menu" aria-label="Context actions" style="display:none;"></div>
                     <script>
@@ -8709,6 +9969,324 @@ public class TrystHttpServer implements TrystHttpService {
             list.add(itemMatcher.group(1).replace("\\\"", "\"").replace("\\\\", "\\"));
         }
         return list;
+    }
+
+    /**
+     * Session continuation: creates a follow-up task bound to the same coding session,
+     * project and working sandbox so prior changes and context are preserved. The new
+     * task's diff accumulates on top of the existing working tree (previous uncommitted
+     * changes are never discarded).
+     */
+    private String continueSessionWork(String sessionIdOrTaskId, boolean byTask, String instruction,
+                                       String newTitle, TaskPriority priority, String userId,
+                                       Optional<SecurityContext> ctx) {
+        if (instruction == null || instruction.isBlank()) {
+            throw new TrystDomainException("A continuation instruction is required");
+        }
+        if (taskOrchestrator == null) {
+            throw new TrystDomainException("TaskOrchestrator is unavailable; cannot continue session");
+        }
+        if (taskRepository == null) {
+            throw new TrystDomainException("TaskRepository is unavailable; cannot continue session");
+        }
+
+        Task original;
+        if (byTask) {
+            original = taskRepository.findTaskById(sessionIdOrTaskId)
+                    .orElseThrow(() -> new TrystDomainException("Task not found: " + sessionIdOrTaskId));
+        } else {
+            List<AgentTask> sessionTasks = taskRepository.findBySessionId(sessionIdOrTaskId);
+            if (sessionTasks.isEmpty()) {
+                throw new TrystDomainException("Session has no tasks to continue: " + sessionIdOrTaskId);
+            }
+            original = sessionTasks.stream()
+                    .sorted(Comparator.comparing(AgentTask::getCreatedAt, Comparator.nullsLast(Comparator.naturalOrder())).reversed())
+                    .map(Task::fromAgentTask)
+                    .findFirst()
+                    .orElseThrow(() -> new TrystDomainException("Session has no tasks to continue: " + sessionIdOrTaskId));
+        }
+
+        if (ctx.isPresent()) {
+            permissionManager.validateTaskAccess(userId, original, ctx.orElse(null), Permission.EXECUTE_TASKS);
+        }
+
+        if (!isContinueEligible(original.getStatus())) {
+            throw new TrystDomainException("Task is not eligible for continuation in status: " + original.getStatus()
+                    + ". Eligible: WAITING_FOR_REVIEW, APPROVED, REJECTED, COMPLETED, FAILED, CANCELLED.");
+        }
+        if (original.getProjectId() == null || original.getProjectId().isBlank()) {
+            throw new TrystDomainException("Cannot continue: the original task has no project binding.");
+        }
+
+        // 1. Resolve or backfill the coding session
+        String sessionId = original.getSessionId();
+        boolean backfilled = false;
+        if (sessionId == null || sessionId.isBlank()
+                || (codingSessionRepository != null && codingSessionRepository.findById(sessionId).isEmpty())) {
+            Session sess = new Session(original.getProjectId(), original.getTitle());
+            if (codingSessionRepository != null) {
+                codingSessionRepository.save(sess);
+            }
+            sessionId = sess.getId();
+            original.setSessionId(sessionId);
+            taskRepository.saveTask(original);
+            backfilled = true;
+        }
+
+        // 2. Create the follow-up task bound to the same session/project
+        String taskTitle = (newTitle != null && !newTitle.isBlank())
+                ? newTitle.trim()
+                : "Continue: " + original.getTitle();
+        Task followUp = new Task(
+                UUID.randomUUID().toString(),
+                original.getProjectId(),
+                sessionId,
+                taskTitle,
+                instruction.trim(),
+                TaskStatus.CREATED,
+                priority != null ? priority : TaskPriority.NORMAL,
+                null,
+                original.getAgentType(),
+                null,
+                null,
+                0,
+                null,
+                Instant.now(),
+                null
+        );
+
+        // 3. Reuse the existing sandbox when it still exists; otherwise allocate a fresh one
+        Workspace prevWs = workspaceService != null ? workspaceService.getWorkspaceForTask(original.getId()) : null;
+        Workspace ws = null;
+        if (prevWs != null && Files.exists(prevWs.getRootPath())) {
+            ws = new Workspace(
+                    UUID.randomUUID().toString(),
+                    prevWs.getRootPath(),
+                    prevWs.getOwnerId() != null ? prevWs.getOwnerId() : userId,
+                    followUp.getId(),
+                    prevWs.getRepositoryUrl(),
+                    prevWs.getBranch(),
+                    eu.kalafatic.tryst.domain.model.WorkspaceStatus.READY,
+                    Instant.now(),
+                    Instant.now(),
+                    new java.util.HashMap<>(prevWs.getMetadata())
+            );
+            ws.setMetadata("skip_clone", "true");
+            ws.setMetadata("continued_from_task", original.getId());
+            ws.setMetadata("project_id", original.getProjectId());
+            if (workspaceService != null) {
+                workspaceService.saveWorkspace(ws);
+            }
+        } else if (workspaceService != null) {
+            String repoUrl = null;
+            String branch = "main";
+            if (projectRepository != null) {
+                Project p = projectRepository.findById(original.getProjectId()).orElse(null);
+                if (p != null) {
+                    repoUrl = (p.getRepositoryUrl() != null && !p.getRepositoryUrl().isBlank())
+                            ? p.getRepositoryUrl() : (p.getDescription() != null && p.getDescription().startsWith("Repository: ")
+                                    ? p.getDescription().substring("Repository: ".length()) : null);
+                    branch = p.getDefaultBranch();
+                }
+            }
+            ws = workspaceService.allocateTaskWorkspace(userId, followUp.getId(), original.getProjectId(), repoUrl, branch);
+            ws.setMetadata("continued_from_task", original.getId());
+            workspaceService.saveWorkspace(ws);
+        }
+
+        // 4. Enqueue the follow-up task
+        taskOrchestrator.submitTask(followUp, userId, ctx.orElse(null));
+
+        // 5. Persist continuation context: session conversation history + instruction
+        if (conversationMessageRepository != null) {
+            conversationMessageRepository.save(new ConversationMessage(sessionId, "assistant",
+                    "Previous task: " + original.getTitle() + "\nDescription: " + original.getDescription()
+                            + "\nFinal status: " + original.getStatus()));
+            conversationMessageRepository.save(new ConversationMessage(sessionId, "user", instruction.trim()));
+        }
+        if (taskInstructionRepository != null) {
+            taskInstructionRepository.save(new TaskInstruction(followUp.getId(),
+                    TaskInstruction.InstructionType.SUPPLEMENTARY, instruction.trim(), userId));
+        }
+
+        return String.format(
+                "{\"taskId\": \"%s\", \"sessionId\": \"%s\", \"title\": \"%s\", \"status\": \"%s\", \"workspaceReused\": %b, \"sessionBackfilled\": %b}",
+                escapeJson(followUp.getId()), escapeJson(sessionId), escapeJson(followUp.getTitle()),
+                followUp.getStatus().name(), ws != null && prevWs != null && ws.getRootPath().equals(prevWs.getRootPath()), backfilled);
+    }
+
+    private static boolean isContinueEligible(TaskStatus status) {
+        switch (status) {
+            case WAITING_FOR_REVIEW:
+            case APPROVED:
+            case REJECTED:
+            case COMPLETED:
+            case FAILED:
+            case CANCELLED:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static int priorityRank(TaskPriority priority) {
+        if (priority == null) {
+            return 0;
+        }
+        switch (priority) {
+            case URGENT: return 4;
+            case HIGH: return 3;
+            case NORMAL: return 2;
+            case LOW: return 1;
+            default: return 0;
+        }
+    }
+
+    /**
+     * Builds operational execution statistics from persisted task rows plus live runtime
+     * state. All values are computed from actual data; absent data is reported as
+     * null/zero explicitly and never invented.
+     */
+    private String buildStatisticsJson() {
+        List<Task> allTasks = taskRepository != null ? taskRepository.findAllTasks() : List.of();
+
+        long totalTasks = 0;
+        long queuedTasks = 0;
+        long runningTasks = 0;
+        long completedTasks = 0;
+        long failedTasks = 0;
+        long cancelledTasks = 0;
+        long recoveryTasks = 0;
+        long pausedTasks = 0;
+        long waitingReview = 0;
+        List<Long> durationsMs = new ArrayList<>();
+        Map<String, Long> throughputByDay = new TreeMap<>();
+        Map<String, long[]> perWorkerAgg = new HashMap<>(); // workerId -> {count, failed, totalDuration}
+
+        for (Task t : allTasks) {
+            totalTasks++;
+            switch (t.getStatus()) {
+                case QUEUED -> queuedTasks++;
+                case PAUSED -> pausedTasks++;
+                case RECOVERY_REQUIRED -> recoveryTasks++;
+                case WAITING_FOR_REVIEW -> waitingReview++;
+                case COMPLETED -> completedTasks++;
+                case FAILED -> failedTasks++;
+                case CANCELLED -> cancelledTasks++;
+                default -> { if (t.getStatus().isActive()) runningTasks++; }
+            }
+            if (t.getStatus().isTerminal() && t.getCompletedAt() != null) {
+                long dur = java.time.Duration.between(t.getCreatedAt(), t.getCompletedAt()).toMillis();
+                if (dur >= 0) {
+                    durationsMs.add(dur);
+                    String day = t.getCompletedAt().truncatedTo(java.time.temporal.ChronoUnit.DAYS).toString();
+                    throughputByDay.merge(day, 1L, Long::sum);
+                }
+            }
+            if (t.getWorkerId() != null && !t.getWorkerId().isBlank()) {
+                long[] agg = perWorkerAgg.computeIfAbsent(t.getWorkerId(), k -> new long[3]);
+                agg[0]++;
+                if (t.getStatus() == TaskStatus.FAILED) agg[1]++;
+                if (t.getStatus().isTerminal() && t.getCompletedAt() != null) {
+                    long dur = java.time.Duration.between(t.getCreatedAt(), t.getCompletedAt()).toMillis();
+                    if (dur >= 0) agg[2] += dur;
+                }
+            }
+        }
+
+        long avgDurationMs = durationsMs.isEmpty() ? 0 : (long) durationsMs.stream().mapToLong(Long::longValue).average().orElse(0.0);
+        long bucketLt1m = durationsMs.stream().filter(d -> d < 60_000).count();
+        long bucket1to5 = durationsMs.stream().filter(d -> d >= 60_000 && d < 300_000).count();
+        long bucket5to15 = durationsMs.stream().filter(d -> d >= 300_000 && d < 900_000).count();
+        long bucketGt15 = durationsMs.stream().filter(d -> d >= 900_000).count();
+        long terminalExecuted = completedTasks + failedTasks;
+        double successRatio = terminalExecuted > 0 ? (double) completedTasks / terminalExecuted : Double.NaN;
+
+        int capacity = taskOrchestrator != null ? taskOrchestrator.getConcurrency() : 0;
+        int busy = taskOrchestrator != null ? taskOrchestrator.getActiveTaskCount() : 0;
+        List<TaskOrchestrator.WorkerRuntime> runtimes = taskOrchestrator != null
+                ? taskOrchestrator.getWorkerRuntimes() : List.of();
+        int liveCompleted = runtimes.stream().mapToInt(TaskOrchestrator.WorkerRuntime::getCompletedTasks).sum();
+        int liveFailed = runtimes.stream().mapToInt(TaskOrchestrator.WorkerRuntime::getFailedTasks).sum();
+
+        List<eu.kalafatic.tryst.infrastructure.vcs.RepositoryPoolManager.MirrorStatus> mirrors =
+                repositoryPoolManager != null ? repositoryPoolManager.listMirrorStatuses() : List.of();
+        long synced = mirrors.stream().filter(m -> "SYNCED".equals(m.syncState())).count();
+        long stale = mirrors.stream().filter(m -> "STALE".equals(m.syncState())).count();
+        long missing = mirrors.stream().filter(m -> "MISSING".equals(m.syncState())).count();
+
+        long wsTotal = 0, wsActive = 0, wsIdle = 0, wsFailed = 0;
+        if (workspaceService != null) {
+            for (Workspace w : workspaceService.getAllWorkspaces()) {
+                wsTotal++;
+                switch (w.getStatus()) {
+                    case ACTIVE, READY, WAITING_FOR_REVIEW -> wsActive++;
+                    case ALLOCATED, INITIALIZING -> wsIdle++;
+                    case FAILED -> wsFailed++;
+                    default -> {}
+                }
+            }
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("{");
+        sb.append("\"tasks\": {");
+        sb.append("\"total\": ").append(totalTasks).append(",");
+        sb.append("\"queued\": ").append(queuedTasks).append(",");
+        sb.append("\"running\": ").append(runningTasks).append(",");
+        sb.append("\"waitingForReview\": ").append(waitingReview).append(",");
+        sb.append("\"paused\": ").append(pausedTasks).append(",");
+        sb.append("\"completed\": ").append(completedTasks).append(",");
+        sb.append("\"failed\": ").append(failedTasks).append(",");
+        sb.append("\"cancelled\": ").append(cancelledTasks).append(",");
+        sb.append("\"recoveryRequired\": ").append(recoveryTasks).append(",");
+        sb.append("\"averageExecutionDurationMs\": ").append(avgDurationMs).append(",");
+        sb.append("\"durationDistribution\": {");
+        sb.append("\"under1m\": ").append(bucketLt1m).append(",");
+        sb.append("\"between1and5m\": ").append(bucket1to5).append(",");
+        sb.append("\"between5and15m\": ").append(bucket5to15).append(",");
+        sb.append("\"over15m\": ").append(bucketGt15);
+        sb.append("},");
+        sb.append("\"successFailureRatio\": ").append(Double.isNaN(successRatio) ? "null" : String.format(Locale.ROOT, "%.4f", successRatio)).append(",");
+        sb.append("\"throughputByDay\": {");
+        int di = 0;
+        for (Map.Entry<String, Long> e : throughputByDay.entrySet()) {
+            if (di++ > 0) sb.append(",");
+            sb.append("\"").append(e.getKey()).append("\": ").append(e.getValue());
+        }
+        sb.append("}},");
+        sb.append("\"workers\": {");
+        sb.append("\"capacity\": ").append(capacity).append(",");
+        sb.append("\"busy\": ").append(busy).append(",");
+        sb.append("\"available\": ").append(Math.max(0, capacity - busy)).append(",");
+        sb.append("\"utilization\": ").append(capacity > 0 ? String.format(Locale.ROOT, "%.4f", (double) busy / capacity) : "null").append(",");
+        sb.append("\"runtimeCompleted\": ").append(liveCompleted).append(",");
+        sb.append("\"runtimeFailed\": ").append(liveFailed).append(",");
+        sb.append("\"perWorker\": [");
+        int wi = 0;
+        for (Map.Entry<String, long[]> e : perWorkerAgg.entrySet()) {
+            if (wi++ > 0) sb.append(",");
+            long[] agg = e.getValue();
+            long avg = agg[0] > 0 ? agg[2] / agg[0] : 0;
+            sb.append(String.format("{\"workerId\": \"%s\", \"tasksExecuted\": %d, \"failures\": %d, \"averageExecutionTimeMs\": %d}",
+                    escapeJson(e.getKey()), agg[0], agg[1], avg));
+        }
+        sb.append("]},");
+        sb.append("\"pool\": {");
+        sb.append("\"repositoryMirrors\": {");
+        sb.append("\"total\": ").append(mirrors.size()).append(",");
+        sb.append("\"synced\": ").append(synced).append(",");
+        sb.append("\"stale\": ").append(stale).append(",");
+        sb.append("\"missing\": ").append(missing);
+        sb.append("},");
+        sb.append("\"sandboxes\": {");
+        sb.append("\"total\": ").append(wsTotal).append(",");
+        sb.append("\"active\": ").append(wsActive).append(",");
+        sb.append("\"idle\": ").append(wsIdle).append(",");
+        sb.append("\"failed\": ").append(wsFailed);
+        sb.append("}");
+        sb.append("}}");
+        return sb.toString();
     }
 
     /**

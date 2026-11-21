@@ -25,6 +25,7 @@ import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Combo;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
+import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Table;
 import org.eclipse.swt.widgets.TableColumn;
@@ -32,6 +33,10 @@ import org.eclipse.swt.widgets.TableItem;
 import org.eclipse.swt.widgets.Text;
 import org.eclipse.ui.part.ViewPart;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -75,6 +80,7 @@ public class ConsoleOutputView extends ViewPart implements eu.kalafatic.tryst.ui
     private Action navigateTaskAction;
     private Action followContextAction;
     private Action resetFilterAction;
+    private Action saveOutputAction;
 
     private Color errorColor;
     private Color warnColor;
@@ -462,6 +468,13 @@ public class ConsoleOutputView extends ViewPart implements eu.kalafatic.tryst.ui
         };
         followContextAction.setChecked(true);
 
+        saveOutputAction = new Action("Save Output\u2026") {
+            @Override
+            public void run() {
+                saveOutputToFile();
+            }
+        };
+
         resetFilterAction = new Action("Show Global Logs") {
             @Override
             public void run() {
@@ -482,6 +495,7 @@ public class ConsoleOutputView extends ViewPart implements eu.kalafatic.tryst.ui
         toolbar.add(selectAllAction);
         toolbar.add(copyAction);
         toolbar.add(copyDetailsAction);
+        toolbar.add(saveOutputAction);
         toolbar.add(new Separator());
         toolbar.add(navigateTaskAction);
 
@@ -491,6 +505,7 @@ public class ConsoleOutputView extends ViewPart implements eu.kalafatic.tryst.ui
             m.add(selectAllAction);
             m.add(copyAction);
             m.add(copyDetailsAction);
+            m.add(saveOutputAction);
             m.add(new Separator());
             m.add(navigateTaskAction);
             m.add(new Separator());
@@ -510,6 +525,41 @@ public class ConsoleOutputView extends ViewPart implements eu.kalafatic.tryst.ui
             cb.setContents(new Object[]{text}, new Transfer[]{textTransfer});
         } finally {
             cb.dispose();
+        }
+    }
+
+    /** Saves the full captured console output to a user-selected file. */
+    private void saveOutputToFile() {
+        if (controller == null) {
+            return;
+        }
+        List<LogEntry> entries = controller.getAllEntries();
+        StringBuilder sb = new StringBuilder();
+        sb.append("TRYST Console Output — ").append(java.time.Instant.now()).append('\n');
+        for (LogEntry entry : entries) {
+            sb.append(entry.timestamp() != null ? TIME_FORMAT.format(entry.timestamp())
+                            : "          ")
+                    .append(" [").append(entry.level() != null
+                            ? entry.level().name() : "INFO").append("] ")
+                    .append(entry.category() != null ? entry.category() : "")
+                    .append(": ").append(entry.message() != null
+                            ? entry.message() : "").append('\n');
+        }
+        FileDialog dialog = new FileDialog(getSite().getShell(), SWT.SAVE);
+        dialog.setText("Save Console Output");
+        dialog.setFileName("tryst-console-" + LocalDate.now() + ".log");
+        dialog.setFilterExtensions(new String[]{"*.log", "*.txt", "*.*"});
+        dialog.setFilterNames(new String[]{"Log files (*.log)", "Text files (*.txt)",
+                "All files (*.*)"});
+        String path = dialog.open();
+        if (path == null || path.isBlank()) {
+            return;
+        }
+        try {
+            Files.writeString(Path.of(path), sb.toString());
+        } catch (IOException e) {
+            MessageDialog.openError(getSite().getShell(), "Save Output",
+                    "Failed to save console output: " + e.getMessage());
         }
     }
 
