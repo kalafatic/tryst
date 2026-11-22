@@ -5336,14 +5336,14 @@ public class TrystHttpServer implements TrystHttpService {
 
         private static final String APP_HTML = """
                 <!DOCTYPE html>
-                <html lang="en" data-theme="dark">
+                <html lang="en" data-theme="light">
                 <head>
                     <meta charset="UTF-8">
                     <meta name="viewport" content="width=device-width, initial-scale=1.0">
                     <title>TRYST – Production Platform Administration & Code Review Center</title>
                     <link rel="stylesheet" href="css/app.css">
                     <script>
-                        /* Apply the saved UPM/Darwin theme before first paint (default: dark). */
+                        /* Apply the saved UPM/Darwin theme before first paint (default: light). */
                         (function () {
                             try {
                                 var saved = localStorage.getItem('tryst.theme');
@@ -9535,7 +9535,7 @@ public class TrystHttpServer implements TrystHttpService {
                             }
                         }
 
-                        // Theme toggle: UPM design standard light/dark pair (default dark, like DCode/DStudio).
+                        // Theme toggle: UPM design standard light/dark pair (default light, like DCode/DStudio).
                         window.toggleTrystTheme = function() {
                             const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
                             document.documentElement.dataset.theme = next;
