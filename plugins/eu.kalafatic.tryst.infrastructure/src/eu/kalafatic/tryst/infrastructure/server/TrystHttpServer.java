@@ -5336,136 +5336,25 @@ public class TrystHttpServer implements TrystHttpService {
 
         private static final String APP_HTML = """
                 <!DOCTYPE html>
-                <html lang="en">
+                <html lang="en" data-theme="dark">
                 <head>
                     <meta charset="UTF-8">
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
                     <title>TRYST – Production Platform Administration & Code Review Center</title>
-                    <style>
-                        :root {
-                            /* UPM design standard tokens (UniversalProjectManager/web/app.css) — light theme */
-                            --bg: #f4f6f9; --bg2: #eceff4; --panel: var(--panel); --panel2: #f7f9fb;
-                            --border: #d7dce4; --border-strong: #c3cad5; --text: #1b2434;
-                            --muted: #5c6a7e; --faint: #8b96a8; --accent: #2f6bd8;
-                            --accent-soft: #e8effa; --ok: #1f8a4c; --ok-soft: #e7f4ec;
-                            --warn: #a86a00; --warn-soft: #fdf3e2; --err: #c23b2e;
-                            --err-soft: #fbeceb; --info: #2b7fbe; --info-soft: #e7f1f9;
-                            --sel: #e8effa; --shadow: 0 1px 2px rgba(16, 24, 40, .06);
-                            /* TRYST legacy aliases */
-                            --sidebar-bg: var(--bg2); --border-subtle: var(--border);
-                            --primary: var(--accent); --primary-dark: var(--accent);
-                            --primary-light: var(--accent-soft); --green: var(--ok);
-                            --red: var(--err); --yellow: var(--warn);
-                        }
-                        [data-theme="dark"] {
-                            --bg: #12161f; --bg2: #181d29; --panel: #1c2230; --panel2: #232b3c;
-                            --border: #2e394c; --border-strong: #3c4a61; --text: #e7ebf3;
-                            --muted: #93a0b4; --faint: #6b7789; --accent: #5b8feb;
-                            --accent-soft: #24344e; --ok: #46c58a; --ok-soft: #1d3a2c;
-                            --warn: #e2ad4e; --warn-soft: #3d3320; --err: #ef7a6f;
-                            --err-soft: #432422; --info: #62b6ea; --info-soft: #1f3a4d;
-                            --sel: #26334c; --shadow: 0 1px 2px rgba(0, 0, 0, .3);
-                        }
-                        * { box-sizing: border-box; }
-                        body { font-family: "Segoe UI", Arial, -apple-system, BlinkMacSystemFont, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); font-size: 13px; line-height: 1.4; }
-                        header { background: var(--panel); padding: 10px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
-                        h1 { margin: 0; font-size: 16px; color: var(--text); font-weight: 600; display: flex; align-items: center; gap: 8px; }
-                        h2, h3, h4 { color: var(--text); font-weight: 600; margin: 0 0 8px 0; }
-                        .top-nav { display: flex; gap: 10px; align-items: center; }
-                        .nav-btn { background: var(--panel); border: 1px solid var(--border); color: var(--muted); padding: 5px 12px; border-radius: 3px; cursor: pointer; font-size: 12px; font-weight: 500; }
-                        .nav-btn:hover { background: var(--bg); color: var(--text); border-color: var(--border-strong); }
-                        .nav-btn.active { background: var(--primary); color: #fff; border-color: var(--primary-dark); font-weight: 600; }
-                        .container { display: flex; height: calc(100vh - 50px); }
-                        .sidebar { width: 280px; min-width: 250px; border-right: 1px solid var(--border); background: var(--sidebar-bg); display: flex; flex-direction: column; overflow-y: auto; }
-                        .main-content { flex: 1; display: flex; flex-direction: column; overflow-y: auto; padding: 20px; background: var(--bg); }
-                        .card { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
-                        .section-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); margin-bottom: 10px; }
-                        .list-item { padding: 8px 12px; border-radius: 3px; cursor: pointer; border: 1px solid transparent; margin-bottom: 4px; color: var(--text); font-size: 12px; }
-                        .list-item:hover { background: var(--bg2); border-color: var(--muted); }
-                        .list-item.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
-                        .badge { padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600; text-transform: uppercase; }
-                        .badge-success { background: var(--ok-soft); color: var(--green); border: 1px solid var(--ok); }
-                        .badge-warning { background: var(--warn-soft); color: var(--yellow); border: 1px solid var(--warn); }
-                        .badge-error { background: var(--err-soft); color: var(--red); border: 1px solid var(--err); }
-                        .badge-info { background: var(--accent-soft); color: var(--primary); border: 1px solid var(--info); }
-                        .btn { padding: 6px 14px; border-radius: 3px; font-weight: 600; cursor: pointer; border: 1px solid transparent; font-size: 12px; font-family: inherit; }
-                        .btn-primary { background: var(--accent); color: white; border-color: var(--accent); }
-                        .btn-primary:hover { background: var(--accent); }
-                        .btn-success { background: var(--ok); color: white; border-color: var(--ok); }
-                        .btn-success:hover { background: var(--ok); }
-                        .btn-danger { background: var(--err); color: white; border-color: var(--err); }
-                        .btn-danger:hover { background: var(--err); }
-                        .btn-warning { background: var(--warn); color: white; border-color: var(--warn); }
-                        .btn-warning:hover { background: var(--warn); }
-                        .btn-default { background: var(--panel); color: var(--text); border-color: var(--border); }
-                        .btn-default:hover { background: var(--bg2); }
-                        .btn-sm { padding: 3px 8px; font-size: 11px; border-radius: 3px; }
-                        pre.diff-view { background: var(--panel); border: 1px solid var(--border); border-radius: 3px; padding: 12px; font-family: Consolas, "Courier New", monospace; font-size: 12px; overflow-x: auto; line-height: 1.5; margin: 0; }
-                        .diff-line { display: flex; cursor: pointer; user-select: none; }
-                        .diff-line:hover { background: var(--bg2); }
-                        .diff-line.selected { background: var(--warn-soft) !important; border-left: 3px solid var(--yellow); }
-                        .diff-line-num { width: 50px; text-align: right; padding-right: 12px; color: var(--muted); border-right: 1px solid var(--border); user-select: none; font-size: 11px; }
-                        .diff-line-code { padding-left: 12px; flex: 1; white-space: pre-wrap; font-family: Consolas, "Courier New", monospace; }
-                        .diff-add { color: var(--ok); background: var(--ok-soft); }
-                        .diff-del { color: var(--err); background: var(--err-soft); }
-                        .diff-hdr { color: var(--muted); font-weight: bold; background: var(--bg2); }
-                        textarea.code-editor { width: 100%; height: 130px; background: var(--panel); border: 1px solid var(--border); color: var(--text); font-family: Consolas, "Courier New", monospace; font-size: 12px; padding: 10px; border-radius: 3px; resize: vertical; }
-                        textarea.code-editor:focus, select.input-ctrl:focus, input.input-ctrl:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
-                        table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12px; }
-                        th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border-subtle); }
-                        th { color: var(--muted); font-weight: 600; background: var(--bg); border-bottom: 1px solid var(--border); }
-                        tr:hover td { background: var(--bg); }
-                        .grid-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px; }
-                        .stat-card { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 14px; box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
-                        .stat-val { font-size: 22px; font-weight: 700; color: var(--primary); margin-top: 4px; }
-                        .flex-row { display: flex; gap: 8px; align-items: center; }
-                        .comment-box { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 12px; margin-top: 8px; }
-                        .comment-box.resolved { opacity: 0.7; border-color: var(--green); background: var(--ok-soft); }
-                        select.input-ctrl, input.input-ctrl { background: var(--panel); border: 1px solid var(--border); color: var(--text); padding: 5px 8px; border-radius: 3px; font-size: 12px; font-family: inherit; }
-
-
-                        /* Task Lifecycle 13-Stage Stepper Component */
-                        .stepper-container { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 14px 18px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.03); }
-                        .stepper-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-                        .stepper-track { display: flex; align-items: center; justify-content: space-between; position: relative; overflow-x: auto; padding-bottom: 4px; }
-                        .stepper-step { display: flex; flex-direction: column; align-items: center; min-width: 80px; flex: 1; position: relative; z-index: 2; text-align: center; }
-                        .stepper-icon { width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold; background: var(--panel); border: 2px solid var(--border); color: var(--muted); }
-                        .stepper-label { font-size: 9px; font-weight: 600; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.3px; text-align: center; white-space: nowrap; }
-                        .stepper-step.completed .stepper-icon { background: var(--green); border-color: var(--green); color: #fff; }
-                        .stepper-step.completed .stepper-label { color: var(--green); }
-                        .stepper-step.active .stepper-icon { background: var(--accent-soft); border-color: var(--primary); color: var(--primary); box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.2); }
-                        .stepper-step.active .stepper-label { color: var(--primary); font-weight: 700; }
-                        .stepper-step.failed .stepper-icon { background: var(--red); border-color: var(--red); color: #fff; }
-                        .stepper-step.failed .stepper-label { color: var(--red); }
-                        .stepper-line { flex: 1; height: 2px; background: var(--bg2); margin: 0 2px 16px 2px; }
-                        .stepper-line.completed { background: var(--green); }
-
-                        /* Visual Workflow Designer Styles */
-                        .wf-container { display: flex; height: calc(100vh - 50px); width: 100%; overflow: hidden; }
-                        .wf-palette { width: 260px; min-width: 240px; background: var(--sidebar-bg); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto; padding: 14px; }
-                        .wf-canvas-area { flex: 1; display: flex; flex-direction: column; position: relative; background: var(--bg); overflow: hidden; }
-                        .wf-toolbar { height: 42px; background: var(--panel); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; padding: 0 14px; gap: 8px; z-index: 10; }
-                        .wf-canvas-viewport { flex: 1; position: relative; overflow: hidden; background: radial-gradient(circle, var(--border) 1px, transparent 1px); background-size: 20px 20px; cursor: grab; }
-                        .wf-canvas-viewport.grabbing { cursor: grabbing; }
-                        .wf-props-panel { width: 320px; min-width: 280px; background: var(--panel); border-left: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto; padding: 14px; }
-                        .wf-palette-item { background: var(--panel); border: 1px solid var(--border); border-radius: 3px; padding: 8px 10px; margin-bottom: 6px; cursor: grab; user-select: none; display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; }
-                        .wf-palette-item:hover { border-color: var(--primary); background: var(--accent-soft); }
-                        .wf-node { position: absolute; min-width: 170px; background: var(--panel); border: 1px solid var(--border); border-radius: 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.06); user-select: none; cursor: move; z-index: 5; }
-                        .wf-node.selected { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(2, 132, 199, 0.4); }
-                        .wf-node.node-running { border-color: var(--yellow); }
-                        .wf-node.node-completed { border-color: var(--green); }
-                        .wf-node.node-failed { border-color: var(--red); }
-                        .wf-node-header { padding: 6px 10px; font-size: 11px; font-weight: 700; border-bottom: 1px solid var(--border-subtle); background: var(--bg); border-top-left-radius: 3px; border-top-right-radius: 3px; display: flex; align-items: center; justify-content: space-between; }
-                        .wf-node-body { padding: 8px 10px; font-size: 11px; color: var(--muted); }
-                        .wf-port { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); border: 2px solid var(--panel); position: absolute; cursor: crosshair; }
-                        .wf-port-in { left: -5px; top: calc(50% - 5px); background: var(--accent); }
-                        .wf-port-out { right: -5px; top: calc(50% - 5px); background: var(--ok); }
-                        .wf-port-fail { right: -5px; top: calc(80% - 5px); background: var(--err); }
-                        svg.wf-connections-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; }
-                        svg.wf-connections-layer path { pointer-events: stroke; cursor: pointer; fill: none; stroke: var(--border-strong); stroke-width: 2; }
-                        svg.wf-connections-layer path:hover { stroke: var(--primary); stroke-width: 3; }
-                    </style>
+                    <link rel="stylesheet" href="css/app.css">
+                    <script>
+                        /* Apply the saved UPM/Darwin theme before first paint (default: dark). */
+                        (function () {
+                            try {
+                                var saved = localStorage.getItem('tryst.theme');
+                                if (saved === 'light' || saved === 'dark') {
+                                    document.documentElement.dataset.theme = saved;
+                                }
+                            } catch (e) { /* ignore */ }
+                        })();
+                    </script>
                 </head>
-                <body>
+                <body class="tryst-app">
                     <header>
                         <div style="display: flex; align-items: center; gap: 16px;">
                             <h1>TRYST Production Platform – Development Workspace</h1>
@@ -5493,7 +5382,7 @@ public class TrystHttpServer implements TrystHttpService {
                                 <button id="btnNotifBell" class="nav-btn" onclick="toggleNotificationDropdown()" title="Notifications">
                                     Alerts <span id="notifBadge" class="badge badge-warning" style="display:none; font-size:10px; padding:2px 5px;">0</span>
                                 </button>
-                                <div id="notifDropdown" style="display:none; position: absolute; right: 0; top: 38px; width: 360px; max-height: 420px; overflow-y: auto; background: var(--panel); border: 1px solid var(--border); border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.12); z-index: 1000; padding: 12px;">
+                                <div id="notifDropdown" class="dropdown-panel" style="display:none;">
                                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 8px; border-bottom: 1px solid var(--border); padding-bottom: 6px;">
                                         <b style="font-size:12px;">System Notifications</b>
                                         <div>
@@ -5542,7 +5431,7 @@ public class TrystHttpServer implements TrystHttpService {
                     </div>
 
                     <!-- TRYST Studio Tab -->
-                    <div id="studioTab" class="container" style="display: none; flex-direction: column; height: calc(100vh - 50px); overflow: hidden; background: var(--panel);">
+                    <div id="studioTab" class="container" style="display: none; flex-direction: column; overflow: hidden; background: var(--panel);">
                         <!-- Studio Top Header -->
                         <div id="studioHeader" style="background: var(--panel); border-bottom: 1px solid var(--border); padding: 8px 16px; display: flex; align-items: center; justify-content: space-between; font-size: 12px;">
                             <div style="display: flex; align-items: center; gap: 14px;">
@@ -6081,8 +5970,8 @@ public class TrystHttpServer implements TrystHttpService {
                     </div>
 
                     <!-- Authentication & Session Modal -->
-                    <div id="authModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(15, 23, 42, 0.45); z-index: 2000; align-items: center; justify-content: center;">
-                        <div style="background: var(--panel); border: 1px solid var(--border); border-radius: 4px; width: 400px; max-width: 90vw; padding: 20px; box-shadow: 0 4px 16px rgba(0,0,0,0.15);">
+                    <div id="authModal" class="modal-overlay" style="display: none;">
+                        <div class="modal-panel modal-sm">
                             <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 14px;">
                                 <h3 style="margin: 0; font-size: 15px;">User Authentication & Session</h3>
                                 <button class="btn btn-sm btn-default" onclick="toggleAuthModal()">✕</button>
@@ -6104,8 +5993,8 @@ public class TrystHttpServer implements TrystHttpService {
                     </div>
 
                     <!-- Intelligent Task Intake Modal -->
-                    <div id="newTaskModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(15, 23, 42, 0.45); z-index: 2000; align-items: center; justify-content: center; backdrop-filter: blur(1px);">
-                        <div id="newTaskModalPanel" style="background: var(--panel); border: 1px solid var(--border); border-radius: 6px; width: 880px; max-width: 95vw; max-height: 94vh; min-width: 520px; min-height: 440px; resize: both; overflow: auto; display: flex; flex-direction: column; box-shadow: 0 8px 30px rgba(0,0,0,0.2); position: relative;">
+                    <div id="newTaskModal" class="modal-overlay" style="display: none;">
+                        <div id="newTaskModalPanel" class="modal-panel modal-lg" style="resize: both;">
                             <!-- Header -->
                             <div style="display: flex; justify-content: space-between; align-items: flex-start; padding: 16px 20px 12px 20px; border-bottom: 1px solid var(--border); background: var(--panel2);">
                                 <div>
@@ -6119,7 +6008,7 @@ public class TrystHttpServer implements TrystHttpService {
                             <div style="flex: 1; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 16px;">
 
                                 <!-- SECTION A: REPOSITORY -->
-                                <div style="border: 1px solid var(--border-subtle); border-radius: 4px; padding: 12px; background: #fff;">
+                                <div style="border: 1px solid var(--border-subtle); border-radius: 4px; padding: 12px; background: var(--panel2);">
                                     <div style="font-size: 11px; font-weight: 700; color: var(--muted); letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 8px;">REPOSITORY</div>
                                     <div style="display: grid; grid-template-columns: 2fr 1.5fr 1fr; gap: 8px; align-items: center;">
                                         <div>
@@ -6152,7 +6041,7 @@ public class TrystHttpServer implements TrystHttpService {
                                 </div>
 
                                 <!-- SECTION B: TASK INSTRUCTIONS -->
-                                <div style="border: 1px solid var(--border-subtle); border-radius: 4px; padding: 12px; background: #fff; display: flex; flex-direction: column; gap: 8px;">
+                                <div style="border: 1px solid var(--border-subtle); border-radius: 4px; padding: 12px; background: var(--panel2); display: flex; flex-direction: column; gap: 8px;">
                                     <div style="display: flex; justify-content: space-between; align-items: center;">
                                         <div style="font-size: 11px; font-weight: 700; color: var(--muted); letter-spacing: 0.5px; text-transform: uppercase;">TASK INSTRUCTIONS</div>
                                         <div class="flex-row" style="gap: 6px;">
@@ -6177,7 +6066,7 @@ public class TrystHttpServer implements TrystHttpService {
                                 </div>
 
                                 <!-- SECTION C: ATTACHMENTS -->
-                                <div style="border: 1px solid var(--border-subtle); border-radius: 4px; padding: 12px; background: #fff;">
+                                <div style="border: 1px solid var(--border-subtle); border-radius: 4px; padding: 12px; background: var(--panel2);">
                                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                                         <div style="font-size: 11px; font-weight: 700; color: var(--muted); letter-spacing: 0.5px; text-transform: uppercase;">ATTACHMENTS</div>
                                         <div style="font-size: 11px; color: var(--muted);">Additional context (.md, .txt, documentation)</div>
@@ -6188,7 +6077,7 @@ public class TrystHttpServer implements TrystHttpService {
                                         <div style="font-size: 12px; color: var(--muted); text-align: left;">
                                             Drag and drop files or use a file picker. Supported: .md, .txt, source files.
                                         </div>
-                                        <button type="button" class="btn btn-sm btn-default" style="font-size: 11px; padding: 4px 12px; background: #fff;" onclick="event.stopPropagation(); document.getElementById('attachmentFileInput').click()">File picker</button>
+                                        <button type="button" class="btn btn-sm btn-default" style="font-size: 11px; padding: 4px 12px; background: var(--panel2);" onclick="event.stopPropagation(); document.getElementById('attachmentFileInput').click()">File picker</button>
                                         <input type="file" id="attachmentFileInput" multiple style="display: none;" onchange="handleAttachmentFiles(this.files)" accept=".md,.txt,.json,.xml,.yaml,.yml,.java,.py,.js,.ts,.html,.css,.sql,.properties,.conf,.sh" />
                                     </div>
 
@@ -6212,7 +6101,7 @@ public class TrystHttpServer implements TrystHttpService {
                                 </div>
 
                                 <!-- SECTION D: EXECUTION OPTIONS -->
-                                <div style="border: 1px solid var(--border-subtle); border-radius: 4px; padding: 12px; background: #fff;">
+                                <div style="border: 1px solid var(--border-subtle); border-radius: 4px; padding: 12px; background: var(--panel2);">
                                     <div style="font-size: 11px; font-weight: 700; color: var(--muted); letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 10px;">EXECUTION OPTIONS</div>
                                     <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; font-size: 12px;">
 
@@ -6270,7 +6159,7 @@ public class TrystHttpServer implements TrystHttpService {
                                 </div>
 
                                 <!-- Collapsible Supplementary Details (Execution Mode, Limits, Acceptance Criteria) -->
-                                <details style="border: 1px solid var(--border-subtle); border-radius: 4px; padding: 8px 12px; background: #fff; font-size: 12px;">
+                                <details style="border: 1px solid var(--border-subtle); border-radius: 4px; padding: 8px 12px; background: var(--panel2); font-size: 12px;">
                                     <summary style="font-size: 11px; font-weight: 600; color: var(--muted); cursor: pointer; user-select: none;">Advanced Orchestration & Acceptance Criteria (Optional)</summary>
                                     <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 10px;">
                                         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
@@ -6335,8 +6224,8 @@ public class TrystHttpServer implements TrystHttpService {
                             </div>
                         </div>
                     </div>
-                    <div id="continueSessionModal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(15, 23, 42, 0.45); z-index: 2100; align-items: center; justify-content: center; backdrop-filter: blur(1px);">
-                        <div style="background: var(--panel); border: 1px solid var(--border); border-radius: 6px; width: 640px; max-width: 95vw; display: flex; flex-direction: column; box-shadow: 0 8px 30px rgba(0,0,0,0.2);">
+                    <div id="continueSessionModal" class="modal-overlay" style="display: none; z-index: 2100;">
+                        <div class="modal-panel modal-md">
                             <div style="display: flex; justify-content: space-between; align-items: center; padding: 14px 20px; border-bottom: 1px solid var(--border);">
                                 <div style="font-weight: 700; color: var(--primary);">▶ Continue Session</div>
                                 <button class="btn btn-sm btn-default" onclick="document.getElementById('continueSessionModal').style.display='none';">✕</button>
@@ -6827,7 +6716,7 @@ public class TrystHttpServer implements TrystHttpService {
                                 if (!ex) {
                                     container.innerHTML = muted + 'No execution recorded yet. The console shows the worker execution log once the task has run.</div>';
                                 } else if (ex.output && ex.output.trim()) {
-                                    container.innerHTML = ex.output.split('\n').map(l => `<div>${esc(l)}</div>`).join('');
+                                    container.innerHTML = ex.output.split('\\n').map(l => `<div>${esc(l)}</div>`).join('');
                                 } else {
                                     container.innerHTML = muted + 'Execution finished (exit code ' + ex.exitCode + ', ' + ex.durationMs + ' ms) with no console output.</div>';
                                 }
@@ -6839,7 +6728,7 @@ public class TrystHttpServer implements TrystHttpService {
                                 }
                             } else if (tab === 'tests') {
                                 if (st && st.testSummary) {
-                                    container.innerHTML = st.testSummary.split('\n').map(l => `<div>${esc(l)}</div>`).join('');
+                                    container.innerHTML = st.testSummary.split('\\n').map(l => `<div>${esc(l)}</div>`).join('');
                                 } else {
                                     container.innerHTML = muted + 'No test summary recorded for this task yet.</div>';
                                 }
@@ -7012,7 +6901,7 @@ public class TrystHttpServer implements TrystHttpService {
                                     container.innerHTML = '<span style="color:var(--muted);">No tasks recorded yet.</span>';
                                 } else {
                                     container.innerHTML = '<table><tr><th>ID</th><th>Title</th><th>Status</th><th>Priority</th><th>Action</th></tr>' +
-                                        tasks.slice(0, 8).map(t => `<tr><td>${t.id.substring(0,8)}</td><td><b>${escapeHtml(t.title)}</b></td><td><span class="badge badge-info">${t.status}</span></td><td>${t.priority}</td><td><button class="btn btn-sm btn-primary" onclick="openTaskInStudio('${t.id}')">⚡ Studio</button></td></tr>`).join('') + '</table>';
+                                        tasks.slice(0, 8).map(t => `<tr><td>${t.id.substring(0,8)}</td><td><b>${escapeHtml(t.title)}</b></td><td><span class="badge ${stateBadgeClass(t.status)}">${t.status}</span></td><td>${t.priority}</td><td><button class="btn btn-sm btn-primary" onclick="openTaskInStudio('${t.id}')">⚡ Studio</button></td></tr>`).join('') + '</table>';
                                 }
                             } catch (e) {
                                 console.warn('Failed to load dashboard tasks:', e);
@@ -7031,7 +6920,7 @@ public class TrystHttpServer implements TrystHttpService {
                                     container.innerHTML = '<span style="color:var(--muted);">No active sandboxes.</span>';
                                 } else {
                                     container.innerHTML = '<table><tr><th>Workspace ID</th><th>Project</th><th>Status</th></tr>' +
-                                        list.slice(0, 8).map(w => `<tr><td>${w.id.substring(0,8)}</td><td>${w.projectId||'-'}</td><td><span class="badge badge-success">${w.state}</span></td></tr>`).join('') + '</table>';
+                                        list.slice(0, 8).map(w => `<tr><td>${w.id.substring(0,8)}</td><td>${w.projectId||'-'}</td><td><span class="badge ${stateBadgeClass(w.state)}">${w.state}</span></td></tr>`).join('') + '</table>';
                                 }
                             } catch (e) {
                                 console.warn('Failed to load dashboard workspaces:', e);
@@ -7221,7 +7110,7 @@ public class TrystHttpServer implements TrystHttpService {
                                         sList.innerHTML = '<span style="color:var(--muted); font-size:12px;">No automated schedules configured.</span>';
                                     } else {
                                         sList.innerHTML = '<table><tr><th>ID</th><th>Schedule Name</th><th>Type</th><th>Next Execution</th><th>Status</th></tr>' +
-                                            schedules.map(s => `<tr><td>${s.id.substring(0,8)}</td><td>${escapeHtml(s.name)}</td><td>${s.type}</td><td>${s.nextExecutionAt||s.scheduledTime||'-'}</td><td><span class="badge badge-success">${s.status}</span></td></tr>`).join('') + '</table>';
+                                            schedules.map(s => `<tr><td>${s.id.substring(0,8)}</td><td>${escapeHtml(s.name)}</td><td>${s.type}</td><td>${s.nextExecutionAt||s.scheduledTime||'-'}</td><td><span class="badge ${stateBadgeClass(s.status)}">${s.status}</span></td></tr>`).join('') + '</table>';
                                     }
                                 }
                             } catch (e) {
@@ -7266,7 +7155,7 @@ public class TrystHttpServer implements TrystHttpService {
                                     return;
                                 }
                                 container.innerHTML = '<table><tr><th>ID</th><th>Associated Project</th><th>Associated Task</th><th>State</th><th>Sandbox Root Path</th></tr>' +
-                                    list.map(w => `<tr><td><code>${w.id.substring(0,8)}</code></td><td>${w.projectId||'-'}</td><td>${w.taskId ? `<code>${w.taskId.substring(0,8)}</code>` : '-'}</td><td><span class="badge badge-success">${w.state}</span></td><td><code>${escapeHtml(w.path)}</code></td></tr>`).join('') + '</table>';
+                                    list.map(w => `<tr><td><code>${w.id.substring(0,8)}</code></td><td>${w.projectId||'-'}</td><td>${w.taskId ? `<code>${w.taskId.substring(0,8)}</code>` : '-'}</td><td><span class="badge ${stateBadgeClass(w.state)}">${w.state}</span></td><td><code>${escapeHtml(w.path)}</code></td></tr>`).join('') + '</table>';
                             } catch (e) {
                                 document.getElementById('workspacesTableContainer').textContent = 'Error loading workspaces: ' + e;
                             }
@@ -7468,7 +7357,7 @@ public class TrystHttpServer implements TrystHttpService {
                                     return;
                                 }
                                 activeConnectingPort = { nodeId, portType };
-                                e.target.style.boxShadow = '0 0 8px #fff';
+                                e.target.style.boxShadow = '0 0 8px var(--accent)';
                             } else {
                                 if (portType !== 'input') {
                                     activeConnectingPort = { nodeId, portType };
@@ -7918,12 +7807,12 @@ public class TrystHttpServer implements TrystHttpService {
                                     const res = await fetch(apiUrl('/api/admin/tasks'), { headers: getAuthHeaders() });
                                     const data = await res.json();
                                     container.innerHTML = '<table><tr><th>ID</th><th>Title</th><th>Status</th><th>Priority</th><th>Session</th><th>Worker</th><th>Failure Reason</th><th>Action</th></tr>' +
-                                        data.tasks.map(t => `<tr><td>${t.id.substring(0,8)}</td><td>${escapeHtml(t.title)}</td><td><span class="badge ${t.status === 'RECOVERY_REQUIRED' ? 'badge-warning' : 'badge-info'}">${t.status}</span></td><td>${t.priority}</td><td>${t.sessionId ? t.sessionId.substring(0,6) : '-'}</td><td>${t.workerId ? t.workerId.substring(0,8) : '-'}</td><td style="color:var(--err);">${escapeHtml(t.failureReason || '')}</td><td>${t.status === 'RECOVERY_REQUIRED' ? `<button class="btn btn-sm btn-warning" style="margin-right:4px;" onclick="retryRecoveredTask('${t.id}')">↻ Retry</button>` : ''}<button class="btn btn-sm btn-danger" onclick="cancelAdminTask('${t.id}')">Cancel</button></td></tr>`).join('') + '</table>';
+                                        data.tasks.map(t => `<tr><td>${t.id.substring(0,8)}</td><td>${escapeHtml(t.title)}</td><td><span class="badge ${stateBadgeClass(t.status)}">${t.status}</span></td><td>${t.priority}</td><td>${t.sessionId ? t.sessionId.substring(0,6) : '-'}</td><td>${t.workerId ? t.workerId.substring(0,8) : '-'}</td><td style="color:var(--err);">${escapeHtml(t.failureReason || '')}</td><td>${t.status === 'RECOVERY_REQUIRED' ? `<button class="btn btn-sm btn-warning" style="margin-right:4px;" onclick="retryRecoveredTask('${t.id}')">↻ Retry</button>` : ''}<button class="btn btn-sm btn-danger" onclick="cancelAdminTask('${t.id}')">Cancel</button></td></tr>`).join('') + '</table>';
                                 } else if (sub === 'workspaces') {
                                     const res = await fetch(apiUrl('/api/admin/workspaces'), { headers: getAuthHeaders() });
                                     const data = await res.json();
                                     container.innerHTML = '<table><tr><th>ID</th><th>Project</th><th>Task</th><th>State</th><th>Root Path</th></tr>' +
-                                        data.workspaces.map(w => `<tr><td>${w.id.substring(0,8)}</td><td>${w.projectId||'-'}</td><td>${w.taskId||'-'}</td><td><span class="badge badge-info">${w.state}</span></td><td>${w.path}</td></tr>`).join('') + '</table>';
+                                        data.workspaces.map(w => `<tr><td>${w.id.substring(0,8)}</td><td>${w.projectId||'-'}</td><td>${w.taskId||'-'}</td><td><span class="badge ${stateBadgeClass(w.state)}">${w.state}</span></td><td>${w.path}</td></tr>`).join('') + '</table>';
                                 } else if (sub === 'users') {
                                     const res = await fetch(apiUrl('/api/admin/users'), { headers: getAuthHeaders() });
                                     const data = await res.json();
@@ -8894,6 +8783,15 @@ public class TrystHttpServer implements TrystHttpService {
                                 .replace(/'/g, "&#39;");
                         }
 
+                        /* UPM state-colour rule: colour only communicates state. */
+                        function stateBadgeClass(state) {
+                            const s = String(state || '').toUpperCase();
+                            if (/FAIL|ERROR|REJECT|CANCEL|OCCUPIED|DENIED|LOST/.test(s)) return 'badge-error';
+                            if (/DEGRAD|WARN|WAIT|RECOVER|PAUSE|STALE|MISSING|PEND|PROPOS|QUEUED|RETRY/.test(s)) return 'badge-warning';
+                            if (/COMPLET|SUCCESS|OPERATIONAL|APPROV|HEALTHY|ARCHIVED|ONLINE|VERIFIED|CONNECTED|AVAILABLE|READY/.test(s)) return 'badge-success';
+                            return 'badge-info';
+                        }
+
                         let lastNotificationSeq = 0;
                         let sseEventSource = null;
 
@@ -9637,7 +9535,7 @@ public class TrystHttpServer implements TrystHttpService {
                             }
                         }
 
-                        // Theme toggle: UPM design standard light/dark pair (default light).
+                        // Theme toggle: UPM design standard light/dark pair (default dark, like DCode/DStudio).
                         window.toggleTrystTheme = function() {
                             const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
                             document.documentElement.dataset.theme = next;
@@ -9708,14 +9606,6 @@ public class TrystHttpServer implements TrystHttpService {
                             }
                         });
                     </script>
-                    <style>
-                        .ctx-menu-tryst { position: fixed; z-index: 9999; min-width: 220px; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 6px 18px rgba(0,0,0,.45); padding: 4px 0; }
-                        .ctx-menu-tryst button { display: block; width: 100%; text-align: left; background: transparent; border: none; color: var(--text); padding: 6px 12px; font-size: 13px; cursor: pointer; }
-                        .ctx-menu-tryst button:hover:not(:disabled) { background: var(--panel2); }
-                        .ctx-menu-tryst button:disabled { color: var(--muted); cursor: not-allowed; }
-                        .ctx-menu-tryst .ctx-sep { height: 1px; margin: 4px 0; background: var(--border); }
-                        .ctx-menu-tryst .ctx-danger { color: var(--err); }
-                    </style>
                     <div id="trystCtxMenu" class="ctx-menu-tryst" role="menu" aria-label="Context actions" style="display:none;"></div>
                     <script>
                         /* Unified contextual actions (Darwin Family contract v1.0) — same

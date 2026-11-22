@@ -172,43 +172,43 @@ public class EditorLiveStatusAndProgressComposite extends Composite {
 
     private String buildStateHtml() {
         String serverStatus = "RUNNING";
-        String serverColor = "#16a34a"; // green
+        String serverColor = "#1f8a4c"; // green
         var readiness = TrystUiServices.getServerReadinessService();
         if (readiness != null) {
             var rep = readiness.evaluateReadiness(eu.kalafatic.tryst.core.lifecycle.ApplicationLifecycleStage.WORKBENCH_RUNNING);
             if (!rep.ready()) {
                 serverStatus = rep.degraded() ? "DEGRADED" : "INITIALIZING";
-                serverColor = rep.degraded() ? "#d97706" : "#dc2626";
+                serverColor = rep.degraded() ? "#a86a00" : "#c23b2e";
             }
         }
 
         String projectText = (currentContext != null && currentContext.projectName() != null) ?
                 currentContext.projectName() : "None Selected";
-        String projectColor = (currentContext != null && currentContext.project() != null) ? "#0284c7" : "#64748b";
+        String projectColor = (currentContext != null && currentContext.project() != null) ? "#2f6bd8" : "#5c6a7e";
 
         String repoText = (currentContext != null && currentContext.repositoryPath() != null) ?
                 "Connected (" + (currentContext.branchName() != null ? currentContext.branchName() : "master") + ")" : "Not Connected";
-        String repoColor = (currentContext != null && currentContext.repositoryPath() != null) ? "#16a34a" : "#64748b";
+        String repoColor = (currentContext != null && currentContext.repositoryPath() != null) ? "#1f8a4c" : "#5c6a7e";
 
         String taskText = (currentContext != null && currentContext.task() != null) ?
                 "[" + currentContext.task().getStatus() + "] " + currentContext.task().getTitle() : "No Active Task";
-        String taskColor = "#64748b";
+        String taskColor = "#5c6a7e";
         if (currentContext != null && currentContext.task() != null) {
             taskColor = switch (currentContext.task().getStatus()) {
-                case RUNNING, CLAIMED -> "#0284c7";
-                case COMPLETED, APPROVED -> "#16a34a";
-                case FAILED, REJECTED -> "#dc2626";
-                case WAITING_FOR_REVIEW -> "#d97706";
-                default -> "#64748b";
+                case RUNNING, CLAIMED -> "#2f6bd8";
+                case COMPLETED, APPROVED -> "#1f8a4c";
+                case FAILED, REJECTED -> "#c23b2e";
+                case WAITING_FOR_REVIEW -> "#a86a00";
+                default -> "#5c6a7e";
             };
         }
 
         String aiStatus = "Available";
-        String aiColor = "#16a34a";
+        String aiColor = "#1f8a4c";
         var ai = TrystUiServices.getAiInferenceService();
         if (ai == null) {
             aiStatus = "Not Configured";
-            aiColor = "#64748b";
+            aiColor = "#5c6a7e";
         }
 
         String cpuLoad = "-";
@@ -227,11 +227,11 @@ public class EditorLiveStatusAndProgressComposite extends Composite {
             <html>
             <head>
             <style>
-              body { margin: 0; padding: 8px; font-family: "Segoe UI", Arial, sans-serif; font-size: 11px; background: #ffffff; color: #0f172a; overflow: hidden; }
-              .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; margin-bottom: 6px; font-weight: 600; color: #475569; }
+              body { margin: 0; padding: 8px; font-family: "Segoe UI", Arial, sans-serif; font-size: 11px; background: #ffffff; color: #1b2434; overflow: hidden; }
+              .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #d7dce4; padding-bottom: 4px; margin-bottom: 6px; font-weight: 600; color: #5c6a7e; }
               .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
-              .node { border: 1px solid #e2e8f0; border-radius: 4px; padding: 5px 7px; background: #f8fafc; }
-              .node-title { font-size: 10px; font-weight: 700; color: #64748b; text-transform: uppercase; margin-bottom: 2px; }
+              .node { border: 1px solid #d7dce4; border-radius: 4px; padding: 5px 7px; background: #f7f9fb; }
+              .node-title { font-size: 10px; font-weight: 700; color: #5c6a7e; text-transform: uppercase; margin-bottom: 2px; }
               .node-val { font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
               .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%%; margin-right: 4px; }
             </style>
@@ -239,7 +239,7 @@ public class EditorLiveStatusAndProgressComposite extends Composite {
             <body>
               <div class="header">
                 <span>SYSTEM STATE DIAGRAM</span>
-                <span style="font-weight: normal; color: #94a3b8;">Updated: %s</span>
+                <span style="font-weight: normal; color: #8b96a8;">Updated: %s</span>
               </div>
               <div class="grid">
                 <div class="node">
@@ -264,7 +264,7 @@ public class EditorLiveStatusAndProgressComposite extends Composite {
                 </div>
                 <div class="node">
                   <div class="node-title">System Metrics</div>
-                  <div class="node-val"><span class="dot" style="background: #0284c7;"></span>CPU: %s | Heap: %s</div>
+                  <div class="node-val"><span class="dot" style="background: #2f6bd8;"></span>CPU: %s | Heap: %s</div>
                 </div>
               </div>
             </body>
@@ -284,15 +284,15 @@ public class EditorLiveStatusAndProgressComposite extends Composite {
                 <html>
                 <head>
                 <style>
-                  body { margin: 0; padding: 8px; font-family: "Segoe UI", Arial, sans-serif; font-size: 11px; background: #ffffff; color: #0f172a; overflow: hidden; }
-                  .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; margin-bottom: 10px; font-weight: 600; color: #475569; }
-                  .empty-box { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 110px; color: #94a3b8; background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 4px; }
+                  body { margin: 0; padding: 8px; font-family: "Segoe UI", Arial, sans-serif; font-size: 11px; background: #ffffff; color: #1b2434; overflow: hidden; }
+                  .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #d7dce4; padding-bottom: 4px; margin-bottom: 10px; font-weight: 600; color: #5c6a7e; }
+                  .empty-box { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 110px; color: #8b96a8; background: #f7f9fb; border: 1px dashed #c3cad5; border-radius: 4px; }
                 </style>
                 </head>
                 <body>
                   <div class="header">
                     <span>PROGRESS VISUALIZATION</span>
-                    <span style="font-weight: normal; color: #94a3b8;">Updated: %s</span>
+                    <span style="font-weight: normal; color: #8b96a8;">Updated: %s</span>
                   </div>
                   <div class="empty-box">
                     <span style="font-size: 12px; font-weight: 600; margin-bottom: 4px;">No Active Workflow Operation</span>
@@ -338,28 +338,28 @@ public class EditorLiveStatusAndProgressComposite extends Composite {
             <html>
             <head>
             <style>
-              body { margin: 0; padding: 8px; font-family: "Segoe UI", Arial, sans-serif; font-size: 11px; background: #ffffff; color: #0f172a; overflow: hidden; }
-              .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; margin-bottom: 8px; font-weight: 600; color: #475569; }
-              .progress-bar-bg { width: 100%%; height: 6px; background: #e2e8f0; border-radius: 3px; overflow: hidden; margin-bottom: 12px; }
-              .progress-bar-fill { height: 100%%; background: #0284c7; width: %d%%; }
+              body { margin: 0; padding: 8px; font-family: "Segoe UI", Arial, sans-serif; font-size: 11px; background: #ffffff; color: #1b2434; overflow: hidden; }
+              .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #d7dce4; padding-bottom: 4px; margin-bottom: 8px; font-weight: 600; color: #5c6a7e; }
+              .progress-bar-bg { width: 100%%; height: 6px; background: #d7dce4; border-radius: 3px; overflow: hidden; margin-bottom: 12px; }
+              .progress-bar-fill { height: 100%%; background: #2f6bd8; width: %d%%; }
               .stepper { display: flex; align-items: center; justify-content: space-between; padding: 0 10px; }
               .step { display: flex; flex-direction: column; align-items: center; position: relative; z-index: 2; }
-              .step-circle { width: 20px; height: 20px; border-radius: 50%%; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold; background: #ffffff; border: 2px solid #94a3b8; color: #64748b; }
-              .step-name { font-size: 9px; font-weight: 600; margin-top: 4px; color: #64748b; text-transform: uppercase; }
-              .step.active .step-circle { border-color: #0284c7; background: #e0f2fe; color: #0284c7; }
-              .step.active .step-name { color: #0284c7; }
-              .step.completed .step-circle { border-color: #16a34a; background: #16a34a; color: #ffffff; }
-              .step.completed .step-name { color: #16a34a; }
-              .step.failed .step-circle { border-color: #dc2626; background: #dc2626; color: #ffffff; }
-              .step.failed .step-name { color: #dc2626; }
-              .step-line { flex: 1; height: 2px; margin: 0 4px; margin-bottom: 14px; background: #cbd5e1; }
-              .step-line.line-completed { background: #16a34a; }
+              .step-circle { width: 20px; height: 20px; border-radius: 50%%; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold; background: #ffffff; border: 2px solid #8b96a8; color: #5c6a7e; }
+              .step-name { font-size: 9px; font-weight: 600; margin-top: 4px; color: #5c6a7e; text-transform: uppercase; }
+              .step.active .step-circle { border-color: #2f6bd8; background: #e8effa; color: #2f6bd8; }
+              .step.active .step-name { color: #2f6bd8; }
+              .step.completed .step-circle { border-color: #1f8a4c; background: #1f8a4c; color: #ffffff; }
+              .step.completed .step-name { color: #1f8a4c; }
+              .step.failed .step-circle { border-color: #c23b2e; background: #c23b2e; color: #ffffff; }
+              .step.failed .step-name { color: #c23b2e; }
+              .step-line { flex: 1; height: 2px; margin: 0 4px; margin-bottom: 14px; background: #c3cad5; }
+              .step-line.line-completed { background: #1f8a4c; }
             </style>
             </head>
             <body>
               <div class="header">
                 <span>TASK PROGRESS: %s (%d%%)</span>
-                <span style="font-weight: normal; color: #94a3b8;">Status: %s | Time: %s</span>
+                <span style="font-weight: normal; color: #8b96a8;">Status: %s | Time: %s</span>
               </div>
               <div class="progress-bar-bg">
                 <div class="progress-bar-fill"></div>
