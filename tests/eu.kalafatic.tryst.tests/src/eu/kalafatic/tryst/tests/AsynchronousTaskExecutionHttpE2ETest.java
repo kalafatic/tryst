@@ -91,7 +91,7 @@ public class AsynchronousTaskExecutionHttpE2ETest {
                 projectRepository,
                 null,
                 permissionManager,
-                null,
+                TestAiFakes.codingAi(),
                 null,
                 null,
                 null,

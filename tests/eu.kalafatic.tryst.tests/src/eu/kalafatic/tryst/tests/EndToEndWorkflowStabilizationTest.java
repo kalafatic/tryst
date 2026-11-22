@@ -344,7 +344,7 @@ public class EndToEndWorkflowStabilizationTest {
     void testScenarioE_ConcurrencyAndIsolation() throws Exception {
         orchestrator = new TaskOrchestrator(
                 taskQueue, taskRepository, lifecycleManager, workspaceService, projectRepository,
-                new ToolRegistry(), permissionManager, (AiInferenceService) null, null, null, null,
+                new ToolRegistry(), permissionManager, TestAiFakes.codingAi(), null, null, null,
                 codeReviewRepository, new CodeReviewService(), 4
         );
         orchestrator.start();

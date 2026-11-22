@@ -54,7 +54,7 @@ public class TaskOrchestratorIntegrationTest {
                 projectRepository,
                 null,
                 null,
-                null,
+                TestAiFakes.codingAi(),
                 null,
                 null,
                 null,
