@@ -59,7 +59,9 @@ import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -86,6 +88,12 @@ public class TrystNavigatorView extends ViewPart implements WorkspaceChangeListe
     private Action expandAllAction;
     private Action collapseAllAction;
     private final AtomicLong asyncRequestCounter = new AtomicLong(0);
+
+    private EventBus eventBus;
+    private java.util.function.Consumer<ApplicationEvents.TaskStateChangedEvent> taskStateChangedListener;
+    private java.util.function.Consumer<ApplicationEvents.SessionEvent> sessionEventListener;
+    private java.util.function.Consumer<ApplicationEvents.AgentExecutionEvent> agentExecutionListener;
+    private java.util.function.Consumer<ApplicationEvents.TaskAddedEvent> taskAddedListener;
 
     @Override
     public void createPartControl(Composite parent) {
@@ -120,12 +128,17 @@ public class TrystNavigatorView extends ViewPart implements WorkspaceChangeListe
 
         EventBus eventBus = TrystUiServices.getEventBus();
         if (eventBus != null) {
-            eventBus.subscribe(ApplicationEvents.TaskStateChangedEvent.class, e -> refreshAsync());
-            eventBus.subscribe(ApplicationEvents.SessionEvent.class, e -> refreshAsync());
-            eventBus.subscribe(ApplicationEvents.AgentExecutionEvent.class, e -> {
+            this.eventBus = eventBus;
+            taskStateChangedListener = e -> refreshAsync();
+            sessionEventListener = e -> refreshAsync();
+            agentExecutionListener = e -> {
                 if (e.isComplete()) refreshAsync();
-            });
-            eventBus.subscribe(ApplicationEvents.TaskAddedEvent.class, e -> refreshAsync());
+            };
+            taskAddedListener = e -> refreshAsync();
+            eventBus.subscribe(ApplicationEvents.TaskStateChangedEvent.class, taskStateChangedListener);
+            eventBus.subscribe(ApplicationEvents.SessionEvent.class, sessionEventListener);
+            eventBus.subscribe(ApplicationEvents.AgentExecutionEvent.class, agentExecutionListener);
+            eventBus.subscribe(ApplicationEvents.TaskAddedEvent.class, taskAddedListener);
         }
 
         refreshAsync();
@@ -718,7 +731,13 @@ public class TrystNavigatorView extends ViewPart implements WorkspaceChangeListe
         AsyncExecutionService async = TrystUiServices.getAsyncExecutionService();
 
         Runnable task = () -> {
-            List<NavigatorNode> roots = buildTreeModel();
+            final List<NavigatorNode> roots;
+            try {
+                roots = buildTreeModel();
+            } catch (Throwable t) {
+                TrystLog.error(TrystNavigatorView.class, "Failed to build Navigator tree model", t);
+                return;
+            }
             if (currentRequestId != asyncRequestCounter.get()) {
                 return;
             }
@@ -728,9 +747,9 @@ public class TrystNavigatorView extends ViewPart implements WorkspaceChangeListe
 
             if (display != null && !display.isDisposed()) {
                 display.asyncExec(() -> {
-                    if (currentRequestId == asyncRequestCounter.get() && treeViewer != null && !treeViewer.getControl().isDisposed()) {
-                        treeViewer.setInput(roots);
-                        treeViewer.expandToLevel(2);
+                    if (currentRequestId == asyncRequestCounter.get()
+                            && treeViewer != null && !treeViewer.getControl().isDisposed()) {
+                        applyTreeModel(roots);
                     }
                 });
             }
@@ -741,6 +760,84 @@ public class TrystNavigatorView extends ViewPart implements WorkspaceChangeListe
         } else {
             Thread.ofVirtual().start(task);
         }
+    }
+
+    /**
+     * Applies a freshly built tree model on the SWT UI thread. Preserves the user's expansion
+     * state so that a newly accepted task becomes visible under an already-expanded parent
+     * without collapsing the tree, while a collapsed parent still shows its updated child count.
+     */
+    private void applyTreeModel(List<NavigatorNode> roots) {
+        Set<String> expandedIds = captureExpandedIds();
+        String selectedId = captureSelectedId();
+
+        treeViewer.setInput(roots);
+
+        if (expandedIds.isEmpty()) {
+            treeViewer.expandToLevel(2);
+        } else {
+            for (NavigatorNode root : roots) {
+                restoreExpandedState(root, expandedIds);
+            }
+        }
+
+        if (selectedId != null) {
+            restoreSelection(roots, selectedId);
+        }
+    }
+
+    private Set<String> captureExpandedIds() {
+        Set<String> ids = new HashSet<>();
+        if (treeViewer == null || treeViewer.getControl().isDisposed()) {
+            return ids;
+        }
+        for (Object element : treeViewer.getExpandedElements()) {
+            if (element instanceof NavigatorNode node) {
+                ids.add(node.getId());
+            }
+        }
+        return ids;
+    }
+
+    private String captureSelectedId() {
+        if (treeViewer == null || treeViewer.getControl().isDisposed()) {
+            return null;
+        }
+        var selection = treeViewer.getStructuredSelection();
+        Object first = selection.getFirstElement();
+        return first instanceof NavigatorNode node ? node.getId() : null;
+    }
+
+    private void restoreExpandedState(NavigatorNode node, Set<String> expandedIds) {
+        if (expandedIds.contains(node.getId())) {
+            treeViewer.setExpandedState(node, true);
+        }
+        for (NavigatorNode child : node.getChildren()) {
+            restoreExpandedState(child, expandedIds);
+        }
+    }
+
+    private void restoreSelection(List<NavigatorNode> roots, String selectedId) {
+        for (NavigatorNode root : roots) {
+            NavigatorNode match = findNodeById(root, selectedId);
+            if (match != null) {
+                treeViewer.setSelection(new org.eclipse.jface.viewers.StructuredSelection(match), true);
+                return;
+            }
+        }
+    }
+
+    private NavigatorNode findNodeById(NavigatorNode node, String id) {
+        if (id.equals(node.getId())) {
+            return node;
+        }
+        for (NavigatorNode child : node.getChildren()) {
+            NavigatorNode match = findNodeById(child, id);
+            if (match != null) {
+                return match;
+            }
+        }
+        return null;
     }
 
     public List<NavigatorNode> buildTreeModel() {
@@ -1009,6 +1106,20 @@ public class TrystNavigatorView extends ViewPart implements WorkspaceChangeListe
         WorkspaceService ws = TrystUiServices.getWorkspaceService();
         if (ws != null) {
             ws.removeChangeListener(this);
+        }
+        if (eventBus != null) {
+            if (taskStateChangedListener != null) {
+                eventBus.unsubscribe(ApplicationEvents.TaskStateChangedEvent.class, taskStateChangedListener);
+            }
+            if (sessionEventListener != null) {
+                eventBus.unsubscribe(ApplicationEvents.SessionEvent.class, sessionEventListener);
+            }
+            if (agentExecutionListener != null) {
+                eventBus.unsubscribe(ApplicationEvents.AgentExecutionEvent.class, agentExecutionListener);
+            }
+            if (taskAddedListener != null) {
+                eventBus.unsubscribe(ApplicationEvents.TaskAddedEvent.class, taskAddedListener);
+            }
         }
         super.dispose();
     }

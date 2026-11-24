@@ -464,6 +464,7 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
         this.taskOrchestrator.setBuildAndQualityService(this.buildAndTestService);
         this.taskOrchestrator.setTaskInstructionRepository(this.taskInstructionRepository);
         this.taskOrchestrator.setModelRegistry(this.aiModelRegistryService);
+        this.taskOrchestrator.setEventBus(this.eventBus);
 
         // Studio Service
         if (this.databaseManager != null) {

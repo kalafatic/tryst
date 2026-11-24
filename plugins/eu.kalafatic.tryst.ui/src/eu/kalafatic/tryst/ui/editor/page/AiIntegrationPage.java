@@ -1292,7 +1292,10 @@ public class AiIntegrationPage extends AbstractTrystEditorPage {
     }
 
     private org.eclipse.swt.graphics.Color color(int swtColor) {
-        return getControl().getDisplay().getSystemColor(swtColor);
+        if (getControl() != null && !getControl().isDisposed()) {
+            return getControl().getDisplay().getSystemColor(swtColor);
+        }
+        return Display.getDefault().getSystemColor(swtColor);
     }
 
     private void applyStatusColor(TableItem item, int column, String status) {

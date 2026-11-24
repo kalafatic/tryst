@@ -65,6 +65,7 @@ public class TaskOrchestrator {
     private eu.kalafatic.tryst.domain.repository.TaskInstructionRepository taskInstructionRepository;
     private eu.kalafatic.tryst.domain.ai.ExternalAiDelegator externalAiDelegator;
     private eu.kalafatic.tryst.domain.studio.StudioService studioService;
+    private EventBus eventBus;
 
     private final int concurrency;
     private final ExecutorService workerExecutor;
@@ -236,6 +237,14 @@ public class TaskOrchestrator {
 
         TrystLog.info(TaskOrchestrator.class,
                 "Task submitted and queued: [" + task.getId() + "] " + task.getTitle() + " (Priority: " + task.getPriority() + ")");
+
+        // Publish the dedicated task-created/accepted event so the Navigator (and any other
+        // subscriber) can reflect the newly accepted task immediately, independent of the
+        // CREATED->QUEUED state-transition event emitted by the queue.
+        if (eventBus != null) {
+            eventBus.publish(new ApplicationEvents.TaskAddedEvent(
+                    task.getId(), task.getProjectId(), task.getTitle(), task.getDescription()));
+        }
 
         if (notificationService != null && userId != null && !userId.isBlank()) {
             notificationService.notifyUser(
@@ -531,6 +540,10 @@ public class TaskOrchestrator {
 
     public void setGitHubService(eu.kalafatic.tryst.domain.github.GitHubService gitHubService) {
         this.gitHubService = gitHubService;
+    }
+
+    public void setEventBus(EventBus eventBus) {
+        this.eventBus = eventBus;
     }
 
     public void setNotificationService(NotificationService notificationService) {

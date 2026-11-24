@@ -1,5 +1,6 @@
 package eu.kalafatic.tryst.tests;
 
+import eu.kalafatic.tryst.core.event.ApplicationEvents;
 import eu.kalafatic.tryst.core.event.EventBus;
 import eu.kalafatic.tryst.domain.model.Project;
 import eu.kalafatic.tryst.domain.model.Task;
@@ -20,6 +21,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -33,6 +35,7 @@ public class TaskOrchestratorIntegrationTest {
     private TaskLifecycleManager lifecycleManager;
     private TaskQueue taskQueue;
     private TaskOrchestrator orchestrator;
+    private EventBus eventBus;
 
     @BeforeEach
     public void setup(@TempDir Path tempDir) {
@@ -43,7 +46,8 @@ public class TaskOrchestratorIntegrationTest {
 
         projectRepository = new SqliteProjectRepository(databaseManager);
         taskRepository = new SqliteTaskRepository(databaseManager);
-        lifecycleManager = new TaskLifecycleManager(taskRepository, new EventBus());
+        eventBus = new EventBus();
+        lifecycleManager = new TaskLifecycleManager(taskRepository, eventBus);
         taskQueue = new TaskQueue(taskRepository, lifecycleManager);
 
         orchestrator = new TaskOrchestrator(
@@ -62,6 +66,7 @@ public class TaskOrchestratorIntegrationTest {
                 null,
                 2
         );
+        orchestrator.setEventBus(eventBus);
     }
 
     @AfterEach
@@ -132,6 +137,26 @@ public class TaskOrchestratorIntegrationTest {
         Task reloaded = taskRepository.findTaskById(submitted.getId()).orElseThrow();
         assertEquals(TaskStatus.CANCELLED, reloaded.getStatus());
         assertTrue(reloaded.getStatus().isTerminal());
+    }
+
+    @Test
+    public void testTaskAddedEventPublishedOnSubmission(@TempDir Path tempDir) {
+        projectRepository.save(new Project("proj-event", "user-event", "Event Project", tempDir.resolve("proj-event"), true));
+
+        List<ApplicationEvents.TaskAddedEvent> addedEvents = new ArrayList<>();
+        eventBus.subscribe(ApplicationEvents.TaskAddedEvent.class, addedEvents::add);
+
+        Task submitted = orchestrator.submitTask(
+                "proj-event", null, "Event Task", "Verify TaskAddedEvent",
+                TaskPriority.NORMAL, "user-event", null
+        );
+
+        assertNotNull(submitted);
+        assertEquals(1, addedEvents.size(), "Exactly one TaskAddedEvent must be published on acceptance");
+        ApplicationEvents.TaskAddedEvent event = addedEvents.get(0);
+        assertEquals(submitted.getId(), event.taskId());
+        assertEquals("Event Task", event.title());
+        assertEquals("proj-event", event.projectId());
     }
 
     @Test
