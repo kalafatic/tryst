@@ -9,6 +9,16 @@ The complete asynchronous coding workflow was audited, stabilized and completed:
 
 **Final build/test:** `./mvnw -B -o clean verify` (JDK 21, offline) → **382 tests, 381 passed, 1 failure (environment/hardware, see §6).**
 
+## 1a. 2026-11-23 Re-Verification Addendum
+
+The implementation was re-verified on 2026-11-23 after the environment changed. Summary of the delta:
+
+- **Environment change:** the OpenCode CLI v2.4.0 remains installed at `~/.opencode/bin/opencode` and runs correctly, but `~/.opencode/bin` is **no longer on `PATH`** (it was on 11-21). Ollama is reachable and `qwen3-coder-30b-32k:latest` is still installed.
+- **Effect:** the three environment-gated real-integration tests (`HarnessDelegationDiagnosticTest`, and the two OpenCode harness tests) reported `BLOCKED: OpenCode CLI not available on this host` at their CLI gate, because `OpenCodeCodingHarnessAdapter` invoked the bare `opencode` command relying on `PATH`.
+- **Root cause / fix:** added `OpenCodeCodingHarnessAdapter.resolveBinary()` — a cached, `--version`-probed resolution that falls back to the standard install locations `~/.opencode/bin/opencode` (via `user.home`) and `$HOME/.opencode/bin/opencode` when the configured bare command is not on `PATH`. `testConnection()` and `executeTask()` now use the resolved path; the fallback is re-evaluated whenever the configured binary changes.
+- **Also fixed (minor):** the headless CLI `sessions` command still claimed "no public /api/sessions endpoint"; it now lists real coding sessions via `GET /api/sessions`. A scope-path typo in `ASYNC_CODER_2_BASELINE.md` (`tryst-121126` → `tryst-221126`) was corrected.
+- **Re-verification result:** full reactor compiles (all modules SUCCESS). Focused run of `OpenCodeEndToEndWorkflowTest`: `testOpenCodeAdapterReportsHonestFailureForInvalidModel` now **PASSES** (CLI found via fallback; honest failure verified end-to-end), `testHttpServiceRestartReRegistersIntegrationRoutes` **PASSES**, and `testRealOpenCodeTaskThroughTrystHttpWorkflow` now **actually executes** the real OpenCode task but remains **hardware-bound** (the 30B model does not reach a terminal state within the 15-minute poll deadline on this machine) — the same pre-existing hardware limitation documented in §6.
+
 ## 2. What Was Already Implemented (baseline)
 
 Lifecycle coordination, embedded HTTP server (JDK `HttpServer`), SQLite (WAL/FK, V1–V21 migrations, 40 tables), persistent task queue with atomic claiming, per-task sandbox isolation (`sandboxes/<owner>/<taskId>`), 10-stage worker (CLONING…WAITING_FOR_REVIEW), diff/review/approve/commit gates, PBKDF2 auth + CSRF + RBAC, SSE notifications, telemetry snapshots, embedded SPA, RCP Navigator mirror.

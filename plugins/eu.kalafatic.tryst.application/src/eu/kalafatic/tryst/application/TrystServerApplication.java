@@ -229,37 +229,38 @@ public class TrystServerApplication implements IApplication {
             new ServerCommand() {
                 @Override public String name() { return "sessions"; }
                 @Override public String syntax() { return "sessions"; }
-                @Override public String summary() { return "List tasks (TRYST has no public sessions endpoint; shows GET /api/tasks)."; }
+                @Override public String summary() { return "List coding sessions (GET /api/sessions)."; }
                 @Override public String topicHelp() {
                     return """
                             sessions
 
-                              TRYST does not expose a public /api/sessions endpoint (session
-                              administration lives under /api/admin/sessions). This command
-                              therefore lists the tasks of the live workspace through
-                              GET /api/tasks and prints their status.
+                              Lists the persistent coding sessions known to the live workspace
+                              through GET /api/sessions, showing each session's status and task
+                              count. Session administration (per-session detail and continuation)
+                              is available through GET /api/sessions/{id} and
+                              POST /api/sessions/{id}/continue.
 
                               Alias: /sessions
                             """;
                 }
                 @Override public int execute(String[] args) {
                     ApplicationLifecycleCoordinator coord = ensureServerUp();
-                    String json = httpGet(coord, "/api/tasks");
+                    String json = httpGet(coord, "/api/sessions");
                     if (json == null) {
                         return 1;
                     }
-                    List<Map<String, String>> tasks = extractJsonObjects(json, "tasks");
-                    System.out.println("Sessions note: no public /api/sessions endpoint exists; showing tasks (GET /api/tasks):");
-                    if (tasks.isEmpty()) {
-                        System.out.println("  (no tasks)");
+                    List<Map<String, String>> sessions = extractJsonObjects(json, "sessions");
+                    if (sessions.isEmpty()) {
+                        System.out.println("  (no sessions)");
                         return 0;
                     }
-                    for (Map<String, String> t : tasks) {
-                        String id = t.getOrDefault("id", "?");
-                        System.out.printf("  [%-10s] %-24s %s%n",
-                                t.getOrDefault("status", "?"),
+                    for (Map<String, String> s : sessions) {
+                        String id = s.getOrDefault("id", "?");
+                        System.out.printf("  [%-10s] %-24s %s (tasks=%s)%n",
+                                s.getOrDefault("status", "?"),
                                 id.length() > 24 ? id.substring(0, 21) + "..." : id,
-                                t.getOrDefault("title", ""));
+                                s.getOrDefault("name", ""),
+                                s.getOrDefault("taskCount", "0"));
                     }
                     return 0;
                 }

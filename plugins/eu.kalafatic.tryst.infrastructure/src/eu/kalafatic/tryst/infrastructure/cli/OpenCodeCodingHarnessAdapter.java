@@ -7,9 +7,11 @@ import eu.kalafatic.tryst.domain.model.Workspace;
 import eu.kalafatic.tryst.infrastructure.vcs.GitService;
 
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -37,6 +39,7 @@ public class OpenCodeCodingHarnessAdapter implements CodingHarnessAdapter {
     public static final String APPLICATION_TYPE = "OPENCODE";
 
     private volatile String binary = "opencode";
+    private volatile String resolvedBinary = null;
     private volatile String agent = "build";
     private volatile String model = "";
     private volatile boolean autoApprove = false;
@@ -68,7 +71,7 @@ public class OpenCodeCodingHarnessAdapter implements CodingHarnessAdapter {
 
     @Override
     public ConnectionTestResult testConnection() {
-        List<String> command = List.of(binary, "--version");
+        List<String> command = List.of(resolveBinary(), "--version");
         ProcessBuilder pb = new ProcessBuilder(command);
         try {
             Process process = pb.start();
@@ -94,6 +97,7 @@ public class OpenCodeCodingHarnessAdapter implements CodingHarnessAdapter {
         if (configuration == null) return;
         if (configuration.containsKey("binary") && !configuration.get("binary").isBlank()) {
             this.binary = configuration.get("binary").trim();
+            this.resolvedBinary = null; // re-resolve against the new binary
         }
         if (configuration.containsKey("agent") && !configuration.get("agent").isBlank()) {
             this.agent = configuration.get("agent").trim();
@@ -114,6 +118,71 @@ public class OpenCodeCodingHarnessAdapter implements CodingHarnessAdapter {
         config.put("model", model);
         config.put("autoApprove", Boolean.toString(autoApprove));
         return config;
+    }
+
+    /**
+     * Resolves the OpenCode CLI executable. When the configured binary is a bare command
+     * name it relies on the process PATH; if that command is not resolvable, the standard
+     * OpenCode install location ({@code ~/.opencode/bin/opencode}) is used as a fallback so
+     * the harness keeps working when the CLI directory is not on PATH. Both the JVM
+     * {@code user.home} and the OS {@code HOME} are consulted because some runtimes (and
+     * tests) override {@code user.home} while the real CLI lives under the real home. The
+     * resolution is cached and re-evaluated whenever {@link #updateConnectionConfiguration}
+     * changes the configured binary.
+     */
+    private String resolveBinary() {
+        String resolved = resolvedBinary;
+        if (resolved != null) {
+            return resolved;
+        }
+        String configured = (binary != null && !binary.isBlank()) ? binary.trim() : "opencode";
+        List<String> candidates = new ArrayList<>();
+        candidates.add(configured);
+        boolean bareName = !configured.contains("/") && !configured.contains(File.separator);
+        if (bareName) {
+            String userHome = System.getProperty("user.home");
+            if (userHome != null && !userHome.isBlank()) {
+                addOpenCodeFallback(candidates, Path.of(userHome));
+            }
+            String envHome = System.getenv("HOME");
+            if (envHome != null && !envHome.isBlank() && !envHome.equals(userHome)) {
+                addOpenCodeFallback(candidates, Path.of(envHome));
+            }
+        }
+        for (String candidate : candidates) {
+            if (probeBinary(candidate)) {
+                resolvedBinary = candidate;
+                return candidate;
+            }
+        }
+        // No candidate works: keep the configured value so error messages remain meaningful.
+        resolvedBinary = configured;
+        return configured;
+    }
+
+    private static void addOpenCodeFallback(List<String> candidates, Path home) {
+        Path fallback = home.resolve(".opencode").resolve("bin").resolve("opencode");
+        if (Files.isExecutable(fallback)) {
+            candidates.add(fallback.toString());
+        }
+    }
+
+    /**
+     * Probes a candidate OpenCode executable with {@code --version} to determine whether it
+     * is actually invokable in the current environment.
+     */
+    private static boolean probeBinary(String candidate) {
+        try {
+            Process p = new ProcessBuilder(List.of(candidate, "--version")).start();
+            readAll(p); // drain stdout/stderr so the process cannot block
+            if (p.waitFor(5, TimeUnit.SECONDS)) {
+                return p.exitValue() == 0;
+            }
+            p.destroyForcibly();
+            return false;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     @Override
@@ -140,7 +209,7 @@ public class OpenCodeCodingHarnessAdapter implements CodingHarnessAdapter {
         effectivePrompt = applyContainmentConstraints(effectivePrompt, workspaceDir.toAbsolutePath().normalize().toString());
 
         List<String> command = new ArrayList<>();
-        command.add(binary);
+        command.add(resolveBinary());
         command.add("run");
         command.add(effectivePrompt);
         if (!agent.isBlank()) {

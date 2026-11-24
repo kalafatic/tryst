@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-21
 **Stage:** Phase A – Existing Implementation Audit (pre-modification baseline)
-**Scope:** `/home/petr/git/tryst-121126`
+**Scope:** `/home/petr/git/tryst-221126`
 **Baseline build:** `./mvnw -B -o verify` (JDK 21, offline)
 **Baseline test result:** 373 tests run, 372 passed, 1 failure (environment-dependent, see §8)
 
