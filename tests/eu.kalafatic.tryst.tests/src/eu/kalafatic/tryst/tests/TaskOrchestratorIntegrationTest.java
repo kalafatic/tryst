@@ -66,6 +66,7 @@ public class TaskOrchestratorIntegrationTest {
                 null,
                 2
         );
+        TestAiFakes.configureModelSelection(orchestrator, "test-model");
         orchestrator.setEventBus(eventBus);
     }
 

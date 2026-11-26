@@ -88,9 +88,19 @@ public class OllamaProvider implements AIProvider {
         return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString())
                 .thenApply(res -> {
                     if (res.statusCode() != 200) {
-                        throw new TrystInfrastructureException("Failed to fetch models from Ollama: HTTP " + res.statusCode());
+                        throw new TrystInfrastructureException("Failed to fetch models from Ollama endpoint "
+                                + endpoint + ": HTTP " + res.statusCode());
                     }
                     return parseModelsJson(res.body());
+                })
+                .exceptionally(t -> {
+                    Throwable cause = t instanceof java.util.concurrent.CompletionException
+                            && t.getCause() != null ? t.getCause() : t;
+                    if (cause instanceof TrystInfrastructureException tie) {
+                        throw tie;
+                    }
+                    throw new TrystInfrastructureException("Ollama endpoint unreachable at "
+                            + endpoint + " while fetching models: " + cause.getMessage());
                 });
     }
 
@@ -187,11 +197,19 @@ public class OllamaProvider implements AIProvider {
                 .thenApply(res -> {
                     long duration = System.currentTimeMillis() - start;
                     if (res.statusCode() != 200) {
-                        TrystLog.error(OllamaProvider.class, "Ollama inference error HTTP " + res.statusCode() + ": " + res.body());
-                        throw new TrystInfrastructureException("Ollama chat failed with HTTP " + res.statusCode() + ": " + res.body());
+                        throw new TrystInfrastructureException(chatError(res.statusCode(), res.body(), request.model()));
                     }
                     String content = extractContentFromChatResponse(res.body());
                     return new InferenceResponse(content, "stop", duration, 0, 0);
+                })
+                .exceptionally(t -> {
+                    Throwable cause = t instanceof java.util.concurrent.CompletionException
+                            && t.getCause() != null ? t.getCause() : t;
+                    if (cause instanceof TrystInfrastructureException tie) {
+                        throw tie;
+                    }
+                    throw new TrystInfrastructureException("Ollama endpoint unreachable at "
+                            + endpoint + " during inference: " + cause.getMessage());
                 });
     }
 
@@ -211,8 +229,8 @@ public class OllamaProvider implements AIProvider {
         return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofLines())
                 .thenAccept(res -> {
                     if (res.statusCode() != 200) {
-                        TrystLog.error(OllamaProvider.class, "Ollama streaming inference error HTTP " + res.statusCode());
-                        throw new TrystInfrastructureException("Ollama streaming chat failed: HTTP " + res.statusCode());
+                        throw new TrystInfrastructureException(
+                                chatError(res.statusCode(), "streaming chat rejected", request.model()));
                     }
                     res.body().forEach(line -> {
                         String chunk = extractContentChunk(line);
@@ -220,7 +238,32 @@ public class OllamaProvider implements AIProvider {
                             chunkConsumer.accept(chunk);
                         }
                     });
+                })
+                .exceptionally(t -> {
+                    Throwable cause = t instanceof java.util.concurrent.CompletionException
+                            && t.getCause() != null ? t.getCause() : t;
+                    if (cause instanceof TrystInfrastructureException tie) {
+                        throw tie;
+                    }
+                    throw new TrystInfrastructureException("Ollama endpoint unreachable at "
+                            + endpoint + " during streaming inference: " + cause.getMessage());
                 });
+    }
+
+    /**
+     * Builds a differentiated chat error message: HTTP 404 means the endpoint is
+     * reachable but the selected model is not installed — never reported as a generic
+     * connectivity failure.
+     */
+    private String chatError(int statusCode, String body, String model) {
+        TrystLog.error(OllamaProvider.class, "Ollama inference error HTTP " + statusCode + ": " + body);
+        if (statusCode == 404) {
+            return "Ollama is reachable, but the selected model is not installed.\n\n"
+                    + "Selected model: " + (model == null || model.isBlank() ? "(none)" : model)
+                    + "\nEndpoint: " + endpoint
+                    + "\n\nRefresh the model list or install the selected model.";
+        }
+        return "Ollama chat failed with HTTP " + statusCode + ": " + body;
     }
 
     private String buildChatPayload(InferenceRequest request, boolean stream) {

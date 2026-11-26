@@ -224,10 +224,34 @@ public final class TrystUiServices {
         return getService(eu.kalafatic.tryst.domain.ai.ExecutionConfigurationService.class);
     }
 
+    /**
+     * Resolves the single authoritative AI execution-configuration resolver.
+     */
+    public static eu.kalafatic.tryst.domain.ai.AiExecutionResolver getAiExecutionResolver() {
+        var appCoord = eu.kalafatic.tryst.application.TrystApplication.getCoordinator();
+        if (appCoord != null && appCoord.getAiExecutionResolver() != null) {
+            return appCoord.getAiExecutionResolver();
+        }
+        return getService(eu.kalafatic.tryst.domain.ai.AiExecutionResolver.class);
+    }
+
     public static eu.kalafatic.tryst.domain.harness.ConnectedApplicationRegistry
             getConnectedApplicationRegistry() {
         var appCoord = eu.kalafatic.tryst.application.TrystApplication.getCoordinator();
         return appCoord == null ? null : appCoord.getConnectedApplicationRegistry();
+    }
+
+    /**
+     * Resolves the authoritative execution environment monitor from the application
+     * lifecycle coordinator (primary) or the OSGi service registry (fallback).
+     */
+    public static eu.kalafatic.tryst.domain.env.ExecutionEnvironmentMonitor
+            getExecutionEnvironmentMonitor() {
+        var appCoord = eu.kalafatic.tryst.application.TrystApplication.getCoordinator();
+        if (appCoord != null && appCoord.getExecutionEnvironmentMonitor() != null) {
+            return appCoord.getExecutionEnvironmentMonitor();
+        }
+        return getService(eu.kalafatic.tryst.domain.env.ExecutionEnvironmentMonitor.class);
     }
 
     public static EventBus getEventBus() {

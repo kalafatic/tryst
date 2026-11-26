@@ -25,6 +25,7 @@ public final class TaskStateTransitionValidator {
                 TaskStatus.QUEUED,
                 TaskStatus.RUNNING,
                 TaskStatus.PAUSED,
+                TaskStatus.BLOCKED,
                 TaskStatus.CANCELLED
         ));
 
@@ -49,8 +50,17 @@ public final class TaskStateTransitionValidator {
                 TaskStatus.CLAIMED,
                 TaskStatus.RUNNING,
                 TaskStatus.PAUSED,
+                TaskStatus.BLOCKED,
                 TaskStatus.CANCELLED,
                 TaskStatus.RECOVERY_REQUIRED
+        ));
+
+        // From BLOCKED: released when the execution environment is restored, or
+        // terminated by explicit operator action.
+        ALLOWED_TRANSITIONS.put(TaskStatus.BLOCKED, EnumSet.of(
+                TaskStatus.QUEUED,
+                TaskStatus.CANCELLED,
+                TaskStatus.FAILED
         ));
 
         // From CLAIMED

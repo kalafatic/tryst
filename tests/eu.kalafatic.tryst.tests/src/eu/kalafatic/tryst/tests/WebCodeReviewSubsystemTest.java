@@ -114,6 +114,7 @@ public class WebCodeReviewSubsystemTest {
                 taskQueue, taskRepository, lifecycleManager, null, projectRepository,
                 null, new PermissionManager(), null, null, null, null, reviewRepository, null, 2
         );
+        TestAiFakes.configureModelSelection(taskOrchestrator, "test-model");
 
         server = new TrystHttpServer("127.0.0.1", 0, null, projectRepository, taskRepository, reviewRepository, null, null, new PermissionManager());
         server.setTaskOrchestrator(taskOrchestrator);

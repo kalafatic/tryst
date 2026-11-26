@@ -57,6 +57,7 @@ class ContextualTaskActionsTest {
         TaskQueue taskQueue = new TaskQueue(taskRepository, lifecycleManager);
         orchestrator = new TaskOrchestrator(taskQueue, taskRepository, lifecycleManager,
                 null, projectRepository, null, null, null, null, null, null, null, null, 2);
+        TestAiFakes.configureModelSelection(orchestrator, "test-model");
 
         registry = new DefaultContextualActionRegistry();
         TrystContextualActions.install(registry, orchestrator, taskRepository, null,

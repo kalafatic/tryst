@@ -111,6 +111,7 @@ public class AgentTask {
         return switch (ts) {
             case CREATED, PLANNED, READY, WAITING_FOR_APPROVAL -> ExecutionStatus.IDLE;
             case QUEUED -> ExecutionStatus.QUEUED;
+            case BLOCKED -> ExecutionStatus.QUEUED;
             case CLAIMED -> ExecutionStatus.CLAIMED;
             case RUNNING, CLONING, ANALYZING, PLANNING, IMPLEMENTING, BUILDING, TESTING, REWORKING -> ExecutionStatus.RUNNING;
             case WAITING_FOR_REVIEW, REWORK_REQUESTED -> ExecutionStatus.WAITING_FOR_REVIEW;

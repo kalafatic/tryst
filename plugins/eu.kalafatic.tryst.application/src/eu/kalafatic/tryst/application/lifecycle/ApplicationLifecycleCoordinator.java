@@ -120,12 +120,14 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
     private AutonomousDevelopmentService autonomousDevelopmentService;
     private eu.kalafatic.tryst.domain.ai.AiModelRegistryService aiModelRegistryService;
     private eu.kalafatic.tryst.domain.ai.AiProviderRegistry aiProviderRegistry;
+    private eu.kalafatic.tryst.domain.ai.AiExecutionResolver aiExecutionResolver;
     private eu.kalafatic.tryst.domain.ai.ExecutionConfigurationService
             executionConfigurationService;
     private eu.kalafatic.tryst.domain.service.TaskLifecycleManager taskLifecycleManager;
     private eu.kalafatic.tryst.domain.service.TaskRecoveryService taskRecoveryService;
     private eu.kalafatic.tryst.domain.service.TaskQueue taskQueue;
     private eu.kalafatic.tryst.domain.service.TaskOrchestrator taskOrchestrator;
+    private eu.kalafatic.tryst.domain.env.ExecutionEnvironmentMonitor executionEnvironmentMonitor;
     private TrystTcpService tcpService;
     private TrystHttpService httpService;
 
@@ -387,6 +389,43 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
                 new eu.kalafatic.tryst.domain.ai.DefaultExecutionConfigurationService(
                         new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteExecutionConfigurationRepository(
                                 this.databaseManager));
+
+        // Single source of truth for the AI model default: the persisted execution
+        // environment configuration seeds the shared model catalog, so the catalog
+        // default, the connectivity test and task execution never diverge from the
+        // user's explicit selection.
+        try {
+            var persistedGlobal = this.executionConfigurationService.getGlobal().orElse(null);
+            if (persistedGlobal != null && persistedGlobal.modelId() != null
+                    && !persistedGlobal.modelId().isBlank()) {
+                this.aiModelRegistryService.setDefaultModel(persistedGlobal.modelId().trim());
+                TrystLog.info(ApplicationLifecycleCoordinator.class,
+                        "Seeded AI model catalog default from persisted execution configuration: "
+                                + persistedGlobal.modelId());
+            } else if (configuration.defaultModel() != null
+                    && !configuration.defaultModel().isBlank()
+                    && !ApplicationConfiguration.DEFAULT_MODEL.equals(configuration.defaultModel())) {
+                // Legacy single-dimension deployments configure only ollama.model: migrate
+                // the persisted default into the provider default (the last explicit level
+                // of the unified chain) so headless configurations keep working without
+                // any implicit fallback.
+                this.aiProviderRegistry.updateDefaultModel("ollama-default",
+                        configuration.defaultModel().trim());
+                this.aiModelRegistryService.setDefaultModel(configuration.defaultModel().trim());
+                TrystLog.info(ApplicationLifecycleCoordinator.class,
+                        "Migrated legacy default model into provider default: "
+                                + configuration.defaultModel());
+            }
+        } catch (Exception e) {
+            TrystLog.warn(ApplicationLifecycleCoordinator.class,
+                    "Could not seed model default from persisted configuration: " + e.getMessage());
+        }
+
+        // Authoritative AI execution-configuration resolver: every inference operation
+        // (connectivity tests, task execution, background AI operations) resolves
+        // harness/provider/endpoint/model through this single mechanism.
+        this.aiExecutionResolver = new eu.kalafatic.tryst.domain.ai.AiExecutionResolver(
+                this.executionConfigurationService, this.aiProviderRegistry, this.aiModelRegistryService);
         this.gitService = new GitService();
         Path mirrorsDir = configuration.defaultWorkspaceDirectory().resolve("mirrors");
         this.repositoryPoolManager = new eu.kalafatic.tryst.infrastructure.vcs.RepositoryPoolManager(mirrorsDir, this.gitService);
@@ -464,6 +503,8 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
         this.taskOrchestrator.setBuildAndQualityService(this.buildAndTestService);
         this.taskOrchestrator.setTaskInstructionRepository(this.taskInstructionRepository);
         this.taskOrchestrator.setModelRegistry(this.aiModelRegistryService);
+        this.taskOrchestrator.setExecutionConfigurationService(this.executionConfigurationService);
+        this.taskOrchestrator.setAiProviderRegistry(this.aiProviderRegistry);
         this.taskOrchestrator.setEventBus(this.eventBus);
 
         // Studio Service
@@ -571,6 +612,19 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
         } else {
             this.aiMonitoringService = new eu.kalafatic.tryst.domain.service.AiMonitoringService(null);
         }
+        // Seed the monitoring service with the authoritative resolved model (the model
+        // catalog default was already seeded from the persisted execution configuration).
+        try {
+            var seededModel = this.aiExecutionResolver != null
+                    ? this.aiExecutionResolver.resolve(null, null).modelId()
+                    : this.aiModelRegistryService.getDefaultModel();
+            if (seededModel != null && !seededModel.isBlank()) {
+                this.aiMonitoringService.setActiveModel(seededModel);
+            }
+        } catch (Exception e) {
+            TrystLog.warn(ApplicationLifecycleCoordinator.class,
+                    "Could not seed AI monitoring active model: " + e.getMessage());
+        }
         // Real AI latency telemetry: snapshots record measured inference latency
         // (NaN when no inference has been recorded yet — never a fabricated zero).
         this.telemetryService.setAiMonitoringService(this.aiMonitoringService);
@@ -591,6 +645,25 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
         if (this.buildAndTestService != null) {
             this.buildAndTestService.setProcessExecutionManager(this.processExecutionManager);
         }
+
+        // Execution environment monitor: the single authoritative source of execution
+        // environment health and readiness (server, harness, provider, model). Started in
+        // onApplicationReady; consumed by the RCP static status menu, Dashboard, Navigator,
+        // Task Scheduler, HTTP API and web client.
+        this.executionEnvironmentMonitor = new eu.kalafatic.tryst.domain.env.ExecutionEnvironmentMonitor(
+                connectedApplicationRegistry,
+                this.aiProviderRegistry,
+                this.aiModelRegistryService,
+                this.aiExecutionResolver,
+                this.eventBus,
+                this::isExecutionEnvironmentServerOperational,
+                this::executionEnvironmentServerDetail,
+                java.time.Duration.ofSeconds(resolveEnvironmentCheckIntervalSeconds())
+        );
+        this.taskOrchestrator.setExecutionEnvironmentMonitor(this.executionEnvironmentMonitor);
+        this.taskOrchestrator.setUserRepository(this.userRepository);
+        TrystLog.info(ApplicationLifecycleCoordinator.class,
+                "ExecutionEnvironmentMonitor wired (check interval " + resolveEnvironmentCheckIntervalSeconds() + "s)");
 
         // 7. Resolve port allocations coherently using PortAllocationManager
         notifyStartupProgress("Starting embedded services...");
@@ -659,6 +732,8 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
             server.setAiManagementServices(this.aiProviderRegistry,
                     this.connectedApplicationRegistry, this.executionConfigurationService, this);
             server.setTaskOrchestrator(this.taskOrchestrator);
+            server.setExecutionEnvironmentMonitor(this.executionEnvironmentMonitor);
+            server.setAiExecutionResolver(this.aiExecutionResolver);
             server.setSchemaMigrationService(this.migrationService);
             server.setGitHubService(this.gitHubService, this.gitHubCredentialRepository, this.gitHubCredentialEncryptionService);
             server.setGitCommitRepository(this.gitCommitRepository);
@@ -777,6 +852,7 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
             registerService(eu.kalafatic.tryst.domain.ai.AiProviderRegistry.class, this.aiProviderRegistry);
             registerService(eu.kalafatic.tryst.domain.ai.ExecutionConfigurationService.class,
                     this.executionConfigurationService);
+            registerService(eu.kalafatic.tryst.domain.ai.AiExecutionResolver.class, this.aiExecutionResolver);
             registerService(GitService.class, this.gitService);
             registerService(BuildAndTestService.class, this.buildAndTestService);
             registerService(eu.kalafatic.tryst.domain.build.BuildAndQualityService.class, this.buildAndTestService);
@@ -792,6 +868,7 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
             registerService(eu.kalafatic.tryst.domain.service.DataRetentionService.class, this.dataRetentionService);
             registerService(eu.kalafatic.tryst.domain.service.TaskQueue.class, this.taskQueue);
             registerService(eu.kalafatic.tryst.domain.service.TaskOrchestrator.class, this.taskOrchestrator);
+            registerService(eu.kalafatic.tryst.domain.env.ExecutionEnvironmentMonitor.class, this.executionEnvironmentMonitor);
             registerService(eu.kalafatic.tryst.domain.repository.UserRepository.class, this.userRepository);
             registerService(eu.kalafatic.tryst.domain.repository.UserSessionRepository.class, this.userSessionRepository);
             registerService(eu.kalafatic.tryst.domain.repository.AuditEventRepository.class, this.auditEventRepository);
@@ -845,6 +922,12 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
 
     private void onApplicationReady() {
         TrystLog.info(ApplicationLifecycleCoordinator.class, "TRYST Application is ready.");
+        // Start the authoritative execution environment monitor once the application is
+        // ready: initial assessment + periodic health checks, recovery detection and
+        // blocked-task release on environment restoration.
+        if (executionEnvironmentMonitor != null) {
+            executionEnvironmentMonitor.start();
+        }
     }
 
     private void onWorkbenchRunning() {
@@ -857,6 +940,18 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
 
     private void onServiceDisposal() {
         TrystLog.info(ApplicationLifecycleCoordinator.class, "Disposing core application services...");
+
+        // 0. Stop the execution environment monitor first so no further status/readiness
+        // events are published while the remaining services are being disposed.
+        if (executionEnvironmentMonitor != null) {
+            try {
+                executionEnvironmentMonitor.stop();
+            } catch (Exception e) {
+                TrystLog.warn(ApplicationLifecycleCoordinator.class,
+                        "Error stopping ExecutionEnvironmentMonitor: " + e.getMessage());
+            }
+            executionEnvironmentMonitor = null;
+        }
 
         // 1. Unregister OSGi services in reverse order
         for (int i = serviceRegistrations.size() - 1; i >= 0; i--) {
@@ -1168,6 +1263,10 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
         return executionConfigurationService;
     }
 
+    public eu.kalafatic.tryst.domain.ai.AiExecutionResolver getAiExecutionResolver() {
+        return aiExecutionResolver;
+    }
+
     public eu.kalafatic.tryst.domain.github.GitHubService getGitHubService() {
         return gitHubService;
     }
@@ -1230,6 +1329,65 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
 
     public eu.kalafatic.tryst.domain.service.TaskOrchestrator getTaskOrchestrator() {
         return taskOrchestrator;
+    }
+
+    public eu.kalafatic.tryst.domain.env.ExecutionEnvironmentMonitor getExecutionEnvironmentMonitor() {
+        return executionEnvironmentMonitor;
+    }
+
+    /**
+     * Server component of the execution environment: the platform must be past
+     * APPLICATION_READY, the task orchestrator must be running, and the web server must be
+     * running unless it was explicitly disabled by configuration.
+     */
+    private boolean isExecutionEnvironmentServerOperational() {
+        ApplicationLifecycleStage stage = currentStage;
+        if (stage != ApplicationLifecycleStage.APPLICATION_READY
+                && stage != ApplicationLifecycleStage.WORKBENCH_RUNNING) {
+            return false;
+        }
+        if (taskOrchestrator == null || !taskOrchestrator.isRunning()) {
+            return false;
+        }
+        boolean webServerDisabled = configuration != null && !configuration.webServerEnabled();
+        return webServerDisabled || (httpService != null && httpService.isRunning());
+    }
+
+    /** Human-readable server state detail for the environment snapshot. */
+    private String executionEnvironmentServerDetail() {
+        ApplicationLifecycleStage stage = currentStage;
+        if (stage != ApplicationLifecycleStage.APPLICATION_READY
+                && stage != ApplicationLifecycleStage.WORKBENCH_RUNNING) {
+            return "Application stage " + stage + " (not ready yet)";
+        }
+        if (taskOrchestrator == null || !taskOrchestrator.isRunning()) {
+            return "Task orchestrator is not running";
+        }
+        boolean webServerDisabled = configuration != null && !configuration.webServerEnabled();
+        if (webServerDisabled) {
+            return "Web server disabled by configuration (backend services running)";
+        }
+        if (httpService == null) {
+            return "HTTP server is not started";
+        }
+        if (!httpService.isRunning()) {
+            return "HTTP server is stopped";
+        }
+        return "HTTP server running on port " + httpService.getPort();
+    }
+
+    /**
+     * Periodic environment check interval in seconds. Configurable via the
+     * {@code tryst.environment.checkIntervalSeconds} system property (default 15, floor 5).
+     */
+    private static long resolveEnvironmentCheckIntervalSeconds() {
+        long seconds = 15;
+        try {
+            seconds = Long.parseLong(System.getProperty("tryst.environment.checkIntervalSeconds", "15"));
+        } catch (NumberFormatException ignored) {
+            seconds = 15;
+        }
+        return Math.max(5, seconds);
     }
 
     public TrystTcpService getTcpService() {
@@ -1419,6 +1577,8 @@ public class ApplicationLifecycleCoordinator implements TrystServerLifecycleServ
         server.setAiManagementServices(this.aiProviderRegistry,
                 this.connectedApplicationRegistry, this.executionConfigurationService, this);
         server.setTaskOrchestrator(this.taskOrchestrator);
+        server.setExecutionEnvironmentMonitor(this.executionEnvironmentMonitor);
+        server.setAiExecutionResolver(this.aiExecutionResolver);
         server.setSchemaMigrationService(this.migrationService);
         server.setGitHubService(this.gitHubService, this.gitHubCredentialRepository, this.gitHubCredentialEncryptionService);
         server.setGitCommitRepository(this.gitCommitRepository);

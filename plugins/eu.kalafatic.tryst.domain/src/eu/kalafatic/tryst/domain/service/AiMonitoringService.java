@@ -18,7 +18,9 @@ public class AiMonitoringService {
     private final AtomicLong totalLatencyMs = new AtomicLong(0);
     private final AtomicLong tokensGenerated = new AtomicLong(0);
     private volatile String lastError = null;
-    private volatile String activeModel = "codellama";
+    // No hardcoded default: the active model is seeded from the authoritative
+    // resolved execution configuration at startup and updated on every selection.
+    private volatile String activeModel = "";
 
     public record AiHealthStatus(
             boolean endpointAvailable,

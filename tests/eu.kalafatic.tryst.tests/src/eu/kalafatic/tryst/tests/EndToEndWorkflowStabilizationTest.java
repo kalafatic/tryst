@@ -162,6 +162,7 @@ public class EndToEndWorkflowStabilizationTest {
                 toolRegistry, permissionManager, fakeAi, null, null, null,
                 codeReviewRepository, new CodeReviewService(), 2
         );
+        TestAiFakes.configureModelSelection(orchestrator, "test-model");
         orchestrator.setTaskRecoveryService(recoveryService);
         orchestrator.start();
 
@@ -265,6 +266,7 @@ public class EndToEndWorkflowStabilizationTest {
                 toolRegistry, permissionManager, (AiInferenceService) null, null, null, null,
                 codeReviewRepository, new CodeReviewService(), 1
         );
+        TestAiFakes.configureModelSelection(orchestrator, "test-model");
         orchestrator.setBuildAndQualityService(failingQualityService);
         orchestrator.start();
 
@@ -298,6 +300,7 @@ public class EndToEndWorkflowStabilizationTest {
                 new ToolRegistry(), permissionManager, (AiInferenceService) null, null, null, null,
                 codeReviewRepository, new CodeReviewService(), 1
         );
+        TestAiFakes.configureModelSelection(orchestrator, "test-model");
 
         Task task = orchestrator.submitTask(testProject.getId(), null, "Task to Cancel", "Cancel me",
                 TaskPriority.LOW, testUser.getId(), null);
@@ -347,6 +350,7 @@ public class EndToEndWorkflowStabilizationTest {
                 new ToolRegistry(), permissionManager, TestAiFakes.codingAi(), null, null, null,
                 codeReviewRepository, new CodeReviewService(), 4
         );
+        TestAiFakes.configureModelSelection(orchestrator, "test-model");
         orchestrator.start();
 
         int taskCount = 4;

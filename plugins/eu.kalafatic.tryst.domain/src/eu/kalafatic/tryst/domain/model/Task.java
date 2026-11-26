@@ -164,6 +164,14 @@ public class Task {
         return failureReason;
     }
 
+    /**
+     * Records the reason a task is blocked (execution environment unavailable) or
+     * otherwise unable to proceed, without a state transition.
+     */
+    public synchronized void setFailureReason(String failureReason) {
+        this.failureReason = failureReason;
+    }
+
     public Instant getCreatedAt() {
         return createdAt;
     }

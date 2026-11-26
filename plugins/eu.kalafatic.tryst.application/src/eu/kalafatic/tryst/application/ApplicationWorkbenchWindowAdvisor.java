@@ -1,9 +1,12 @@
 package eu.kalafatic.tryst.application;
 
+import eu.kalafatic.tryst.application.env.EnvironmentUiListener;
 import eu.kalafatic.tryst.application.help.HelpLauncher;
 import eu.kalafatic.tryst.application.lifecycle.ApplicationLifecycleCoordinator;
+import eu.kalafatic.tryst.core.event.EventBus;
 import eu.kalafatic.tryst.core.lifecycle.ApplicationLifecycleStage;
 import eu.kalafatic.tryst.core.log.TrystLog;
+import eu.kalafatic.tryst.domain.env.EnvironmentEvents;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.widgets.Display;
@@ -16,17 +19,25 @@ import org.eclipse.ui.application.IActionBarConfigurer;
 import org.eclipse.ui.application.IWorkbenchWindowConfigurer;
 import org.eclipse.ui.application.WorkbenchWindowAdvisor;
 
+import java.util.function.Consumer;
+
 /**
  * Configures the main workbench window attributes (dimensions, status line, titles) and
  * installs the global F1 context-help key handler (Family UX standard v1.0): a plain F1
  * key press opens the web help page at the anchor mapped from the active part id,
  * falling back to the generic context section.
+ *
+ * <p>Additionally installs the permanent execution environment status line indicator and
+ * the event-driven administrator notification listener (execution environment not ready /
+ * restored).</p>
  */
 public class ApplicationWorkbenchWindowAdvisor extends WorkbenchWindowAdvisor {
 
     private final ApplicationLifecycleCoordinator coordinator;
 
     private Listener f1HelpListener;
+    private EnvironmentUiListener environmentUiListener;
+    private Consumer<EnvironmentEvents.StatusChangedEvent> statusLineListener;
 
     public ApplicationWorkbenchWindowAdvisor(IWorkbenchWindowConfigurer configurer) {
         this(configurer, ApplicationWorkbenchAdvisor.resolveCoordinator());
@@ -66,11 +77,97 @@ public class ApplicationWorkbenchWindowAdvisor extends WorkbenchWindowAdvisor {
     @Override
     public void postWindowOpen() {
         installF1HelpFilter();
+        installEnvironmentStatusLine();
+        installEnvironmentNotifications();
     }
 
     @Override
     public void postWindowClose() {
         removeF1HelpFilter();
+        removeEnvironmentStatusLine();
+        if (environmentUiListener != null) {
+            environmentUiListener.stop();
+            environmentUiListener = null;
+        }
+    }
+
+    /**
+     * Permanent execution environment status line indicator: always visible regardless of
+     * the active page or editor, updated from the authoritative ExecutionEnvironmentMonitor
+     * via EventBus events (never a UI-side health computation).
+     */
+    private void installEnvironmentStatusLine() {
+        IWorkbenchWindow window = getWindowConfigurer().getWindow();
+        if (window == null || window.getShell() == null || window.getShell().isDisposed()) {
+            return;
+        }
+        EventBus eventBus = coordinator != null ? coordinator.getEventBus() : null;
+        if (eventBus == null) {
+            return;
+        }
+        Consumer<EnvironmentEvents.StatusChangedEvent> listener = event -> {
+            Display display = window.getShell().getDisplay();
+            if (display == null || display.isDisposed()) {
+                return;
+            }
+            display.asyncExec(() -> {
+                if (window.getShell() == null || window.getShell().isDisposed()) {
+                    return;
+                }
+                var snapshot = event.snapshot();
+                var statusLine = getWindowConfigurer().getActionBarConfigurer().getStatusLineManager();
+                if (statusLine == null) {
+                    return;
+                }
+                if (snapshot.ready()) {
+                    statusLine.setErrorMessage(null);
+                    statusLine.setMessage("\u25CF Execution Environment: READY");
+                } else {
+                    String first = snapshot.problems().isEmpty() ? "environment not ready" : snapshot.problems().get(0);
+                    statusLine.setErrorMessage("\u25CF Execution Environment: NOT READY — " + first);
+                }
+            });
+        };
+        eventBus.subscribe(EnvironmentEvents.StatusChangedEvent.class, listener);
+        statusLineListener = listener;
+
+        // Initial state (snapshot may already exist before the window opened)
+        if (coordinator != null && coordinator.getExecutionEnvironmentMonitor() != null) {
+            var snapshot = coordinator.getExecutionEnvironmentMonitor().getSnapshot();
+            var statusLine = getWindowConfigurer().getActionBarConfigurer().getStatusLineManager();
+            if (statusLine != null) {
+                if (snapshot.ready()) {
+                    statusLine.setMessage("\u25CF Execution Environment: READY");
+                } else {
+                    String first = snapshot.problems().isEmpty() ? "environment not ready" : snapshot.problems().get(0);
+                    statusLine.setErrorMessage("\u25CF Execution Environment: NOT READY — " + first);
+                }
+            }
+        }
+    }
+
+    private void removeEnvironmentStatusLine() {
+        if (statusLineListener != null && coordinator != null && coordinator.getEventBus() != null) {
+            coordinator.getEventBus().unsubscribe(EnvironmentEvents.StatusChangedEvent.class, statusLineListener);
+        }
+        statusLineListener = null;
+    }
+
+    /**
+     * Event-driven administrator notifications for incoming tasks blocked by an
+     * unavailable execution environment, plus the recovery notification.
+     */
+    private void installEnvironmentNotifications() {
+        IWorkbenchWindow window = getWindowConfigurer().getWindow();
+        if (window == null || coordinator == null) {
+            return;
+        }
+        EventBus eventBus = coordinator.getEventBus();
+        if (eventBus == null) {
+            return;
+        }
+        environmentUiListener = new EnvironmentUiListener(window, eventBus);
+        environmentUiListener.start();
     }
 
     /**

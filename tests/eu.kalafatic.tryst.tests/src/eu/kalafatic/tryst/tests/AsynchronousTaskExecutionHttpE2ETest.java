@@ -99,6 +99,7 @@ public class AsynchronousTaskExecutionHttpE2ETest {
                 null,
                 2
         );
+        TestAiFakes.configureModelSelection(orchestrator, "test-model");
         orchestrator.start();
 
         ConfigurationService configService = new ConfigurationService(tempDir);

@@ -86,6 +86,7 @@ public class TrystStudioIntegrationTest {
                 null,
                 2
         );
+        TestAiFakes.configureModelSelection(orchestrator, "test-model");
         orchestrator.setNotificationService(notificationService);
         orchestrator.setTaskInstructionRepository(taskInstructionRepository);
 

@@ -2,11 +2,14 @@ package eu.kalafatic.tryst.ui.editor.page;
 
 import eu.kalafatic.tryst.core.config.ApplicationConfiguration;
 import eu.kalafatic.tryst.core.config.ConfigurationService;
+import eu.kalafatic.tryst.core.log.TrystLog;
 import eu.kalafatic.tryst.domain.ai.AgentProfileSupport;
+import eu.kalafatic.tryst.domain.ai.AiExecutionResolver;
 import eu.kalafatic.tryst.domain.ai.AiInferenceService;
 import eu.kalafatic.tryst.domain.ai.AiModelRegistryService;
 import eu.kalafatic.tryst.domain.ai.AiProviderDescriptor;
 import eu.kalafatic.tryst.domain.ai.AiProviderRegistry;
+import eu.kalafatic.tryst.domain.ai.AIProvider;
 import eu.kalafatic.tryst.domain.ai.ExecutionConfiguration;
 import eu.kalafatic.tryst.domain.ai.ExecutionConfigurationService;
 import eu.kalafatic.tryst.domain.harness.ConnectedApplicationDescriptor;
@@ -203,12 +206,81 @@ public class AiIntegrationPage extends AbstractTrystEditorPage {
                         : (cmbModel.getText() == null ? "" : cmbModel.getText().trim());
         ExecutionConfiguration existing = service.getGlobal()
                 .orElseGet(() -> ExecutionConfiguration.empty(ExecutionConfiguration.SOURCE_GLOBAL));
+        String previousProviderId = existing.providerId() == null ? "" : existing.providerId();
         service.saveGlobal(new ExecutionConfiguration(harnessId, providerId, model, agentId,
                 existing.executionParameters(), existing.toolPermissions(),
                 existing.resourceLimits(), existing.harnessSettings(),
                 ExecutionConfiguration.SOURCE_GLOBAL));
+        syncConfigurationMirrors(providerId, model);
         showInfo("Execution Configuration", "Global execution environment defaults saved.");
+
+        // Provider-switch contract: refresh the new provider's models; an incompatible
+        // model from the previous provider is cleared and must be chosen explicitly.
+        AiProviderRegistry registry = TrystUiServices.getAiProviderRegistry();
+        if (registry != null && !providerId.isBlank() && !providerId.equals(previousProviderId)) {
+            final String newProvider = providerId;
+            final String selectedModel = model;
+            registry.discoverModels(newProvider).whenComplete((v, t) -> {
+                Display.getDefault().asyncExec(() -> {
+                    AiExecutionResolver resolver = TrystUiServices.getAiExecutionResolver();
+                    boolean known = resolver != null
+                            && resolver.isModelKnownForProvider(newProvider, selectedModel);
+                    if (!selectedModel.isBlank() && !known) {
+                        ExecutionConfiguration current = service.getGlobal()
+                                .orElseGet(() -> ExecutionConfiguration.empty(ExecutionConfiguration.SOURCE_GLOBAL));
+                        service.saveGlobal(new ExecutionConfiguration(current.harnessId(), newProvider,
+                                "", current.agentProfileId(), current.executionParameters(),
+                                current.toolPermissions(), current.resourceLimits(),
+                                current.harnessSettings(), ExecutionConfiguration.SOURCE_GLOBAL));
+                        showWarning("Execution Configuration",
+                                "The selected model '" + selectedModel + "' is not available from provider '"
+                                        + newProvider + "'.\nThe model selection was cleared — choose a model explicitly.");
+                    }
+                    refresh();
+                });
+            });
+        }
         refresh();
+    }
+
+    /**
+     * Keeps every downstream mirror of the model selection in sync after a global
+     * configuration change: model catalog default, provider default model (persisted),
+     * monitoring service and the legacy configuration property. The unified execution
+     * configuration remains the single source of truth.
+     */
+    private void syncConfigurationMirrors(String providerId, String model) {
+        if (!model.isBlank()) {
+            AiModelRegistryService reg = TrystUiServices.getAiModelRegistryService();
+            if (reg != null) {
+                reg.setDefaultModel(model);
+            }
+            AiMonitoringService mon = TrystUiServices.getAiMonitoringService();
+            if (mon != null) {
+                mon.setActiveModel(model);
+            }
+            ConfigurationService cfgSvc = TrystUiServices.getConfigurationService();
+            ApplicationConfiguration cfg = TrystUiServices.getConfiguration();
+            if (cfgSvc != null && cfg != null) {
+                try {
+                    cfgSvc.updateConfiguration(cfg.withDefaultModel(model));
+                } catch (Exception e) {
+                    TrystLog.warn(AiIntegrationPage.class,
+                            "Could not update legacy configuration mirror: " + e.getMessage());
+                }
+            }
+        }
+        if (!providerId.isBlank()) {
+            AiProviderRegistry registry = TrystUiServices.getAiProviderRegistry();
+            if (registry != null) {
+                try {
+                    registry.updateDefaultModel(providerId, model);
+                } catch (Exception e) {
+                    TrystLog.warn(AiIntegrationPage.class,
+                            "Could not persist provider default model: " + e.getMessage());
+                }
+            }
+        }
     }
 
     // ------------------------------------------------------------------
@@ -945,72 +1017,208 @@ public class AiIntegrationPage extends AbstractTrystEditorPage {
 
     private void onModelSelected() {
         int idx = cmbModel.getSelectionIndex();
-        if (idx >= 0) {
-            String selected = cmbModel.getItem(idx);
-            ConfigurationService cfgSvc = TrystUiServices.getConfigurationService();
-            ApplicationConfiguration cfg = TrystUiServices.getConfiguration();
-            if (cfgSvc != null && cfg != null) {
+        if (idx < 0) {
+            return;
+        }
+        String selected = cmbModel.getItem(idx);
+        // Single source of truth: persist the exact selected model identifier into the
+        // unified execution configuration and keep every mirror (model catalog default,
+        // provider default model, legacy configuration property, monitoring service)
+        // in sync — never an independent default.
+        AiExecutionResolver resolver = TrystUiServices.getAiExecutionResolver();
+        AiExecutionResolver.ResolvedExecution resolved = resolver != null
+                ? resolver.resolve(null, null) : null;
+        String providerId = resolved != null ? resolved.providerId() : "";
+        String harnessId = resolved != null ? resolved.harnessId() : "";
+        String agentId = resolved != null ? resolved.agentProfileId() : "";
+
+        ExecutionConfigurationService execService = TrystUiServices.getExecutionConfigurationService();
+        if (execService != null) {
+            ExecutionConfiguration existing = execService.getGlobal()
+                    .orElseGet(() -> ExecutionConfiguration.empty(ExecutionConfiguration.SOURCE_GLOBAL));
+            execService.saveGlobal(new ExecutionConfiguration(
+                    harnessId, providerId, selected, agentId,
+                    existing.executionParameters(), existing.toolPermissions(),
+                    existing.resourceLimits(), existing.harnessSettings(),
+                    ExecutionConfiguration.SOURCE_GLOBAL));
+        }
+
+        AiProviderRegistry providerRegistry = TrystUiServices.getAiProviderRegistry();
+        if (providerRegistry != null && !providerId.isBlank()) {
+            try {
+                providerRegistry.updateDefaultModel(providerId, selected);
+            } catch (Exception ignored) {}
+        }
+        AiModelRegistryService reg = TrystUiServices.getAiModelRegistryService();
+        if (reg != null) {
+            reg.setDefaultModel(selected);
+        }
+        AiMonitoringService mon = TrystUiServices.getAiMonitoringService();
+        if (mon != null) {
+            mon.setActiveModel(selected);
+        }
+        // Legacy mirror: keeps the persisted legacy configuration property aligned for
+        // consumers that predate the unified configuration dimension.
+        ConfigurationService cfgSvc = TrystUiServices.getConfigurationService();
+        ApplicationConfiguration cfg = TrystUiServices.getConfiguration();
+        if (cfgSvc != null && cfg != null) {
+            try {
                 cfgSvc.updateConfiguration(cfg.withDefaultModel(selected));
-            }
-            AiModelRegistryService reg = TrystUiServices.getAiModelRegistryService();
-            if (reg != null) {
-                reg.setDefaultModel(selected);
-            }
-            AiMonitoringService mon = TrystUiServices.getAiMonitoringService();
-            if (mon != null) {
-                mon.setActiveModel(selected);
+            } catch (Exception e) {
+                TrystLog.warn(AiIntegrationPage.class,
+                        "Could not update legacy configuration mirror: " + e.getMessage());
             }
         }
     }
 
     private void testAiConnectivity() {
-        AiInferenceService ai = TrystUiServices.getAiInferenceService();
-        if (ai == null) {
-            lblStatus.setText("AiInferenceService unavailable in registry");
-            showWarning("AI Connectivity Test", "AI Inference Service is not running or unavailable.");
+        // Single source of truth: the test must exercise exactly the resolved
+        // harness/provider/endpoint/model — never an unrelated global default.
+        AiExecutionResolver resolver = TrystUiServices.getAiExecutionResolver();
+        AiExecutionResolver.ResolvedExecution resolved = resolver != null
+                ? resolver.resolve(null, null)
+                : null;
+        if (resolved == null || !resolved.hasModel()) {
+            lblStatus.setText("NOT CONFIGURED");
+            showWarning("AI Connectivity Test",
+                    "No AI model is selected.\n\nConfigure the execution environment "
+                            + "(provider and model) on this page before testing connectivity.");
             return;
         }
-        lblStatus.setText("Testing connectivity with inference request...");
-        String model = cmbModel.getText();
-        if (model == null || model.isBlank()) {
-            model = "codellama";
+        if (!resolved.providerEnabled()) {
+            lblStatus.setText("PROVIDER DISABLED");
+            showWarning("AI Connectivity Test",
+                    "The selected provider '" + resolved.providerId() + "' is disabled.\n"
+                            + "Enable the provider before testing connectivity.");
+            return;
         }
-        AiInferenceService.InferenceRequest req = new AiInferenceService.InferenceRequest(
-                model,
-                List.of(
-                        AiInferenceService.ChatMessage.system("You are a connectivity test helper."),
-                        AiInferenceService.ChatMessage.user("Ping")
-                )
-        );
-        ai.generateResponse(req).thenAccept(resp -> {
-            Display.getDefault().asyncExec(() -> {
-                if (!lblStatus.isDisposed()) {
-                    lblStatus.setText("ONLINE (Active)");
-                    AiMonitoringService mon = TrystUiServices.getAiMonitoringService();
-                    if (mon != null) {
-                        mon.recordInference(true, resp.durationMs(), resp.evalCount(), null);
-                        lblRequests.setText(String.valueOf(mon.checkHealth().totalRequests()));
-                    }
-                    showInfo("AI Connectivity Test",
-                            "Inference test succeeded via model '" + req.model() + "':\n\n"
-                                    + resp.content());
-                }
+
+        String prompt = "Respond with exactly: TRYST_AI_OK";
+        lblStatus.setText("Testing inference (" + resolved.providerId() + " / "
+                + resolved.modelId() + ")...");
+        long startedAt = System.currentTimeMillis();
+
+        // Prefer the selected provider's own adapter so the test goes through the real
+        // provider endpoint; fall back to the legacy inference service only when the
+        // provider registry is unavailable.
+        AiProviderRegistry providerRegistry = TrystUiServices.getAiProviderRegistry();
+        java.util.Optional<AIProvider> providerAdapter = providerRegistry != null
+                ? providerRegistry.findAdapter(resolved.providerId())
+                : java.util.Optional.empty();
+        AiInferenceService legacyInference = TrystUiServices.getAiInferenceService();
+
+        if (providerAdapter.isPresent()) {
+            AIProvider.InferenceRequest req = new AIProvider.InferenceRequest(
+                    resolved.modelId(),
+                    List.of(
+                            new AIProvider.ChatMessage("system", "You are a connectivity test helper."),
+                            new AIProvider.ChatMessage("user", prompt)));
+            providerAdapter.get().generateResponse(req).thenAccept(resp -> {
+                onConnectivitySuccess(resolved, startedAt, resp.content(),
+                        System.currentTimeMillis() - startedAt);
+            }).exceptionally(t -> {
+                onConnectivityFailure(resolved, startedAt, unwrap(t));
+                return null;
             });
-        }).exceptionally(t -> {
-            Display.getDefault().asyncExec(() -> {
-                if (!lblStatus.isDisposed()) {
-                    lblStatus.setText("OFFLINE / UNREACHABLE");
-                    AiMonitoringService mon = TrystUiServices.getAiMonitoringService();
-                    if (mon != null) {
-                        mon.recordInference(false, 0, 0, t.getMessage());
-                        lblRequests.setText(String.valueOf(mon.checkHealth().totalRequests()));
-                    }
-                    MessageDialog.openError(resolveShell(), "AI Connectivity Test",
-                            "Inference test failed: " + t.getMessage());
-                }
+        } else if (legacyInference != null) {
+            AiInferenceService.InferenceRequest req = new AiInferenceService.InferenceRequest(
+                    resolved.modelId(),
+                    List.of(
+                            AiInferenceService.ChatMessage.system("You are a connectivity test helper."),
+                            AiInferenceService.ChatMessage.user(prompt)));
+            legacyInference.generateResponse(req).thenAccept(resp -> {
+                onConnectivitySuccess(resolved, startedAt, resp.content(),
+                        resp.durationMs() > 0 ? resp.durationMs() : System.currentTimeMillis() - startedAt);
+            }).exceptionally(t -> {
+                onConnectivityFailure(resolved, startedAt, unwrap(t));
+                return null;
             });
-            return null;
+        } else {
+            lblStatus.setText("NO INFERENCE SERVICE");
+            showWarning("AI Connectivity Test",
+                    "No inference service is available for provider '" + resolved.providerId() + "'.");
+        }
+    }
+
+    private static Throwable unwrap(Throwable t) {
+        if (t instanceof java.util.concurrent.CompletionException && t.getCause() != null) {
+            return t.getCause();
+        }
+        return t;
+    }
+
+    private void onConnectivitySuccess(AiExecutionResolver.ResolvedExecution resolved,
+                                       long startedAt, String content, long durationMs) {
+        Display.getDefault().asyncExec(() -> {
+            if (!lblStatus.isDisposed()) {
+                lblStatus.setText("INFERENCE OPERATIONAL");
+            }
+            AiMonitoringService mon = TrystUiServices.getAiMonitoringService();
+            if (mon != null) {
+                mon.recordInference(true, durationMs, 1, null);
+                mon.setActiveModel(resolved.modelId());
+                if (!lblRequests.isDisposed()) {
+                    lblRequests.setText(String.valueOf(mon.checkHealth().totalRequests()));
+                }
+            }
+            logInferenceDiagnostics(resolved, "connectivity_test", 200, durationMs, "OK", null);
+            showInfo("AI Connectivity Test",
+                    "Inference test succeeded.\n\n"
+                            + connectivityDetails(resolved)
+                            + "\nResponse time: " + durationMs + " ms"
+                            + "\nInference status: OPERATIONAL"
+                            + "\n\nResponse:\n" + content);
         });
+    }
+
+    private void onConnectivityFailure(AiExecutionResolver.ResolvedExecution resolved,
+                                       long startedAt, Throwable error) {
+        Display.getDefault().asyncExec(() -> {
+            if (!lblStatus.isDisposed()) {
+                lblStatus.setText("INFERENCE FAILED");
+            }
+            AiMonitoringService mon = TrystUiServices.getAiMonitoringService();
+            if (mon != null) {
+                mon.recordInference(false, 0, 0, error != null ? error.getMessage() : "inference failed");
+                if (!lblRequests.isDisposed()) {
+                    lblRequests.setText(String.valueOf(mon.checkHealth().totalRequests()));
+                }
+            }
+            String message = error != null && error.getMessage() != null
+                    ? error.getMessage() : "Inference failed";
+            logInferenceDiagnostics(resolved, "connectivity_test", 0,
+                    System.currentTimeMillis() - startedAt, "FAILED", message);
+            MessageDialog.openError(resolveShell(), "AI Connectivity Test",
+                    "Inference test failed:\n" + message + "\n\n"
+                            + connectivityDetails(resolved));
+        });
+    }
+
+    private String connectivityDetails(AiExecutionResolver.ResolvedExecution resolved) {
+        return "Harness: " + (resolved.harnessId().isBlank() ? "(built-in local agent)" : resolved.harnessId())
+                + "\nProvider: " + resolved.providerId()
+                + (resolved.providerType().isBlank() ? "" : " (" + resolved.providerType() + ")")
+                + "\nEndpoint: " + (resolved.endpoint().isBlank() ? "(unknown)" : resolved.endpoint())
+                + "\nModel: " + resolved.modelId()
+                + "\nModel in catalog: " + (resolved.modelAvailable() ? "available" : "NOT INSTALLED")
+                + "\nResolution source: " + resolved.source();
+    }
+
+    private void logInferenceDiagnostics(AiExecutionResolver.ResolvedExecution resolved,
+                                         String operation, int httpStatus, long durationMs,
+                                         String result, String errorDetails) {
+        TrystLog.info(AiIntegrationPage.class,
+                "[AI-DIAG] operation=" + operation
+                        + " harness=" + (resolved.harnessId().isBlank() ? "none" : resolved.harnessId())
+                        + " provider=" + resolved.providerId()
+                        + " type=" + resolved.providerType()
+                        + " endpoint=" + resolved.endpoint()
+                        + " selectedModel=" + resolved.modelId()
+                        + " resolvedModel=" + resolved.modelId()
+                        + " httpStatus=" + httpStatus
+                        + " durationMs=" + durationMs
+                        + " result=" + result
+                        + (errorDetails == null || errorDetails.isBlank() ? "" : " error=" + errorDetails));
     }
 
     private void startAiService() {
@@ -1036,7 +1244,11 @@ public class AiIntegrationPage extends AbstractTrystEditorPage {
             ai.checkConnection().thenAccept(online -> {
                 Display.getDefault().asyncExec(() -> {
                     if (!lblStatus.isDisposed()) {
-                        lblStatus.setText(online ? "ONLINE (Active)" : "OFFLINE / UNREACHABLE");
+                        // A successful endpoint ping never implies a working inference
+                        // configuration: report it honestly as untested.
+                        lblStatus.setText(online
+                                ? "ENDPOINT OK — INFERENCE UNTESTED"
+                                : "ENDPOINT UNREACHABLE");
                     }
                 });
             });
@@ -1344,14 +1556,25 @@ public class AiIntegrationPage extends AbstractTrystEditorPage {
                 }
             }
         }
-        ApplicationConfiguration cfg = TrystUiServices.getConfiguration();
-        String fallback = cfg == null ? "codellama" : cfg.defaultModel();
-        if (!current.isBlank()) {
-            fallback = current;
+        // The authoritative selected model comes from the resolved execution
+        // configuration — never a fabricated default.
+        AiExecutionResolver resolver = TrystUiServices.getAiExecutionResolver();
+        AiExecutionResolver.ResolvedExecution resolved = resolver != null
+                ? resolver.resolve(null, null) : null;
+        String resolvedModel = resolved != null ? resolved.modelId() : "";
+        if (!current.isBlank() && (resolved == null || !resolved.hasModel())) {
+            // Keep a transient user selection visible (not persisted).
+            resolvedModel = current;
+        }
+        if (resolvedModel.isBlank()) {
+            if (!lblStatus.isDisposed()) {
+                lblStatus.setText("NOT CONFIGURED");
+            }
+            return;
         }
         int index = -1;
         for (int i = 0; i < cmbModel.getItemCount(); i++) {
-            if (cmbModel.getItem(i).equalsIgnoreCase(fallback)) {
+            if (cmbModel.getItem(i).equals(resolvedModel)) {
                 index = i;
                 break;
             }
@@ -1359,8 +1582,14 @@ public class AiIntegrationPage extends AbstractTrystEditorPage {
         if (index >= 0) {
             cmbModel.select(index);
         } else {
-            cmbModel.add(fallback);
+            // The selected model is not present in the provider's discovered catalog:
+            // keep the exact identifier visible and mark it explicitly unavailable —
+            // never silently substitute another model.
+            cmbModel.add(resolvedModel);
             cmbModel.select(cmbModel.getItemCount() - 1);
+            if (!lblStatus.isDisposed()) {
+                lblStatus.setText("SELECTED MODEL NOT INSTALLED: " + resolvedModel);
+            }
         }
     }
 

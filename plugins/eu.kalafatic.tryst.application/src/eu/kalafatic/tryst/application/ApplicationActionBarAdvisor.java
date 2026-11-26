@@ -1,8 +1,10 @@
 package eu.kalafatic.tryst.application;
 
+import eu.kalafatic.tryst.application.env.EnvironmentStatusDialog;
 import eu.kalafatic.tryst.application.lifecycle.ApplicationLifecycleCoordinator;
 import eu.kalafatic.tryst.core.concurrent.AsyncExecutionService;
 import eu.kalafatic.tryst.core.log.TrystLog;
+import eu.kalafatic.tryst.domain.env.ExecutionEnvironmentMonitor;
 import eu.kalafatic.tryst.domain.model.EvoConfiguration;
 import eu.kalafatic.tryst.domain.model.EvoExecution;
 import eu.kalafatic.tryst.infrastructure.persistence.SqliteDatabaseManager;
@@ -39,7 +41,10 @@ import java.util.List;
 
 /**
  * Workbench action bar configuration defining the standard Eclipse TRYST top menus:
- * File, Edit, Navigate, Project, Tasks, Database, TEIP, Web, Tools, Observability, Window, Help.
+ * File, Edit, Navigate, Project, Tasks, Database, TEIP, Web, Environment, Tools,
+ * Observability, Window, Help. The Environment menu hosts the permanent execution
+ * environment status section (server / harness / provider / model) with per-component
+ * context actions, mirroring the authoritative ExecutionEnvironmentMonitor snapshot.
  */
 public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
 
@@ -714,6 +719,15 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
         webMenu.add(new GroupMarker(IWorkbenchActionConstants.MB_ADDITIONS));
         menuBar.add(webMenu);
 
+        // Permanent execution environment status section: always visible regardless of
+        // the active page or editor. Rebuilt on every menu open from the authoritative
+        // ExecutionEnvironmentMonitor snapshot; every action reuses the existing
+        // server-lifecycle, provider, harness and model management services.
+        MenuManager environmentMenu = new MenuManager("&Environment", "environment");
+        environmentMenu.add(new EnvironmentStatusContributionItem());
+        environmentMenu.add(new GroupMarker(IWorkbenchActionConstants.MB_ADDITIONS));
+        menuBar.add(environmentMenu);
+
         // Tools menu (Family UX standard v1.0): single home of the terminal and web
         // interface launch actions.
         MenuManager toolsMenu = new MenuManager("&Tools", "tools");
@@ -901,6 +915,298 @@ public class ApplicationActionBarAdvisor extends ActionBarAdvisor {
 
         private interface ServerOperationBody {
             void run() throws Exception;
+        }
+    }
+
+    /**
+     * Dynamic Environment menu content: overall readiness plus the four permanent
+     * component indicators (TRYST Server / Coding Harness / Inference Provider / Model)
+     * with per-component context menus. Rebuilt on every menu open from the
+     * authoritative ExecutionEnvironmentMonitor snapshot; status colors follow the
+     * GREEN / ORANGE / RED / GRAY convention. Only actions actually supported by the
+     * existing integration are exposed (no artificial start/stop for external services).
+     */
+    private final class EnvironmentStatusContributionItem extends ContributionItem {
+
+        private static final String GLYPH_GREEN = "\uD83D\uDFE2 ";
+        private static final String GLYPH_ORANGE = "\uD83D\uDFE0 ";
+        private static final String GLYPH_RED = "\uD83D\uDD34 ";
+        private static final String GLYPH_GRAY = "\u26AA ";
+
+        EnvironmentStatusContributionItem() {
+            super("eu.kalafatic.tryst.application.environmentStatus");
+        }
+
+        @Override
+        public boolean isDynamic() {
+            return true;
+        }
+
+        @Override
+        public void fill(Menu parent, int index) {
+            IWorkbenchWindow window = getActionBarConfigurer().getWindowConfigurer().getWindow();
+            ApplicationLifecycleCoordinator coord = resolveCoordinator();
+            ExecutionEnvironmentMonitor monitor = coord != null ? coord.getExecutionEnvironmentMonitor() : null;
+            ExecutionEnvironmentMonitor.EnvironmentSnapshot snapshot = monitor != null ? monitor.getSnapshot() : null;
+
+            if (snapshot == null || coord == null) {
+                MenuItem item = new MenuItem(parent, SWT.PUSH, index);
+                item.setText("Environment Status: UNAVAILABLE");
+                item.setEnabled(false);
+                return;
+            }
+
+            // Overall readiness entry with its action submenu
+            MenuItem readyItem = new MenuItem(parent, SWT.CASCADE, index++);
+            readyItem.setText((snapshot.ready() ? GLYPH_GREEN : GLYPH_RED)
+                    + "Execution Environment: " + (snapshot.ready() ? "READY" : "NOT READY"));
+            Menu readyMenu = new Menu(readyItem);
+            readyItem.setMenu(readyMenu);
+            addPushItem(readyMenu, "Refresh Status Now",
+                    () -> refreshEnvironment(window, monitor));
+            addPushItem(readyMenu, "Environment Details & Recovery...",
+                    () -> new EnvironmentStatusDialog(window.getShell()).open());
+            addPushItem(readyMenu, "Open Administration Dashboard",
+                    () -> switchEditorPage(window, "eu.kalafatic.tryst.ui.editor.page.dashboard"));
+            addPushItem(readyMenu, "Open Server Monitoring",
+                    () -> switchEditorPage(window, "eu.kalafatic.tryst.ui.editor.page.serverMonitoring"));
+
+            new MenuItem(parent, SWT.SEPARATOR, index++);
+
+            for (ExecutionEnvironmentMonitor.ComponentId id : ExecutionEnvironmentMonitor.ComponentId.values()) {
+                ExecutionEnvironmentMonitor.ComponentState state = snapshot.component(id);
+                MenuItem item = new MenuItem(parent, SWT.CASCADE, index++);
+                String healthText = state != null ? state.health().name() : "UNKNOWN";
+                item.setText(glyphFor(state != null ? state.health() : null)
+                        + (state != null ? state.name() : id.name()) + ": " + healthText);
+                Menu subMenu = new Menu(item);
+                item.setMenu(subMenu);
+                fillComponentMenu(window, coord, monitor, id, state, subMenu);
+            }
+        }
+
+        private void fillComponentMenu(IWorkbenchWindow window,
+                                       ApplicationLifecycleCoordinator coord,
+                                       ExecutionEnvironmentMonitor monitor,
+                                       ExecutionEnvironmentMonitor.ComponentId id,
+                                       ExecutionEnvironmentMonitor.ComponentState state,
+                                       Menu menu) {
+            switch (id) {
+                case SERVER -> {
+                    String detail = state != null ? state.detail() : "";
+                    addPushItem(menu, "Health Details",
+                            () -> MessageDialog.openInformation(window.getShell(), "TRYST Server Health",
+                                    "TRYST Server: " + (state != null ? state.health().name() : "UNKNOWN")
+                                            + (detail.isBlank() ? "" : "\n\n" + detail)));
+                    boolean running = coord.isHttpServerRunning();
+                    boolean disabled = "DISABLED".equals(coord.webServerState());
+                    addPushItem(menu, "Start Web Server", !running && !disabled,
+                            () -> runServerOperation(window, "start", coord::startHttpServer));
+                    addPushItem(menu, "Stop Web Server", running,
+                            () -> runServerOperation(window, "stop", coord::stopHttpService));
+                    addPushItem(menu, "Restart Web Server", running,
+                            () -> runServerOperation(window, "restart", coord::restartHttpService));
+                    addPushItem(menu, "Open Server Monitoring",
+                            () -> switchEditorPage(window, "eu.kalafatic.tryst.ui.editor.page.serverMonitoring"));
+                }
+                case HARNESS -> {
+                    addPushItem(menu, "Health Details", () -> showHarnessHealth(window, coord));
+                    addPushItem(menu, "Re-check Connection",
+                            () -> refreshEnvironment(window, monitor));
+                    addPushItem(menu, "Environment Details & Recovery...",
+                            () -> new EnvironmentStatusDialog(window.getShell()).open());
+                    addPushItem(menu, "Harness Configuration (TEIP)",
+                            () -> switchEditorPage(window, "eu.kalafatic.tryst.ui.editor.page.teip"));
+                }
+                case PROVIDER -> {
+                    addPushItem(menu, "Health Details", () -> showProviderHealth(window, coord));
+                    addPushItem(menu, "Re-check Connection",
+                            () -> refreshEnvironment(window, monitor));
+                    addPushItem(menu, "Refresh Models", () -> refreshProviderModels(window, coord));
+                    addPushItem(menu, "Environment Details & Recovery...",
+                            () -> new EnvironmentStatusDialog(window.getShell()).open());
+                    addPushItem(menu, "Open AI Integration",
+                            () -> switchEditorPage(window, "eu.kalafatic.tryst.ui.editor.page.aiIntegration"));
+                }
+                case MODEL -> {
+                    addPushItem(menu, "Model Details", () -> showModelDetails(window, coord));
+                    addPushItem(menu, "Refresh Availability",
+                            () -> refreshProviderModels(window, coord));
+                    addPushItem(menu, "Environment Details & Recovery...",
+                            () -> new EnvironmentStatusDialog(window.getShell()).open());
+                    addPushItem(menu, "Open AI Integration",
+                            () -> switchEditorPage(window, "eu.kalafatic.tryst.ui.editor.page.aiIntegration"));
+                }
+                default -> {}
+            }
+        }
+
+        private void showHarnessHealth(IWorkbenchWindow window, ApplicationLifecycleCoordinator coord) {
+            var registry = coord.getConnectedApplicationRegistry();
+            if (registry == null) {
+                MessageDialog.openWarning(window.getShell(), "Harness Health", "Connected application registry is unavailable.");
+                return;
+            }
+            var adapterOpt = registry.findSelectedAdapter();
+            if (adapterOpt.isEmpty()) {
+                MessageDialog.openInformation(window.getShell(), "Harness Health",
+                        "No coding harness is selected.\nTasks execute through the built-in local agent.");
+                return;
+            }
+            var adapter = adapterOpt.get();
+            MessageDialog.openInformation(window.getShell(), "Harness Health",
+                    "Selected harness: " + adapter.getApplicationName() + " (" + adapter.getApplicationId() + ")\n\n"
+                            + "Running connection test...");
+            Thread.ofVirtual().start(() -> {
+                var result = adapter.testConnection();
+                window.getShell().getDisplay().asyncExec(() -> {
+                    if (window.getShell() == null || window.getShell().isDisposed()) {
+                        return;
+                    }
+                    MessageDialog.openInformation(window.getShell(), "Harness Health — " + adapter.getApplicationName(),
+                            "Connection test: " + (result.success() ? "OK" : "FAILED") + "\n\n" + result.message());
+                });
+            });
+        }
+
+        private void showProviderHealth(IWorkbenchWindow window, ApplicationLifecycleCoordinator coord) {
+            var registry = coord.getAiProviderRegistry();
+            if (registry == null) {
+                MessageDialog.openWarning(window.getShell(), "Provider Health", "Provider registry is unavailable.");
+                return;
+            }
+            var defaultId = registry.getDefaultProviderId();
+            if (defaultId.isEmpty()) {
+                MessageDialog.openWarning(window.getShell(), "Provider Health", "No default inference provider is configured.");
+                return;
+            }
+            String providerId = defaultId.get();
+            Thread.ofVirtual().start(() -> {
+                var status = registry.testConnection(providerId);
+                window.getShell().getDisplay().asyncExec(() -> {
+                    if (window.getShell() == null || window.getShell().isDisposed()) {
+                        return;
+                    }
+                    MessageDialog.openInformation(window.getShell(), "Provider Health — " + providerId,
+                            "Connection test: " + (status.success() ? "OK" : "FAILED") + "\n\n" + status.message());
+                });
+            });
+        }
+
+        private void showModelDetails(IWorkbenchWindow window, ApplicationLifecycleCoordinator coord) {
+            var registry = coord.getAiModelRegistryService();
+            if (registry == null) {
+                MessageDialog.openWarning(window.getShell(), "Model Details", "Model registry is unavailable.");
+                return;
+            }
+            String defaultModel = registry.getDefaultModel();
+            var available = registry.getAllModels().stream()
+                    .filter(m -> m.available() && defaultModel != null && defaultModel.equals(m.modelIdentifier()))
+                    .findFirst();
+            MessageDialog.openInformation(window.getShell(), "Model Details",
+                    "Selected model: " + (defaultModel != null && !defaultModel.isBlank() ? defaultModel : "(none selected)")
+                            + "\nAvailability: " + (available.isPresent() ? "AVAILABLE via provider " + available.get().providerId() : "NOT AVAILABLE")
+                            + "\nPublished models in catalog: " + registry.getAllModels().size());
+        }
+
+        private void refreshProviderModels(IWorkbenchWindow window, ApplicationLifecycleCoordinator coord) {
+            var providerRegistry = coord.getAiProviderRegistry();
+            if (providerRegistry == null) {
+                MessageDialog.openWarning(window.getShell(), "Model Refresh", "Provider registry is unavailable.");
+                return;
+            }
+            var defaultId = providerRegistry.getDefaultProviderId();
+            if (defaultId.isEmpty()) {
+                MessageDialog.openWarning(window.getShell(), "Model Refresh", "No default inference provider is configured.");
+                return;
+            }
+            Thread.ofVirtual().start(() -> {
+                String message;
+                try {
+                    providerRegistry.discoverModels(defaultId.get()).join();
+                    message = "Model catalog refreshed from provider " + defaultId.get() + ".";
+                } catch (Exception e) {
+                    message = "Model catalog refresh failed: " + e.getMessage();
+                }
+                String finalMessage = message;
+                window.getShell().getDisplay().asyncExec(() -> {
+                    if (window.getShell() == null || window.getShell().isDisposed()) {
+                        return;
+                    }
+                    MessageDialog.openInformation(window.getShell(), "Model Refresh", finalMessage);
+                    ExecutionEnvironmentMonitor monitor = coord.getExecutionEnvironmentMonitor();
+                    if (monitor != null) {
+                        Thread.ofVirtual().start(monitor::refreshNow);
+                    }
+                });
+            });
+        }
+
+        private void refreshEnvironment(IWorkbenchWindow window, ExecutionEnvironmentMonitor monitor) {
+            Thread.ofVirtual().start(() -> {
+                try {
+                    monitor.refreshWithModelDiscovery();
+                } catch (Exception e) {
+                    TrystLog.warn(ApplicationActionBarAdvisor.class,
+                            "Explicit environment refresh failed: " + e.getMessage());
+                }
+                var snapshot = monitor.getSnapshot();
+                window.getShell().getDisplay().asyncExec(() -> {
+                    if (window.getShell() == null || window.getShell().isDisposed()) {
+                        return;
+                    }
+                    MessageDialog.openInformation(window.getShell(), "Environment Status",
+                            snapshot.ready()
+                                    ? "Execution environment: READY."
+                                    : "Execution environment: NOT READY.\n\n" + String.join("\n", snapshot.problems()));
+                });
+            });
+        }
+
+        private void addPushItem(Menu menu, String text, Runnable action) {
+            addPushItem(menu, text, true, action);
+        }
+
+        private void addPushItem(Menu menu, String text, boolean enabled, Runnable action) {
+            MenuItem item = new MenuItem(menu, SWT.PUSH);
+            item.setText(text);
+            item.setEnabled(enabled);
+            item.addSelectionListener(new org.eclipse.swt.events.SelectionAdapter() {
+                @Override
+                public void widgetSelected(org.eclipse.swt.events.SelectionEvent e) {
+                    try {
+                        action.run();
+                    } catch (Exception ex) {
+                        TrystLog.warn(ApplicationActionBarAdvisor.class,
+                                "Environment menu action failed: " + ex.getMessage());
+                    }
+                }
+            });
+        }
+
+        private void runServerOperation(IWorkbenchWindow window, String operation, EnvOperation body) {
+            try {
+                body.run();
+            } catch (Exception e) {
+                MessageDialog.openError(window.getShell(),
+                        "Web Server " + operation + " failed", e.getMessage());
+            }
+        }
+
+        private interface EnvOperation {
+            void run() throws Exception;
+        }
+
+        private static String glyphFor(ExecutionEnvironmentMonitor.Health health) {
+            if (health == null) {
+                return GLYPH_GRAY;
+            }
+            return switch (health) {
+                case OPERATIONAL -> GLYPH_GREEN;
+                case DEGRADED, STARTING -> GLYPH_ORANGE;
+                case UNAVAILABLE -> GLYPH_RED;
+                default -> GLYPH_GRAY;
+            };
         }
     }
 }

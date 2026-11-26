@@ -7,6 +7,11 @@ package eu.kalafatic.tryst.domain.model;
  * BUILDING, TESTING, WAITING_FOR_REVIEW, REWORK_REQUESTED, REWORKING,
  * APPROVED, REJECTED, COMMITTING, COMPLETED, FAILED, CANCELLED, RECOVERY_REQUIRED.
  * (Also maintains PLANNED, READY, WAITING_FOR_APPROVAL, RUNNING for backward compatibility).
+ *
+ * <p>{@link #BLOCKED} marks a persisted task whose execution cannot start because the
+ * execution environment (server, coding harness, inference provider or selected model)
+ * is not ready. Blocked tasks are parked outside the execution queue and are released
+ * automatically (BLOCKED -> QUEUED) when the environment is restored.</p>
  */
 public enum TaskStatus {
     CREATED,
@@ -14,6 +19,7 @@ public enum TaskStatus {
     READY,
     QUEUED,
     CLAIMED,
+    BLOCKED,
     RUNNING,
     CLONING,
     ANALYZING,
@@ -56,5 +62,13 @@ public enum TaskStatus {
      */
     public boolean requiresRecoveryOnRestart() {
         return isActive() || this == QUEUED;
+    }
+
+    /**
+     * Checks if this state represents a task parked outside the execution queue because
+     * the execution environment is unavailable.
+     */
+    public boolean isBlocked() {
+        return this == BLOCKED;
     }
 }

@@ -102,4 +102,43 @@ public class TaskLifecycleTransitionTest {
         assertFalse(TaskStateTransitionValidator.isValidTransition(TaskStatus.COMPLETED, TaskStatus.RUNNING));
         assertFalse(TaskStateTransitionValidator.isValidTransition(TaskStatus.FAILED, TaskStatus.QUEUED));
     }
+
+    @Test
+    public void testBlockedLifecycle() {
+        Task task = new Task("Blocked Task", "Environment blocking flow");
+
+        // Incoming task is accepted, then blocked when the environment is unavailable.
+        task.transitionTo(TaskStatus.BLOCKED, "Execution environment not ready");
+        assertEquals(TaskStatus.BLOCKED, task.getStatus());
+        assertTrue(task.getStatus().isBlocked());
+        assertFalse(task.getStatus().isTerminal());
+        assertFalse(task.getStatus().isActive());
+        assertFalse(task.getStatus().requiresRecoveryOnRestart());
+
+        // Recovery releases the task back into the queue.
+        task.transitionTo(TaskStatus.QUEUED);
+        assertEquals(TaskStatus.QUEUED, task.getStatus());
+
+        // A queued task can be parked as BLOCKED when the environment degrades.
+        task.transitionTo(TaskStatus.BLOCKED);
+        assertEquals(TaskStatus.BLOCKED, task.getStatus());
+
+        // A blocked task can be cancelled by explicit operator action.
+        task.transitionTo(TaskStatus.CANCELLED);
+        assertTrue(task.getStatus().isTerminal());
+    }
+
+    @Test
+    public void testBlockedTransitionsValidated() {
+        assertTrue(TaskStateTransitionValidator.isValidTransition(TaskStatus.CREATED, TaskStatus.BLOCKED));
+        assertTrue(TaskStateTransitionValidator.isValidTransition(TaskStatus.QUEUED, TaskStatus.BLOCKED));
+        assertTrue(TaskStateTransitionValidator.isValidTransition(TaskStatus.BLOCKED, TaskStatus.QUEUED));
+        assertTrue(TaskStateTransitionValidator.isValidTransition(TaskStatus.BLOCKED, TaskStatus.CANCELLED));
+        assertTrue(TaskStateTransitionValidator.isValidTransition(TaskStatus.BLOCKED, TaskStatus.FAILED));
+
+        // Blocked tasks never jump straight into execution.
+        assertFalse(TaskStateTransitionValidator.isValidTransition(TaskStatus.BLOCKED, TaskStatus.RUNNING));
+        assertFalse(TaskStateTransitionValidator.isValidTransition(TaskStatus.BLOCKED, TaskStatus.COMPLETED));
+        assertFalse(TaskStateTransitionValidator.isValidTransition(TaskStatus.COMPLETED, TaskStatus.BLOCKED));
+    }
 }

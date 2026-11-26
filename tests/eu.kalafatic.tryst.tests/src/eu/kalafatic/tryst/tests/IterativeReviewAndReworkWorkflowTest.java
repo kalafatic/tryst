@@ -187,6 +187,7 @@ public class IterativeReviewAndReworkWorkflowTest {
                 taskQueue, taskRepository, lifecycleManager, workspaceService, projectRepository,
                 null, new PermissionManager(), null, null, null, null, reviewRepository, null, 2
         );
+        TestAiFakes.configureModelSelection(taskOrchestrator, "test-model");
         taskOrchestrator.setNotificationService(notificationService);
 
         server = new TrystHttpServer("127.0.0.1", 0, workspaceService, projectRepository, taskRepository, reviewRepository, null, null, new PermissionManager());

@@ -5,16 +5,21 @@ import eu.kalafatic.tryst.core.event.ApplicationEvents;
 import eu.kalafatic.tryst.core.event.EventBus;
 import eu.kalafatic.tryst.core.log.TrystLog;
 import eu.kalafatic.tryst.domain.ai.*;
+import eu.kalafatic.tryst.domain.env.EnvironmentEvents;
+import eu.kalafatic.tryst.domain.env.ExecutionEnvironmentMonitor;
 import eu.kalafatic.tryst.domain.model.Project;
 import eu.kalafatic.tryst.domain.model.Task;
 import eu.kalafatic.tryst.domain.model.TaskPriority;
 import eu.kalafatic.tryst.domain.model.TaskStatus;
+import eu.kalafatic.tryst.domain.model.User;
+import eu.kalafatic.tryst.domain.model.UserRole;
 import eu.kalafatic.tryst.domain.model.Workspace;
 import eu.kalafatic.tryst.domain.repository.CodeReviewRepository;
 import eu.kalafatic.tryst.domain.repository.ConversationMessageRepository;
 import eu.kalafatic.tryst.domain.repository.ExecutionResultRepository;
 import eu.kalafatic.tryst.domain.repository.ProjectRepository;
 import eu.kalafatic.tryst.domain.repository.TaskRepository;
+import eu.kalafatic.tryst.domain.repository.UserRepository;
 import eu.kalafatic.tryst.domain.review.CodeReviewService;
 import eu.kalafatic.tryst.domain.security.PermissionManager;
 import eu.kalafatic.tryst.domain.tool.ToolRegistry;
@@ -30,6 +35,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 
 /**
  * Central Task Orchestrator managing persistent task execution,
@@ -49,6 +55,8 @@ public class TaskOrchestrator {
     private final AiContextManager aiContextManager;
     private ModelSelectionService modelSelectionService;
     private eu.kalafatic.tryst.domain.ai.ModelRegistry modelRegistry;
+    private eu.kalafatic.tryst.domain.ai.ExecutionConfigurationService executionConfigurationService;
+    private eu.kalafatic.tryst.domain.ai.AiProviderRegistry aiProviderRegistry;
     private final PromptContextBuilder promptContextBuilder;
     private final TaskAnalyzer taskAnalyzer;
     private final ImplementationPlanner implementationPlanner;
@@ -66,6 +74,10 @@ public class TaskOrchestrator {
     private eu.kalafatic.tryst.domain.ai.ExternalAiDelegator externalAiDelegator;
     private eu.kalafatic.tryst.domain.studio.StudioService studioService;
     private EventBus eventBus;
+    private ExecutionEnvironmentMonitor executionEnvironmentMonitor;
+    private UserRepository userRepository;
+    private Consumer<EnvironmentEvents.ReadinessChangedEvent> environmentReadinessListener;
+    private volatile Boolean environmentLastReady = null;
 
     private final int concurrency;
     private final ExecutorService workerExecutor;
@@ -233,6 +245,15 @@ public class TaskOrchestrator {
         }
 
         taskRepository.saveTask(task);
+
+        // Execution-environment readiness gate: the task is accepted and persisted even
+        // when the environment is unavailable, but it must not be enqueued for execution
+        // until all required components are ready.
+        if (executionEnvironmentMonitor != null && !executionEnvironmentMonitor.isReady()) {
+            blockTaskForEnvironment(task, userId, executionEnvironmentMonitor.getSnapshot());
+            return task;
+        }
+
         taskQueue.enqueue(task);
 
         TrystLog.info(TaskOrchestrator.class,
@@ -267,11 +288,278 @@ public class TaskOrchestrator {
     }
 
     /**
+     * Parks an accepted, persisted task in {@link TaskStatus#BLOCKED} because the
+     * execution environment is not ready. The submitting user is informed immediately;
+     * the server administrator receives one notification per readiness episode
+     * (deduplicated through the notification dedup key).
+     */
+    private void blockTaskForEnvironment(Task task, String userId,
+                                         ExecutionEnvironmentMonitor.EnvironmentSnapshot snapshot) {
+        String reason = snapshot.readyMessage();
+        lifecycleManager.transition(task, TaskStatus.BLOCKED,
+                "Blocked: execution environment not ready", reason);
+        task.setFailureReason(reason);
+        lifecycleManager.persist(task);
+
+        String problemList = formatProblemList(snapshot.problems());
+
+        TrystLog.info(TaskOrchestrator.class,
+                "Task blocked (execution environment not ready): [" + task.getId() + "] "
+                        + task.getTitle() + " reason=" + reason);
+
+        if (eventBus != null) {
+            eventBus.publish(new ApplicationEvents.TaskAddedEvent(
+                    task.getId(), task.getProjectId(), task.getTitle(), task.getDescription()));
+            eventBus.publish(new EnvironmentEvents.TaskBlockedEvent(
+                    task.getId(), task.getTitle(), reason, snapshot.problems(), snapshot.episodeKey()));
+        }
+
+        if (notificationService != null && userId != null && !userId.isBlank()) {
+            notificationService.notifyUser(
+                    userId,
+                    "TASK_BLOCKED",
+                    "Task accepted — execution delayed: " + task.getTitle(),
+                    "Your request was successfully received and stored by TRYST.\n"
+                            + "Execution cannot currently start because the server environment is unavailable:\n"
+                            + problemList
+                            + "\nThe server administrator has been notified.\n"
+                            + "Your task remains safely queued and will become eligible for execution once the environment is restored.",
+                    "task",
+                    task.getId(),
+                    userId + ":TASK_BLOCKED:" + task.getId() + ":" + snapshot.episodeKey()
+            );
+        }
+
+        notifyAdministrators("TASK_BLOCKED", "Task delayed — execution environment not ready",
+                "A new task \"" + task.getTitle() + "\" (id " + task.getId()
+                        + ") has arrived, but execution cannot start.\n\nMissing dependency:\n"
+                        + problemList
+                        + "\nThe task remains safely queued and will start automatically once the environment is restored.",
+                "task", task.getId(), snapshot.episodeKey());
+
+        // Notify dispatcher (it will not claim while the environment is unavailable)
+        synchronized (this) {
+            notifyAll();
+        }
+    }
+
+    /**
+     * Called by the EventBus when execution readiness changes. On recovery every blocked
+     * task is released back into the queue in FIFO order and its submitting user is
+     * notified; on degradation tasks still waiting in the queue are parked as BLOCKED so
+     * the Navigator and Dashboard show the real state. Administrators receive one
+     * notification per degradation episode and one per restoration.
+     */
+    private void onEnvironmentReadinessChanged(EnvironmentEvents.ReadinessChangedEvent event) {
+        Boolean previous = environmentLastReady;
+        environmentLastReady = event.ready();
+        if (event.ready()) {
+            releaseBlockedTasks();
+            // Notify administrators only on a genuine recovery (known-unready -> ready),
+            // not on the startup assessment that follows an application restart.
+            if (Boolean.FALSE.equals(previous)) {
+                notifyAdministrators("ENV_RESTORED",
+                        "Execution environment restored",
+                        "The TRYST execution environment has been restored.\n"
+                                + "Eligible blocked tasks have been released and execution is starting.",
+                        "environment", null, "READY:" + event.eventId());
+            }
+        } else {
+            blockQueuedTasks(event.problems());
+            String problemList = formatProblemList(event.problems());
+            notifyAdministrators("ENV_DEGRADED",
+                    "Execution environment unavailable",
+                    "The TRYST execution environment is no longer ready:\n"
+                            + problemList
+                            + "\nNew tasks will be safely queued (BLOCKED) until the environment is restored.",
+                    "environment", null, event.episodeKey());
+        }
+    }
+
+    /**
+     * Releases every BLOCKED task back into the execution queue (FIFO order) and informs
+     * the submitting users that the environment has been restored. Safe to call multiple
+     * times: tasks already released are not re-notified.
+     */
+    public int releaseBlockedTasks() {
+        List<Task> blocked = taskRepository.findTasksByTaskStatus(TaskStatus.BLOCKED);
+        int released = 0;
+        for (Task task : blocked) {
+            try {
+                lifecycleManager.transition(task, TaskStatus.QUEUED,
+                        "Execution environment restored; task released for execution", null);
+                taskQueue.enqueue(task);
+                released++;
+                TrystLog.info(TaskOrchestrator.class,
+                        "Task released after environment recovery: [" + task.getId() + "] " + task.getTitle());
+                if (notificationService != null) {
+                    String ownerId = resolveTaskOwner(task);
+                    if (ownerId != null) {
+                        notificationService.notifyUser(
+                                ownerId,
+                                "TASK_RELEASED",
+                                "Execution environment restored — task is starting: " + task.getTitle(),
+                                "The TRYST execution environment has been restored. "
+                                        + "Your task \"" + task.getTitle() + "\" has been released from the blocked queue and is starting.",
+                                "task",
+                                task.getId(),
+                                ownerId + ":TASK_RELEASED:" + task.getId()
+                        );
+                    }
+                }
+            } catch (Exception e) {
+                TrystLog.error(TaskOrchestrator.class,
+                        "Failed to release blocked task " + task.getId() + ": " + e.getMessage(), e);
+            }
+        }
+        if (released > 0) {
+            TrystLog.info(TaskOrchestrator.class,
+                    "Execution environment restored: released " + released + " blocked task(s)");
+            synchronized (this) {
+                notifyAll();
+            }
+        }
+        return released;
+    }
+
+    /**
+     * Parks queued (not yet claimed) tasks as BLOCKED when the execution environment
+     * degrades, preserving queue order for the later release.
+     */
+    public int blockQueuedTasks(List<String> problems) {
+        if (taskRepository == null) {
+            return 0;
+        }
+        String reason = problems == null || problems.isEmpty()
+                ? "Execution environment became unavailable."
+                : "Execution environment became unavailable: " + String.join(" ", problems);
+        List<Task> queued = taskRepository.findTasksByTaskStatus(TaskStatus.QUEUED);
+        int blocked = 0;
+        for (Task task : queued) {
+            try {
+                lifecycleManager.transition(task, TaskStatus.BLOCKED,
+                        "Blocked: execution environment not ready", reason);
+                task.setFailureReason(reason);
+                lifecycleManager.persist(task);
+                blocked++;
+                TrystLog.info(TaskOrchestrator.class,
+                        "Task parked as BLOCKED (environment degraded): [" + task.getId() + "] " + task.getTitle());
+                if (notificationService != null) {
+                    String ownerId = resolveTaskOwner(task);
+                    if (ownerId != null) {
+                        notificationService.notifyUser(
+                                ownerId,
+                                "TASK_BLOCKED",
+                                "Task delayed — execution environment unavailable: " + task.getTitle(),
+                                "Execution of your task \"" + task.getTitle()
+                                        + "\" cannot continue because the server environment became unavailable:\n"
+                                        + formatProblemList(problems)
+                                        + "\nThe server administrator has been notified. Your task remains safely queued "
+                                        + "and will start once the environment is restored.",
+                                "task",
+                                task.getId(),
+                                ownerId + ":TASK_BLOCKED:" + task.getId()
+                        );
+                    }
+                }
+            } catch (Exception e) {
+                TrystLog.error(TaskOrchestrator.class,
+                        "Failed to park queued task " + task.getId() + " as BLOCKED: " + e.getMessage(), e);
+            }
+        }
+        if (blocked > 0) {
+            TrystLog.info(TaskOrchestrator.class,
+                    "Execution environment degraded: parked " + blocked + " queued task(s) as BLOCKED");
+        }
+        return blocked;
+    }
+
+    /**
+     * Resolves the best-effort owner id for a task (project owner, otherwise the default
+     * dev user id). Returns {@code null} when no owner can be determined.
+     */
+    private String resolveTaskOwner(Task task) {
+        if (task.getProjectId() != null && projectRepository != null) {
+            try {
+                Optional<Project> project = projectRepository.findById(task.getProjectId());
+                if (project.isPresent() && project.get().getOwnerId() != null
+                        && !project.get().getOwnerId().isBlank()) {
+                    return project.get().getOwnerId();
+                }
+            } catch (Exception ignored) {}
+        }
+        if (eu.kalafatic.tryst.core.config.ApplicationConfiguration.isDevelopmentMode()) {
+            return eu.kalafatic.tryst.domain.security.SecurityContext.DEV.user().getId();
+        }
+        return "default-user";
+    }
+
+    /**
+     * Sends one notification per readiness episode to every administrator account
+     * (deduplicated through the shared dedup key). Never notifies the same episode twice.
+     */
+    private void notifyAdministrators(String type, String title, String message,
+                                      String refType, String refId, String episodeKey) {
+        if (notificationService == null || userRepository == null) {
+            TrystLog.warn(TaskOrchestrator.class,
+                    "Administrator notification skipped (notification service or user repository unavailable)");
+            return;
+        }
+        List<User> admins;
+        try {
+            admins = userRepository.findAll().stream()
+                    .filter(u -> u.getRole() == UserRole.ADMIN)
+                    .toList();
+        } catch (Exception e) {
+            TrystLog.warn(TaskOrchestrator.class,
+                    "Could not resolve administrator accounts: " + e.getMessage());
+            return;
+        }
+        if (admins.isEmpty()) {
+            TrystLog.info(TaskOrchestrator.class,
+                    "No administrator account configured; environment blocking notification logged only");
+            return;
+        }
+        String dedupKey = "admin:" + type + ":" + episodeKey;
+        for (User admin : admins) {
+            notificationService.notifyUser(
+                    admin.getId(),
+                    type,
+                    title,
+                    message,
+                    refType,
+                    refId,
+                    dedupKey
+            );
+        }
+        TrystLog.info(TaskOrchestrator.class,
+                "Administrators notified: " + admins.size() + " recipient(s), episode=" + episodeKey);
+    }
+
+    private static String formatProblemList(List<String> problems) {
+        if (problems == null || problems.isEmpty()) {
+            return "  - Execution environment is not ready.";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (String p : problems) {
+            sb.append("  - ").append(p).append("\n");
+        }
+        return sb.toString();
+    }
+
+    /**
      * Explicitly triggers one round of task claiming and execution.
      * Useful for synchronous execution in tests or on demand.
      */
     public boolean processNextTask() {
         if (!running.get()) {
+            return false;
+        }
+
+        // Execution-environment gate: never claim work while the environment is not
+        // ready. Blocked tasks are parked outside the queue; this guard additionally
+        // protects tasks that were queued while the environment was ready.
+        if (executionEnvironmentMonitor != null && !executionEnvironmentMonitor.isReady()) {
             return false;
         }
 
@@ -315,6 +603,34 @@ public class TaskOrchestrator {
         task.incrementReworkCount();
         task.transitionTo(TaskStatus.QUEUED);
         taskRepository.saveTask(task);
+
+        // Execution-environment gate for rework: a task requested for rework while the
+        // environment is unavailable is parked as BLOCKED instead of being enqueued.
+        if (executionEnvironmentMonitor != null && !executionEnvironmentMonitor.isReady()) {
+            var snapshot = executionEnvironmentMonitor.getSnapshot();
+            lifecycleManager.transition(task, TaskStatus.BLOCKED,
+                    "Blocked: execution environment not ready", snapshot.readyMessage());
+            task.setFailureReason(snapshot.readyMessage());
+            lifecycleManager.persist(task);
+            if (notificationService != null && userId != null && !userId.isBlank()) {
+                notificationService.notifyUser(
+                        userId,
+                        "TASK_BLOCKED",
+                        "Task delayed — execution environment unavailable: " + task.getTitle(),
+                        "Your task \"" + task.getTitle() + "\" was accepted for rework, but execution "
+                                + "cannot start because the server environment is unavailable.\n"
+                                + formatProblemList(snapshot.problems())
+                                + "It will start automatically once the environment is restored.",
+                        "task",
+                        task.getId(),
+                        userId + ":TASK_BLOCKED:" + task.getId() + ":" + snapshot.episodeKey()
+                );
+            }
+            synchronized (this) {
+                notifyAll();
+            }
+            return true;
+        }
 
         taskQueue.enqueue(task);
         TrystLog.info(TaskOrchestrator.class, "Task " + taskId + " queued for rework: " + reason);
@@ -544,6 +860,34 @@ public class TaskOrchestrator {
 
     public void setEventBus(EventBus eventBus) {
         this.eventBus = eventBus;
+        if (eventBus != null) {
+            // Subscribe to readiness changes so blocked tasks are released the moment the
+            // environment recovers, and queued tasks are parked when it degrades.
+            this.environmentReadinessListener = this::onEnvironmentReadinessChanged;
+            eventBus.subscribe(EnvironmentEvents.ReadinessChangedEvent.class, environmentReadinessListener);
+        }
+    }
+
+    /**
+     * Wires the authoritative execution environment monitor. When wired, incoming tasks
+     * are blocked (not enqueued) while the environment is not ready, the dispatcher
+     * refrains from claiming tasks while the environment is unavailable, and blocked
+     * tasks are released automatically when readiness is restored.
+     */
+    public void setExecutionEnvironmentMonitor(ExecutionEnvironmentMonitor executionEnvironmentMonitor) {
+        this.executionEnvironmentMonitor = executionEnvironmentMonitor;
+    }
+
+    public ExecutionEnvironmentMonitor getExecutionEnvironmentMonitor() {
+        return executionEnvironmentMonitor;
+    }
+
+    /**
+     * Wires the user repository used to resolve administrator accounts for
+     * execution-environment blocking notifications.
+     */
+    public void setUserRepository(UserRepository userRepository) {
+        this.userRepository = userRepository;
     }
 
     public void setNotificationService(NotificationService notificationService) {
@@ -565,8 +909,32 @@ public class TaskOrchestrator {
     public void setModelRegistry(eu.kalafatic.tryst.domain.ai.ModelRegistry registry) {
         if (registry != null) {
             this.modelRegistry = registry;
-            this.modelSelectionService = new ModelSelectionService(registry);
+            rebuildModelSelectionService();
         }
+    }
+
+    /**
+     * Wires the unified execution-configuration service (GLOBAL → PROJECT → TASK) so
+     * task model resolution follows the single authoritative configuration chain.
+     */
+    public void setExecutionConfigurationService(
+            eu.kalafatic.tryst.domain.ai.ExecutionConfigurationService executionConfigurationService) {
+        this.executionConfigurationService = executionConfigurationService;
+        rebuildModelSelectionService();
+    }
+
+    /**
+     * Wires the provider registry so the provider default model is the last permitted
+     * fallback level (never an implicit hardcoded model).
+     */
+    public void setAiProviderRegistry(eu.kalafatic.tryst.domain.ai.AiProviderRegistry aiProviderRegistry) {
+        this.aiProviderRegistry = aiProviderRegistry;
+        rebuildModelSelectionService();
+    }
+
+    private void rebuildModelSelectionService() {
+        this.modelSelectionService = new eu.kalafatic.tryst.domain.ai.ModelSelectionService(
+                this.modelRegistry, this.executionConfigurationService, this.aiProviderRegistry);
     }
 
     public eu.kalafatic.tryst.domain.ai.ModelRegistry getModelRegistry() {
@@ -684,6 +1052,30 @@ public class TaskOrchestrator {
 
         String userId = project != null ? project.getOwnerId() : "default-user";
         String resolvedModel = modelSelectionService.selectModel(task, null, eu.kalafatic.tryst.domain.model.UserRole.USER);
+        if (resolvedModel == null || resolvedModel.isBlank()) {
+            // Single-source-of-truth contract: when no model is selected, the task fails
+            // with an explicit configuration error. Never substitute a hardcoded model.
+            String message = "No AI model is selected for execution. Configure the execution "
+                    + "environment (AI Environment page: provider + model) and re-submit the task.";
+            lifecycleManager.transition(task, TaskStatus.FAILED, "Configuration error: no model selected", message);
+            task.setFailureReason(message);
+            lifecycleManager.persist(task);
+            if (notificationService != null && userId != null && !userId.isBlank()) {
+                notificationService.notifyUser(
+                        userId,
+                        eu.kalafatic.tryst.domain.model.NotificationType.TASK_FAILED.name(),
+                        "Task Failed — no AI model selected: " + task.getTitle(),
+                        "Task " + task.getId() + " cannot execute because no AI model is selected. "
+                                + "Configure the execution environment (provider and model) and re-submit the task.",
+                        "task",
+                        task.getId(),
+                        userId + ":TASK_FAILED:NO_MODEL:" + task.getId()
+                );
+            }
+            TrystLog.error(TaskOrchestrator.class,
+                    "Task " + task.getId() + " failed: no AI model selected (execution configuration unresolved)");
+            return;
+        }
         TaskExecutionContext context = new TaskExecutionContext(task, project, workspace, userId, workerId, resolvedModel);
         activeContexts.put(task.getId(), context);
 

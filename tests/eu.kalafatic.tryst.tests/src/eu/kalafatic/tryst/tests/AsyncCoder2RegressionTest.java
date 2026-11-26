@@ -98,6 +98,7 @@ class AsyncCoder2RegressionTest {
                 executionResultRepository, codeReviewRepository,
                 new eu.kalafatic.tryst.domain.review.CodeReviewService(), concurrency
         );
+        TestAiFakes.configureModelSelection(o, "test-model");
         o.setTaskRecoveryService(new TaskRecoveryService(taskRepository, lifecycleManager));
         o.setTaskInstructionRepository(taskInstructionRepository);
         return o;
@@ -316,6 +317,7 @@ class AsyncCoder2RegressionTest {
                 new ToolRegistry(), permissionManager, slowAi, null, null, null,
                 null, null, 1
         );
+        TestAiFakes.configureModelSelection(orchestrator, "test-model");
         orchestrator.setTaskRecoveryService(new TaskRecoveryService(taskRepository, lifecycleManager));
         orchestrator.setTaskInstructionRepository(taskInstructionRepository);
         orchestrator.start();

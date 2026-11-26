@@ -74,6 +74,7 @@ class TaskIntakeAndVoiceWorkflowTest {
                 taskQueue, taskRepository, lifecycleManager, workspaceService, projectRepository,
                 null, new PermissionManager(), null, null, null, null, null, null, 2
         );
+        TestAiFakes.configureModelSelection(orchestrator, "test-model");
         orchestrator.setTaskInstructionRepository(instructionRepository);
 
         intakeService = new DefaultTaskIntakeService(

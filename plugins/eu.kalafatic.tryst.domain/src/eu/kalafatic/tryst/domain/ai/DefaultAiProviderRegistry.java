@@ -113,6 +113,16 @@ public class DefaultAiProviderRegistry implements AiProviderRegistry {
     }
 
     @Override
+    public synchronized void updateDefaultModel(String id, String modelId) {
+        AiProviderDescriptor descriptor = repository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Unknown provider: " + id));
+        repository.save(new AiProviderDescriptor(descriptor.id(), descriptor.name(),
+                descriptor.type(), descriptor.endpoint(), descriptor.enabled(),
+                modelId == null ? "" : modelId.trim(),
+                descriptor.configuration(), descriptor.createdAt(), Instant.now()));
+    }
+
+    @Override
     public Optional<String> getDefaultProviderId() {
         return repository.findDefaultProviderId();
     }

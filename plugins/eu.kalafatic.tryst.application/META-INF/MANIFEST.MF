@@ -28,6 +28,7 @@ Import-Package: org.eclipse.core.commands,
  org.eclipse.ui.services,
  org.osgi.util.tracker
 Export-Package: eu.kalafatic.tryst.application,
+ eu.kalafatic.tryst.application.env,
  eu.kalafatic.tryst.application.http,
  eu.kalafatic.tryst.application.launcher,
  eu.kalafatic.tryst.application.lifecycle

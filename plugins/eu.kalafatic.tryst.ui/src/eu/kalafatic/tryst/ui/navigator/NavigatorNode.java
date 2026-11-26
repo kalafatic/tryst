@@ -16,6 +16,7 @@ public class NavigatorNode {
         TASK,
         TASK_QUEUE,
         TASK_RUNNING,
+        TASK_BLOCKED,
         TASK_PAUSED,
         TASK_ARCHIVED,
         TASK_COMPLETED,

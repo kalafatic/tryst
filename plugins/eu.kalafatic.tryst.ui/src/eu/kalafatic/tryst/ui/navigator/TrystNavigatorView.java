@@ -168,7 +168,7 @@ public class TrystNavigatorView extends ViewPart implements WorkspaceChangeListe
                     builder.branchName(branch);
                 }
             }
-            case TASK, TASK_RUNNING, TASK_COMPLETED, TASK_FAILED, TASK_CANCELLED -> {
+            case TASK, TASK_RUNNING, TASK_BLOCKED, TASK_COMPLETED, TASK_FAILED, TASK_CANCELLED -> {
                 if (node.getDomainObject() instanceof AgentTask task) {
                     builder.task(task);
                 } else if (node.getDomainObject() instanceof Task task) {
@@ -203,7 +203,7 @@ public class TrystNavigatorView extends ViewPart implements WorkspaceChangeListe
                 switch (node.getType()) {
                     case SERVER -> editor.selectPage(ServerMonitoringPage.ID);
                     case SESSION -> editor.selectPage(TaskManagementPage.ID);
-                    case TASK, TASK_RUNNING, TASK_COMPLETED, TASK_FAILED, TASK_CANCELLED -> {
+                    case TASK, TASK_RUNNING, TASK_BLOCKED, TASK_COMPLETED, TASK_FAILED, TASK_CANCELLED -> {
                         if (!editor.selectPage("eu.kalafatic.tryst.ui.editor.page.taskDetails")) {
                             editor.selectPage(TaskExecutionPage.ID);
                         }
@@ -381,7 +381,7 @@ public class TrystNavigatorView extends ViewPart implements WorkspaceChangeListe
                     });
                 }
             }
-            case TASK, TASK_QUEUE, TASK_RUNNING, TASK_PAUSED, TASK_ARCHIVED, TASK_COMPLETED, TASK_FAILED, TASK_CANCELLED -> {
+            case TASK, TASK_QUEUE, TASK_RUNNING, TASK_BLOCKED, TASK_PAUSED, TASK_ARCHIVED, TASK_COMPLETED, TASK_FAILED, TASK_CANCELLED -> {
                 String taskId = null;
                 TaskStatus tStatus = null;
                 if (node.getDomainObject() instanceof AgentTask task) {
@@ -390,6 +390,63 @@ public class TrystNavigatorView extends ViewPart implements WorkspaceChangeListe
                 } else if (node.getDomainObject() instanceof Task task) {
                     taskId = task.getId();
                     tStatus = task.getStatus();
+                }
+
+                if (tStatus == TaskStatus.BLOCKED) {
+                    manager.add(new Action("Show Block Reason") {
+                        @Override
+                        public void run() {
+                            String reason = "Execution environment is not ready.";
+                            if (node.getDomainObject() instanceof AgentTask task && task.getFailureReason() != null
+                                    && !task.getFailureReason().isBlank()) {
+                                reason = task.getFailureReason();
+                            } else if (node.getDomainObject() instanceof Task task && task.getFailureReason() != null
+                                    && !task.getFailureReason().isBlank()) {
+                                reason = task.getFailureReason();
+                            }
+                            MessageDialog.openInformation(getSite().getShell(), "Task Blocked", reason);
+                        }
+                    });
+                    manager.add(new Action("Environment Diagnostics...") {
+                        @Override
+                        public void run() {
+                            try {
+                                Class<?> dialogClass = Class.forName("eu.kalafatic.tryst.application.env.EnvironmentStatusDialog");
+                                var ctor = dialogClass.getConstructor(org.eclipse.swt.widgets.Shell.class);
+                                var dialog = ctor.newInstance(getSite().getShell());
+                                dialogClass.getMethod("open").invoke(dialog);
+                            } catch (Exception e) {
+                                TrystLog.warn(TrystNavigatorView.class,
+                                        "Could not open environment diagnostics: " + e.getMessage());
+                            }
+                        }
+                    });
+                    manager.add(new Action("Re-check Environment & Release") {
+                        @Override
+                        public void run() {
+                            var monitor = TrystUiServices.getExecutionEnvironmentMonitor();
+                            var orchestrator = TrystUiServices.getTaskOrchestrator();
+                            if (monitor == null || orchestrator == null) {
+                                MessageDialog.openWarning(getSite().getShell(), "Environment",
+                                        "Execution environment monitor or task orchestrator unavailable.");
+                                return;
+                            }
+                            Thread.ofVirtual().start(() -> {
+                                var snapshot = monitor.refreshWithModelDiscovery();
+                                int released = snapshot.ready() ? orchestrator.releaseBlockedTasks() : 0;
+                                getSite().getShell().getDisplay().asyncExec(() -> {
+                                    if (getSite().getShell() == null || getSite().getShell().isDisposed()) {
+                                        return;
+                                    }
+                                    MessageDialog.openInformation(getSite().getShell(), "Environment",
+                                            snapshot.ready()
+                                                    ? "Environment is ready. Released blocked tasks: " + released + "."
+                                                    : "Environment is still not ready:\n" + String.join("\n", snapshot.problems()));
+                                });
+                            });
+                        }
+                    });
+                    manager.add(new Separator());
                 }
 
                 if (taskId != null) {
@@ -899,6 +956,7 @@ public class TrystNavigatorView extends ViewPart implements WorkspaceChangeListe
 
         List<NavigatorNode> runningTasks = new ArrayList<>();
         List<NavigatorNode> queuedTasks = new ArrayList<>();
+        List<NavigatorNode> blockedTasks = new ArrayList<>();
         List<NavigatorNode> pausedTasks = new ArrayList<>();
         List<NavigatorNode> completedTasks = new ArrayList<>();
         List<NavigatorNode> failedTasks = new ArrayList<>();
@@ -908,7 +966,9 @@ public class TrystNavigatorView extends ViewPart implements WorkspaceChangeListe
         for (AgentTask t : allTasks) {
             String label = "[" + t.getStatus() + "] " + t.getTitle();
             ExecutionStatus st = t.getStatus();
-            if (st == ExecutionStatus.PAUSED) {
+            if (t.getTaskStatus() == TaskStatus.BLOCKED) {
+                blockedTasks.add(new NavigatorNode(t.getId(), label, NavigatorNode.NodeType.TASK_BLOCKED, t, null));
+            } else if (st == ExecutionStatus.PAUSED) {
                 pausedTasks.add(new NavigatorNode(t.getId(), label, NavigatorNode.NodeType.TASK_PAUSED, t, null));
             } else if (st == ExecutionStatus.ARCHIVED) {
                 archivedTasks.add(new NavigatorNode(t.getId(), label, NavigatorNode.NodeType.TASK_ARCHIVED, t, null));
@@ -932,6 +992,12 @@ public class TrystNavigatorView extends ViewPart implements WorkspaceChangeListe
         NavigatorNode queuedNode = new NavigatorNode("grp-queued", "Queued (" + queuedTasks.size() + ")", NavigatorNode.NodeType.TASK_QUEUE, null, taskPartitionRoot);
         queuedNode.setChildren(queuedTasks);
         taskPartitionNodes.add(queuedNode);
+
+        if (!blockedTasks.isEmpty()) {
+            NavigatorNode blockedNode = new NavigatorNode("grp-blocked", "Blocked (" + blockedTasks.size() + ")", NavigatorNode.NodeType.TASK_BLOCKED, null, taskPartitionRoot);
+            blockedNode.setChildren(blockedTasks);
+            taskPartitionNodes.add(blockedNode);
+        }
 
         NavigatorNode pausedNode = new NavigatorNode("grp-paused", "Paused (" + pausedTasks.size() + ")", NavigatorNode.NodeType.TASK_PAUSED, null, taskPartitionRoot);
         pausedNode.setChildren(pausedTasks);

@@ -120,11 +120,22 @@ public class WorkspaceController implements WorkspaceChangeListener {
 
     public void runTaskWithAgent(AgentTask task) {
         if (task == null) return;
+        // Single source of truth: resolve the model through the authoritative resolver.
+        // A blank resolution is an explicit configuration error — never a hardcoded model.
+        eu.kalafatic.tryst.domain.ai.AiExecutionResolver resolver =
+                eu.kalafatic.tryst.ui.TrystUiServices.getAiExecutionResolver();
+        String model = resolver != null ? resolver.resolve(null, null).modelId() : "";
+        if (model == null || model.isBlank()) {
+            eu.kalafatic.tryst.core.log.TrystLog.error(WorkspaceController.class,
+                    "Legacy agent execution aborted: no AI model selected in the execution configuration.");
+            triggerRefresh();
+            return;
+        }
         if (autonomousDevelopmentService != null && aiInferenceService != null) {
             autonomousDevelopmentService.executeAutonomousDevelopment(
                     task,
                     aiInferenceService,
-                    "codellama",
+                    model,
                     5,
                     chunk -> {
                         if (streamCallback != null) {
@@ -136,7 +147,7 @@ public class WorkspaceController implements WorkspaceChangeListener {
             sessionTaskOrchestrator.executeTaskWithAgent(
                     task,
                     aiInferenceService,
-                    "codellama",
+                    model,
                     5,
                     chunk -> {
                         if (streamCallback != null) {

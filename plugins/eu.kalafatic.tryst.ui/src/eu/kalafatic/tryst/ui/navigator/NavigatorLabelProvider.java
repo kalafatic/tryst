@@ -28,6 +28,7 @@ public class NavigatorLabelProvider extends LabelProvider {
                 case TASK -> getTaskPrefix(node);
                 case TASK_QUEUE -> "⏳ ";
                 case TASK_RUNNING -> "⚙️ ";
+                case TASK_BLOCKED -> "⛔ ";
                 case TASK_PAUSED -> "⏸️ ";
                 case TASK_ARCHIVED -> "📦 ";
                 case TASK_COMPLETED -> "✅ ";
@@ -56,6 +57,7 @@ public class NavigatorLabelProvider extends LabelProvider {
     private String getTaskPrefix(NavigatorNode node) {
         Object domain = node.getDomainObject();
         if (domain instanceof AgentTask t) {
+            if (t.getTaskStatus() == TaskStatus.BLOCKED) return "⛔ ";
             if (t.getStatus() == ExecutionStatus.COMPLETED) return "✅ ";
             if (t.getStatus() == ExecutionStatus.FAILED) return "❌ ";
             if (t.getStatus() == ExecutionStatus.RUNNING || t.getStatus() == ExecutionStatus.CLAIMED) return "⚙️ ";
@@ -65,6 +67,7 @@ public class NavigatorLabelProvider extends LabelProvider {
             TaskStatus status = t.getStatus();
             if (status == TaskStatus.COMPLETED) return "✅ ";
             if (status == TaskStatus.FAILED) return "❌ ";
+            if (status == TaskStatus.BLOCKED) return "⛔ ";
             if (status.isActive()) return "⚙️ ";
             if (status == TaskStatus.CANCELLED) return "⏹️ ";
             if (status == TaskStatus.WAITING_FOR_REVIEW || status == TaskStatus.WAITING_FOR_APPROVAL) return "🔍 ";

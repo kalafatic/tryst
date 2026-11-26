@@ -95,6 +95,14 @@ Special Lifecycle Transitions:
    automatically detects the interrupted state and marks the task RECOVERY_REQUIRED.
    Tasks in WAITING_FOR_REVIEW and APPROVED preserve their review status across restarts.
    Tasks in RECOVERY_REQUIRED can be retried back to QUEUED.
+4. BLOCKED: An accepted task is parked as BLOCKED (never enqueued) when the execution
+   environment is not ready at submission time (see TRYST_EXECUTION_ENVIRONMENT_MONITORING.md).
+   Queued tasks are parked as BLOCKED when the environment degrades before they are
+   claimed. When readiness is restored, every BLOCKED task is released back to QUEUED
+   automatically in FIFO order and its submitting user is notified. Blocked tasks survive
+   restarts and are released by the monitor's startup assessment.
+   Allowed BLOCKED transitions: CREATED -> BLOCKED, QUEUED -> BLOCKED,
+   BLOCKED -> QUEUED, BLOCKED -> CANCELLED, BLOCKED -> FAILED.
 ```
 
 ---
@@ -104,6 +112,10 @@ Special Lifecycle Transitions:
 | From State | To State | Trigger | Preconditions & Invariants |
 |---|---|---|---|
 | `CREATED` | `QUEUED` | User / Dispatcher | Task enqueued in persistent SQLite task queue. |
+| `CREATED` | `BLOCKED` | `TaskOrchestrator.submitTask` | Execution environment not ready at submission; task persisted, never enqueued. |
+| `QUEUED` | `BLOCKED` | `TaskOrchestrator` (readiness degradation) | Environment degraded before the task was claimed. |
+| `BLOCKED` | `QUEUED` | `TaskOrchestrator.releaseBlockedTasks` | Readiness restored; FIFO release, user notified. |
+| `BLOCKED` | `CANCELLED` / `FAILED` | Explicit operator action | Dismissing a notification never cancels the task. |
 | `QUEUED` | `CLAIMED` | `TaskQueue.claimNext` | Worker atomically claims task with priority ordering and row lock. |
 | `CLAIMED` | `CLONING` | `TaskWorker` | Workspace directory, git containment, and project structure validated. |
 | `CLONING` | `ANALYZING` | `TaskWorker` | Repository analyzed for file trees, dependencies, and requirements. |

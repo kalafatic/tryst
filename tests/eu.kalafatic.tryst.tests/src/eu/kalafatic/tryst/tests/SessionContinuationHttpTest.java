@@ -158,6 +158,7 @@ class SessionContinuationHttpTest {
                 executionResultRepository, codeReviewRepository,
                 new eu.kalafatic.tryst.domain.review.CodeReviewService(), 2
         );
+        TestAiFakes.configureModelSelection(orchestrator, "test-model");
         orchestrator.setTaskInstructionRepository(taskInstructionRepository);
         orchestrator.setGitHubService(new eu.kalafatic.tryst.infrastructure.github.DefaultGitHubService(
                 new eu.kalafatic.tryst.infrastructure.persistence.repository.SqliteGitHubCredentialRepository(databaseManager),

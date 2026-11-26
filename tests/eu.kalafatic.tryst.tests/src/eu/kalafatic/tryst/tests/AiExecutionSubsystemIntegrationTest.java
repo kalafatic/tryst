@@ -161,13 +161,22 @@ class AiExecutionSubsystemIntegrationTest {
         ModelSelectionService selector = new ModelSelectionService(registry);
         Task task = new Task("t1", "p1", null, "Build feature", "Desc", TaskStatus.CREATED, TaskPriority.NORMAL, null, null, null, null, null, 0, null, java.time.Instant.now(), null);
 
-        // Standard user gets user model
+        // Single source of truth: with no execution configuration and no provider
+        // default, no model is selected — never an implicit catalog/role fallback.
         String selectedForUser = selector.selectModel(task, null, UserRole.USER);
-        assertEquals("codellama", selectedForUser);
+        assertEquals("", selectedForUser);
 
-        // Admin requesting admin model gets it
+        // An explicitly requested catalog entry resolves to its provider identifier.
         String selectedForAdmin = selector.selectModel(task, "model-admin", UserRole.ADMIN);
         assertEquals("gpt-4-local", selectedForAdmin);
+
+        // An explicit unknown identifier passes through verbatim (never substituted).
+        assertEquals("my-custom-model:latest",
+                selector.selectModel(task, "my-custom-model:latest", UserRole.USER));
+
+        // Role filtering of the published catalog remains a registry-level contract.
+        assertTrue(registry.getModelsForRole(UserRole.USER).stream()
+                .noneMatch(m -> m.minRole() == UserRole.ADMIN));
     }
 
     @Test

@@ -77,6 +77,8 @@ public class TrystHttpServer implements TrystHttpService {
     private eu.kalafatic.tryst.domain.ai.AiModelRegistryService aiModelRegistryService;
     private eu.kalafatic.tryst.domain.ai.AiProviderRegistry aiProviderRegistry;
     private eu.kalafatic.tryst.domain.harness.ConnectedApplicationRegistry connectedApplicationRegistry;
+    private eu.kalafatic.tryst.domain.env.ExecutionEnvironmentMonitor executionEnvironmentMonitor;
+    private eu.kalafatic.tryst.domain.ai.AiExecutionResolver aiExecutionResolver;
     private eu.kalafatic.tryst.domain.ai.ExecutionConfigurationService executionConfigurationService;
     private AiServiceController aiServiceController;
     private TaskOrchestrator taskOrchestrator;
@@ -211,6 +213,23 @@ public class TrystHttpServer implements TrystHttpService {
 
     public void setTaskOrchestrator(TaskOrchestrator taskOrchestrator) {
         this.taskOrchestrator = taskOrchestrator;
+    }
+
+    /**
+     * Wires the authoritative execution environment monitor so the environment status
+     * endpoint and task submission responses reflect the single shared health state.
+     */
+    public void setExecutionEnvironmentMonitor(eu.kalafatic.tryst.domain.env.ExecutionEnvironmentMonitor executionEnvironmentMonitor) {
+        this.executionEnvironmentMonitor = executionEnvironmentMonitor;
+    }
+
+    /**
+     * Wires the single authoritative AI execution-configuration resolver so every
+     * server-side inference operation (e.g. AI review explanations) uses the same
+     * harness/provider/model as the UI and the task execution pipeline.
+     */
+    public void setAiExecutionResolver(eu.kalafatic.tryst.domain.ai.AiExecutionResolver aiExecutionResolver) {
+        this.aiExecutionResolver = aiExecutionResolver;
     }
 
     public void setGitHubService(eu.kalafatic.tryst.domain.github.GitHubService gitHubService,
@@ -413,6 +432,7 @@ public class TrystHttpServer implements TrystHttpService {
 
         StatusHandler statusH = new StatusHandler();
         HealthHandler healthH = new HealthHandler();
+        EnvironmentHandler environmentH = new EnvironmentHandler();
         SessionsHandler sessionsH = new SessionsHandler();
         SetupHandler setupH = new SetupHandler();
         AuthHandler authH = new AuthHandler();
@@ -446,11 +466,13 @@ public class TrystHttpServer implements TrystHttpService {
         server.createContext("/api/schedules", scheduleH);
         server.createContext("/api/pools", poolsH);
         server.createContext("/api/studio", studioH);
+        server.createContext("/api/environment", environmentH);
 
         // Register context-path specific routes if not root
         if (!ctxPath.isEmpty() && !"/".equals(ctxPath)) {
             server.createContext(ctxPath + "/api/status", statusH);
             server.createContext(ctxPath + "/api/health", healthH);
+            server.createContext(ctxPath + "/api/environment", environmentH);
             server.createContext(ctxPath + "/api/sessions", sessionsH);
             server.createContext(ctxPath + "/api/setup", setupH);
             server.createContext(ctxPath + "/api/auth", authH);
@@ -746,6 +768,88 @@ public class TrystHttpServer implements TrystHttpService {
     }
 
     /**
+     * Execution environment endpoints (/api/environment). Serves the single authoritative
+     * ExecutionEnvironmentMonitor snapshot to the web client, Dashboard and any external
+     * consumer. POST refresh performs an explicit full assessment (including model
+     * catalog discovery) and returns the fresh snapshot.
+     */
+    private class EnvironmentHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendJsonResponse(exchange, 204, "");
+                return;
+            }
+            String method = exchange.getRequestMethod();
+            String path = exchange.getRequestURI().getPath();
+            if ("POST".equalsIgnoreCase(method) && path.endsWith("/refresh")) {
+                if (executionEnvironmentMonitor == null) {
+                    sendJsonResponse(exchange, 503, "{\"error\": \"Execution environment monitor unavailable\"}");
+                    return;
+                }
+                // Bounded by the monitor's per-check timeouts; runs on an HTTP worker thread.
+                eu.kalafatic.tryst.domain.env.ExecutionEnvironmentMonitor.EnvironmentSnapshot snapshot =
+                        executionEnvironmentMonitor.refreshWithModelDiscovery();
+                sendJsonResponse(exchange, 200, environmentSnapshotJson(snapshot));
+                return;
+            }
+            if (!"GET".equalsIgnoreCase(method)) {
+                sendJsonResponse(exchange, 405, "{\"error\": \"Method not allowed\"}");
+                return;
+            }
+            if (executionEnvironmentMonitor == null) {
+                sendJsonResponse(exchange, 503, "{\"error\": \"Execution environment monitor unavailable\"}");
+                return;
+            }
+            sendJsonResponse(exchange, 200,
+                    environmentSnapshotJson(executionEnvironmentMonitor.getSnapshot()));
+        }
+
+        private String environmentSnapshotJson(
+                eu.kalafatic.tryst.domain.env.ExecutionEnvironmentMonitor.EnvironmentSnapshot snapshot) {
+            StringBuilder sb = new StringBuilder();
+            sb.append("{");
+            sb.append("\"ready\": ").append(snapshot.ready()).append(",");
+            sb.append("\"message\": \"").append(escapeJson(snapshot.readyMessage())).append("\",");
+            sb.append("\"timestamp\": \"").append(snapshot.timestamp()).append("\",");
+            sb.append("\"episodeKey\": \"").append(escapeJson(snapshot.episodeKey())).append("\",");
+            sb.append("\"lastSuccessfulCheck\": ").append(snapshot.lastSuccessfulCheck() != null
+                    ? "\"" + snapshot.lastSuccessfulCheck() + "\"" : "null").append(",");
+            sb.append("\"lastFailedCheck\": ").append(snapshot.lastFailedCheck() != null
+                    ? "\"" + snapshot.lastFailedCheck() + "\"" : "null").append(",");
+            sb.append("\"requiredComponents\": [");
+            int rc = 0;
+            for (eu.kalafatic.tryst.domain.env.ExecutionEnvironmentMonitor.ComponentId id : snapshot.requiredComponents()) {
+                if (rc++ > 0) sb.append(",");
+                sb.append("\"").append(id.name()).append("\"");
+            }
+            sb.append("],");
+            sb.append("\"problems\": [");
+            int pc = 0;
+            for (String p : snapshot.problems()) {
+                if (pc++ > 0) sb.append(",");
+                sb.append("\"").append(escapeJson(p)).append("\"");
+            }
+            sb.append("],");
+            sb.append("\"components\": [");
+            int cc = 0;
+            for (eu.kalafatic.tryst.domain.env.ExecutionEnvironmentMonitor.ComponentState cs : snapshot.components().values()) {
+                if (cc++ > 0) sb.append(",");
+                sb.append("{");
+                sb.append("\"id\": \"").append(cs.id().name()).append("\",");
+                sb.append("\"name\": \"").append(escapeJson(cs.name())).append("\",");
+                sb.append("\"health\": \"").append(cs.health().name()).append("\",");
+                sb.append("\"detail\": \"").append(escapeJson(cs.detail())).append("\",");
+                sb.append("\"lastCheckedAt\": \"").append(cs.lastCheckedAt()).append("\"");
+                sb.append("}");
+            }
+            sb.append("]");
+            sb.append("}");
+            return sb.toString();
+        }
+    }
+
+    /**
      * Public operational health endpoint. Reports real component states computed from
      * live services — never a static "UP". Distinct from liveness (/api/status keeps its
      * liveness fields for compatibility).
@@ -982,6 +1086,23 @@ public class TrystHttpServer implements TrystHttpService {
         };
     }
 
+    /**
+     * Resolves the model identifier for server-side inference operations through the
+     * single authoritative resolver. Returns an empty string when no model is selected
+     * — callers must fail with a clear configuration error; a hardcoded model is never
+     * substituted.
+     */
+    private String resolveInferenceModel() {
+        if (aiExecutionResolver != null) {
+            try {
+                return aiExecutionResolver.resolve(null, null).modelId();
+            } catch (Exception e) {
+                TrystLog.warn(TrystHttpServer.class, "AI model resolution failed: " + e.getMessage());
+            }
+        }
+        return "";
+    }
+
     private class SetupHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
@@ -1042,7 +1163,7 @@ public class TrystHttpServer implements TrystHttpService {
             UserRole role = ctx.map(c -> c.user().getRole()).orElse(UserRole.USER);
 
             if (aiModelRegistryService == null) {
-                sendJsonResponse(exchange, 200, "{\"models\": [], \"defaultModel\": \"codellama\"}");
+                sendJsonResponse(exchange, 200, "{\"models\": [], \"defaultModel\": \"\"}");
                 return;
             }
 
@@ -1560,7 +1681,8 @@ public class TrystHttpServer implements TrystHttpService {
                     sb.append("\"status\": \"").append(res.task().getStatus().name()).append("\",");
                     sb.append("\"priority\": \"").append(res.task().getPriority().name()).append("\",");
                     sb.append("\"persistedInstructionsCount\": ").append(res.persistedInstructions().size()).append(",");
-                    sb.append("\"classification\": \"").append(res.analysis().classification().name()).append("\"");
+                    sb.append("\"classification\": \"").append(res.analysis().classification().name()).append("\",");
+                    sb.append(environmentAcceptanceFields(res.task().getStatus()));
                     sb.append("}");
 
                     sendJsonResponse(exchange, 201, sb.toString());
@@ -1779,9 +1901,10 @@ public class TrystHttpServer implements TrystHttpService {
                     return;
                 }
 
-                String json = String.format("{\"id\": \"%s\", \"projectId\": \"%s\", \"title\": \"%s\", \"status\": \"%s\"}",
+                String json = String.format("{\"id\": \"%s\", \"projectId\": \"%s\", \"title\": \"%s\", \"status\": \"%s\", %s}",
                         escapeJson(taskId), escapeJson(projectId != null ? projectId : ""),
-                        escapeJson(title), statusName);
+                        escapeJson(title), statusName,
+                        environmentAcceptanceFields(TaskStatus.valueOf(statusName)));
                 sendJsonResponse(exchange, 201, json);
                 return;
             }
@@ -2776,9 +2899,13 @@ public class TrystHttpServer implements TrystHttpService {
                                 return;
                             }
 
-                            String model = (configurationService != null && configurationService.getConfiguration().defaultModel() != null)
-                                    ? configurationService.getConfiguration().defaultModel()
-                                    : "codellama";
+                            String model = resolveInferenceModel();
+                            if (model == null || model.isBlank()) {
+                                // Single source of truth: no silently substituted default model.
+                                sendJsonResponse(exchange, 409,
+                                        "{\"explanation\": \"AI explanation unavailable: no AI model is selected. Configure the execution environment (AI Environment page).\", \"aiGenerated\": false}");
+                                return;
+                            }
                             List<AiInferenceService.ChatMessage> messages = List.of(
                                     new AiInferenceService.ChatMessage("system", "You are a senior code review assistant. Provide a concise, technically precise explanation."),
                                     new AiInferenceService.ChatMessage("user", prompt)
@@ -5409,9 +5536,14 @@ public class TrystHttpServer implements TrystHttpService {
                             <div class="grid-stats">
                                 <div class="stat-card"><div>Active Tasks</div><div id="dashActiveTasks" class="stat-val">0</div></div>
                                 <div class="stat-card"><div>Queue Depth</div><div id="dashQueueDepth" class="stat-val">0</div></div>
+                                <div class="stat-card"><div>Blocked Tasks</div><div id="dashBlockedTasks" class="stat-val">0</div></div>
                                 <div class="stat-card"><div>Isolated Workspaces</div><div id="dashWorkspaces" class="stat-val">0</div></div>
                                 <div class="stat-card"><div>Mirror Cache Pools</div><div id="dashMirrors" class="stat-val">0</div></div>
                                 <div class="stat-card"><div>Code Reviews Pending</div><div id="dashReviews" class="stat-val">0</div></div>
+                            </div>
+                            <div class="card" style="margin-bottom: 16px;">
+                                <div class="section-title">Execution Environment <button class="btn btn-sm btn-default" style="margin-left: 10px;" onclick="loadDashboardEnvironment()">↻ Refresh</button></div>
+                                <div id="dashEnvironment" style="font-size: 12px;">Loading execution environment status...</div>
                             </div>
                             <div class="card" style="margin-bottom: 16px;">
                                 <div class="section-title">Server Health <button class="btn btn-sm btn-default" style="margin-left: 10px;" onclick="loadDashboardStats()">↻ Refresh</button></div>
@@ -6393,9 +6525,14 @@ public class TrystHttpServer implements TrystHttpService {
 
                             const badge = document.getElementById('stHeaderStatusBadge');
                             badge.textContent = st.status || 'ACTIVE';
+                            badge.title = '';
                             if (st.status === 'COMPLETED') badge.className = 'badge badge-success';
                             else if (st.status === 'FAILED') badge.className = 'badge badge-error';
                             else if (st.status === 'PAUSED') badge.className = 'badge badge-warning';
+                            else if (st.status === 'BLOCKED') {
+                                badge.className = 'badge badge-warning';
+                                badge.title = st.failureReason || 'Execution environment not ready';
+                            }
                             else badge.className = 'badge badge-info';
 
                             // Honest execution state badge (never a static "CONNECTED")
@@ -6821,9 +6958,64 @@ public class TrystHttpServer implements TrystHttpService {
                         async function loadDashboardData() {
                             await Promise.all([
                                 loadDashboardStats(),
+                                loadDashboardEnvironment(),
                                 loadDashboardRecentTasks(),
                                 loadDashboardWorkspaces()
                             ]);
+                        }
+
+                        /* Authoritative execution environment section: rendered from the
+                           single ExecutionEnvironmentMonitor snapshot (/api/environment). */
+                        async function loadDashboardEnvironment() {
+                            const container = document.getElementById('dashEnvironment');
+                            try {
+                                const res = await fetch(apiUrl('/api/environment/status'), { headers: getAuthHeaders() });
+                                if (!res.ok) throw new Error('HTTP ' + res.status);
+                                const env = await res.json();
+                                const healthDot = (h) => {
+                                    if (h === 'OPERATIONAL') return '<span style="color:#2da44e;">&#9679;</span>';
+                                    if (h === 'DEGRADED' || h === 'STARTING') return '<span style="color:#c28900;">&#9679;</span>';
+                                    if (h === 'UNAVAILABLE') return '<span style="color:#c23b2e;">&#9679;</span>';
+                                    return '<span style="color:#8a8f98;">&#9679;</span>';
+                                };
+                                const readyBadge = env.ready
+                                    ? '<span class="badge badge-success">READY</span>'
+                                    : '<span class="badge badge-error">NOT READY</span>';
+                                const rows = (env.components || []).map(c =>
+                                    `<div style="display:flex; justify-content:space-between; padding:4px 0; border-bottom: 1px solid var(--border);">` +
+                                    `<span>${healthDot(c.health)} <b>${escapeHtml(c.name)}</b> &middot; <span class="badge ${stateBadgeClass(c.health)}">${escapeHtml(c.health)}</span></span>` +
+                                    `<span style="color:var(--muted); text-align:right;">${escapeHtml(c.detail)}</span></div>`
+                                ).join('');
+                                const problems = (env.problems && env.problems.length)
+                                    ? `<div style="margin-top:8px; color:var(--err);"><b>Problems:</b><ul style="margin:4px 0 0 18px; padding:0;">` +
+                                      env.problems.map(p => `<li>${escapeHtml(p)}</li>`).join('') + `</ul></div>`
+                                    : '';
+                                const checks = `<div style="margin-top:8px; color:var(--muted);">` +
+                                    `Last successful check: <b>${env.lastSuccessfulCheck ? escapeHtml(env.lastSuccessfulCheck) : '—'}</b> &middot; ` +
+                                    `Last failed check: <b>${env.lastFailedCheck ? escapeHtml(env.lastFailedCheck) : '—'}</b> &middot; ` +
+                                    `Required: ${(env.requiredComponents || []).map(r => `<b>${escapeHtml(r)}</b>`).join(', ')}</div>`;
+                                container.innerHTML =
+                                    `<div style="display:flex; justify-content:space-between; align-items:center; padding:4px 0;">` +
+                                    `<span>Overall execution readiness: ${readyBadge}</span>` +
+                                    `<button class="btn btn-sm btn-default" onclick="refreshEnvironmentStatus()">⟳ Re-check now</button></div>` +
+                                    rows + problems + checks;
+                            } catch (e) {
+                                console.warn('Failed to load environment status:', e);
+                                container.innerHTML = '<span style="color:var(--err); cursor:pointer;" onclick="loadDashboardEnvironment()">Execution environment status unavailable &mdash; retry</span>';
+                            }
+                        }
+
+                        async function refreshEnvironmentStatus() {
+                            const container = document.getElementById('dashEnvironment');
+                            container.innerHTML = 'Re-checking execution environment...';
+                            try {
+                                const res = await fetch(apiUrl('/api/environment/refresh'), { method: 'POST', headers: getAuthHeaders() });
+                                if (!res.ok) throw new Error('HTTP ' + res.status);
+                            } catch (e) {
+                                console.warn('Environment refresh failed:', e);
+                            }
+                            await loadDashboardEnvironment();
+                            await loadDashboardStats();
                         }
 
                         async function loadDashboardStats() {
@@ -6897,6 +7089,10 @@ public class TrystHttpServer implements TrystHttpService {
                                 if (!res.ok) throw new Error('HTTP ' + res.status);
                                 const taskData = await res.json();
                                 const tasks = taskData.tasks || [];
+                                const blockedEl = document.getElementById('dashBlockedTasks');
+                                if (blockedEl) {
+                                    blockedEl.textContent = tasks.filter(t => t.status === 'BLOCKED').length;
+                                }
                                 if (tasks.length === 0) {
                                     container.innerHTML = '<span style="color:var(--muted);">No tasks recorded yet.</span>';
                                 } else {
@@ -8787,7 +8983,7 @@ public class TrystHttpServer implements TrystHttpService {
                         function stateBadgeClass(state) {
                             const s = String(state || '').toUpperCase();
                             if (/FAIL|ERROR|REJECT|CANCEL|OCCUPIED|DENIED|LOST/.test(s)) return 'badge-error';
-                            if (/DEGRAD|WARN|WAIT|RECOVER|PAUSE|STALE|MISSING|PEND|PROPOS|QUEUED|RETRY/.test(s)) return 'badge-warning';
+                            if (/DEGRAD|WARN|WAIT|RECOVER|PAUSE|STALE|MISSING|PEND|PROPOS|QUEUED|RETRY|BLOCKED/.test(s)) return 'badge-warning';
                             if (/COMPLET|SUCCESS|OPERATIONAL|APPROV|HEALTHY|ARCHIVED|ONLINE|VERIFIED|CONNECTED|AVAILABLE|READY/.test(s)) return 'badge-success';
                             return 'badge-info';
                         }
@@ -9516,7 +9712,14 @@ public class TrystHttpServer implements TrystHttpService {
                                 });
                                 const data = await res.json();
                                 if (res.ok && data.taskId) {
-                                    alert(`Task submitted successfully!\\nTask ID: ${data.taskId}\\nTitle: ${data.title}\\nStatus: ${data.status}\\nPersisted Instructions: ${data.persistedInstructionsCount}`);
+                                    if (data.execution === 'DELAYED' || data.status === 'BLOCKED') {
+                                        const problems = (data.problems && data.problems.length)
+                                            ? data.problems.map(p => '- ' + p).join('\\n')
+                                            : '- The server execution environment is currently unavailable.';
+                                        alert(`Task accepted — execution delayed\\n\\nYour request was successfully received and stored by TRYST.\\nExecution cannot currently start because the server environment is unavailable:\\n\\n${problems}\\n\\nThe server administrator has been notified.\\nYour task remains safely queued and will become eligible for execution once the environment is restored.\\n\\nTask ID: ${data.taskId}`);
+                                    } else {
+                                        alert(`Task accepted — execution starting\\n\\nTask ID: ${data.taskId}\\nTitle: ${data.title}\\nStatus: ${data.status}\\nPersisted Instructions: ${data.persistedInstructionsCount}`);
+                                    }
                                     taskAttachments = [];
                                     renderAttachments();
                                     closeNewTaskModal();
@@ -10241,5 +10444,31 @@ public class TrystHttpServer implements TrystHttpService {
     private static String escapeJson(String s) {
         if (s == null) return "";
         return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "");
+    }
+
+    /**
+     * Appends execution-environment acceptance fields to a task submission response:
+     * {@code accepted} is always true (the task was persisted), {@code execution} is
+     * STARTING when the environment is ready and DELAYED when the task was parked as
+     * BLOCKED, plus the authoritative readiness flag and the current problem list. The
+     * web client uses these fields for immediate and accurate submitter feedback.
+     */
+    private String environmentAcceptanceFields(eu.kalafatic.tryst.domain.model.TaskStatus status) {
+        boolean blocked = status == eu.kalafatic.tryst.domain.model.TaskStatus.BLOCKED;
+        boolean ready = executionEnvironmentMonitor == null || executionEnvironmentMonitor.isReady();
+        StringBuilder sb = new StringBuilder();
+        sb.append("\"accepted\": true,");
+        sb.append("\"execution\": \"").append(blocked || !ready ? "DELAYED" : "STARTING").append("\",");
+        sb.append("\"environmentReady\": ").append(ready).append(",");
+        sb.append("\"problems\": [");
+        if (executionEnvironmentMonitor != null) {
+            int c = 0;
+            for (String p : executionEnvironmentMonitor.getProblems()) {
+                if (c++ > 0) sb.append(",");
+                sb.append("\"").append(escapeJson(p)).append("\"");
+            }
+        }
+        sb.append("]");
+        return sb.toString();
     }
 }

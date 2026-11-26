@@ -140,6 +140,7 @@ public class AdministrationAndOperationalManagementTest {
                 null,
                 2
         );
+        TestAiFakes.configureModelSelection(taskOrchestrator, "test-model");
 
         managedServiceController = new ManagedServiceController(telemetryService, dataRetentionService, taskOrchestrator);
 

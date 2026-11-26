@@ -43,6 +43,13 @@ public interface AiProviderRegistry {
 
     void selectDefaultProvider(String id);
 
+    /**
+     * Persists the provider's configured default model (exact identifier, no
+     * normalization). Used as the last permitted fallback level in the unified
+     * configuration chain — never a hardcoded identifier.
+     */
+    void updateDefaultModel(String id, String modelId);
+
     Optional<String> getDefaultProviderId();
 
     Optional<AIProvider> getDefaultAdapter();

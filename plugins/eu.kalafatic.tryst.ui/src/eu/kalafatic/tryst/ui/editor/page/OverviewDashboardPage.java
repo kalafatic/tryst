@@ -80,6 +80,7 @@ public class OverviewDashboardPage extends AbstractTrystEditorPage {
     private Label lblTasksTotal;
     private Label lblTasksRunning;
     private Label lblTasksQueued;
+    private Label lblTasksBlocked;
     private Label lblTasksCompleted;
     private Label lblTasksFailed;
 
@@ -89,6 +90,16 @@ public class OverviewDashboardPage extends AbstractTrystEditorPage {
 
     private Label lblUsersTotal;
     private Label lblUsersAdmins;
+
+    // Execution environment health card
+    private Label lblEnvReadiness;
+    private Label lblEnvServer;
+    private Label lblEnvHarness;
+    private Label lblEnvProvider;
+    private Label lblEnvModel;
+    private Label lblEnvProblems;
+    private Label lblEnvChecks;
+    private Label lblWorkers;
 
     // Activity Stream
     private Table activityTable;
@@ -142,6 +153,7 @@ public class OverviewDashboardPage extends AbstractTrystEditorPage {
 
         createSystemStateCard(topCardsComposite);
         createTaskAndReviewMetricsCard(topCardsComposite);
+        createEnvironmentHealthCard(topCardsComposite);
 
         createUnifiedActivityStream(mainSash);
 
@@ -154,6 +166,10 @@ public class OverviewDashboardPage extends AbstractTrystEditorPage {
                 if (!display.isDisposed()) display.asyncExec(this::refresh);
             });
             eventBus.subscribe(ApplicationEvents.SessionEvent.class, e -> {
+                Display display = getControl().getDisplay();
+                if (!display.isDisposed()) display.asyncExec(this::refresh);
+            });
+            eventBus.subscribe(eu.kalafatic.tryst.domain.env.EnvironmentEvents.StatusChangedEvent.class, e -> {
                 Display display = getControl().getDisplay();
                 if (!display.isDisposed()) display.asyncExec(this::refresh);
             });
@@ -217,11 +233,17 @@ public class OverviewDashboardPage extends AbstractTrystEditorPage {
         createRow(group, "Queued Tasks:");
         lblTasksQueued = createValueLabel(group, "0");
 
+        createRow(group, "Blocked Tasks:");
+        lblTasksBlocked = createValueLabel(group, "0");
+
         createRow(group, "Completed Tasks:");
         lblTasksCompleted = createValueLabel(group, "0");
 
         createRow(group, "Failed Tasks:");
         lblTasksFailed = createValueLabel(group, "0");
+
+        createRow(group, "Active Workers:");
+        lblWorkers = createValueLabel(group, "0");
 
         createRow(group, "Total Reviews:");
         lblReviewsTotal = createValueLabel(group, "0");
@@ -237,6 +259,65 @@ public class OverviewDashboardPage extends AbstractTrystEditorPage {
 
         createRow(group, "Administrators:");
         lblUsersAdmins = createValueLabel(group, "0");
+    }
+
+    /**
+     * Permanent Environment Health section: overall execution readiness, the four
+     * component indicators, current problems, last checks and the available recovery
+     * actions — all rendered from the single authoritative ExecutionEnvironmentMonitor
+     * snapshot. Also distinguishes queued vs blocked vs actively executing tasks.
+     */
+    private void createEnvironmentHealthCard(Composite parent) {
+        Group group = new Group(parent, SWT.NONE);
+        group.setText("Execution Environment Health");
+        group.setLayout(new GridLayout(4, false));
+        group.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true, 2, 1));
+
+        createRow(group, "Overall Readiness:");
+        lblEnvReadiness = createValueLabel(group, "Checking...");
+
+        createRow(group, "TRYST Server:");
+        lblEnvServer = createValueLabel(group, "-");
+
+        createRow(group, "Coding Harness:");
+        lblEnvHarness = createValueLabel(group, "-");
+
+        createRow(group, "Inference Provider:");
+        lblEnvProvider = createValueLabel(group, "-");
+
+        createRow(group, "Model:");
+        lblEnvModel = createValueLabel(group, "-");
+
+        createRow(group, "Problems:");
+        lblEnvProblems = createValueLabel(group, "None detected.");
+
+        createRow(group, "Last Checks:");
+        lblEnvChecks = createValueLabel(group, "-");
+
+        Button btnRefreshEnv = new Button(group, SWT.PUSH);
+        btnRefreshEnv.setText("⟳ Re-check Environment");
+        btnRefreshEnv.addListener(SWT.Selection, e -> {
+            var monitor = TrystUiServices.getExecutionEnvironmentMonitor();
+            if (monitor != null) {
+                Thread.ofVirtual().start(monitor::refreshWithModelDiscovery);
+            }
+        });
+
+        Button btnRecovery = new Button(group, SWT.PUSH);
+        btnRecovery.setText("🛠 Recovery Wizard...");
+        btnRecovery.addListener(SWT.Selection, e -> {
+            try {
+                Class<?> dialogClass = Class.forName("eu.kalafatic.tryst.application.env.EnvironmentStatusDialog");
+                var ctor = dialogClass.getConstructor(org.eclipse.swt.widgets.Shell.class);
+                var dialog = ctor.newInstance(getControl().getShell());
+                dialogClass.getMethod("open").invoke(dialog);
+            } catch (Exception ex) {
+                try {
+                    org.eclipse.jface.dialogs.MessageDialog.openWarning(getControl().getShell(),
+                            "Environment Diagnostics", "Environment diagnostics dialog unavailable: " + ex.getMessage());
+                } catch (Exception ignored) {}
+            }
+        });
     }
 
     private void createUnifiedActivityStream(Composite parent) {
@@ -375,6 +456,9 @@ public class OverviewDashboardPage extends AbstractTrystEditorPage {
         super.refresh();
         if (lblServerReadiness == null || lblServerReadiness.isDisposed()) return;
 
+        var environmentMonitor = TrystUiServices.getExecutionEnvironmentMonitor();
+        var environmentSnapshot = environmentMonitor != null ? environmentMonitor.getSnapshot() : null;
+
         // 1. Server Readiness & Infrastructure
         var readinessService = TrystUiServices.getServerReadinessService();
         if (readinessService != null) {
@@ -393,8 +477,23 @@ public class OverviewDashboardPage extends AbstractTrystEditorPage {
         var db = TrystUiServices.getDatabaseManager();
         lblDatabaseState.setText(db != null ? "Connected (WAL mode)" : "Disconnected");
 
-        lblTeipStatus.setText("READY (TEIP 1.0)");
-        lblAiModel.setText("Available (Ollama/Fallback)");
+        // TEIP / harness and AI provider values come from the authoritative environment
+        // snapshot (never hardcoded placeholders).
+        if (environmentSnapshot != null) {
+            var harness = environmentSnapshot.component(
+                    eu.kalafatic.tryst.domain.env.ExecutionEnvironmentMonitor.ComponentId.HARNESS);
+            lblTeipStatus.setText(harness != null
+                    ? harness.health().name() + (harness.detail().isBlank() ? "" : " (" + harness.detail() + ")")
+                    : "Unknown");
+            var provider = environmentSnapshot.component(
+                    eu.kalafatic.tryst.domain.env.ExecutionEnvironmentMonitor.ComponentId.PROVIDER);
+            lblAiModel.setText(provider != null
+                    ? provider.health().name() + (provider.detail().isBlank() ? "" : " (" + provider.detail() + ")")
+                    : "Unknown");
+        } else {
+            lblTeipStatus.setText("Unknown");
+            lblAiModel.setText("Unknown");
+        }
 
         ServerMonitoringService mon = TrystUiServices.getServerMonitoringService();
         if (mon != null) {
@@ -410,13 +509,39 @@ public class OverviewDashboardPage extends AbstractTrystEditorPage {
             lblTasksTotal.setText(String.valueOf(allTasks.size()));
             long running = allTasks.stream().filter(t -> t.getStatus() == ExecutionStatus.RUNNING || t.getStatus() == ExecutionStatus.CLAIMED).count();
             long queued = allTasks.stream().filter(t -> t.getStatus() == ExecutionStatus.QUEUED).count();
+            long blocked = allTasks.stream().filter(t -> t.getTaskStatus() == eu.kalafatic.tryst.domain.model.TaskStatus.BLOCKED).count();
             long completed = allTasks.stream().filter(t -> t.getStatus() == ExecutionStatus.COMPLETED).count();
             long failed = allTasks.stream().filter(t -> t.getStatus() == ExecutionStatus.FAILED).count();
 
             lblTasksRunning.setText(String.valueOf(running));
             lblTasksQueued.setText(String.valueOf(queued));
+            lblTasksBlocked.setText(String.valueOf(blocked));
             lblTasksCompleted.setText(String.valueOf(completed));
             lblTasksFailed.setText(String.valueOf(failed));
+        }
+
+        var orchestrator = TrystUiServices.getTaskOrchestrator();
+        if (orchestrator != null) {
+            lblWorkers.setText(orchestrator.getActiveTaskCount() + " / " + orchestrator.getConcurrency());
+        }
+
+        // 3. Execution Environment Health (single authoritative snapshot)
+        if (environmentSnapshot != null) {
+            lblEnvReadiness.setText(environmentSnapshot.ready() ? "READY" : "NOT READY");
+            setEnvironmentLabel(lblEnvServer, environmentSnapshot.component(
+                    eu.kalafatic.tryst.domain.env.ExecutionEnvironmentMonitor.ComponentId.SERVER));
+            setEnvironmentLabel(lblEnvHarness, environmentSnapshot.component(
+                    eu.kalafatic.tryst.domain.env.ExecutionEnvironmentMonitor.ComponentId.HARNESS));
+            setEnvironmentLabel(lblEnvProvider, environmentSnapshot.component(
+                    eu.kalafatic.tryst.domain.env.ExecutionEnvironmentMonitor.ComponentId.PROVIDER));
+            setEnvironmentLabel(lblEnvModel, environmentSnapshot.component(
+                    eu.kalafatic.tryst.domain.env.ExecutionEnvironmentMonitor.ComponentId.MODEL));
+            lblEnvProblems.setText(environmentSnapshot.problems().isEmpty()
+                    ? "None detected." : String.join("; ", environmentSnapshot.problems()));
+            lblEnvChecks.setText("Success: " + (environmentSnapshot.lastSuccessfulCheck() != null ? environmentSnapshot.lastSuccessfulCheck() : "never")
+                    + " | Failure: " + (environmentSnapshot.lastFailedCheck() != null ? environmentSnapshot.lastFailedCheck() : "never"));
+        } else {
+            lblEnvReadiness.setText("UNAVAILABLE");
         }
 
         // 3. Reviews
@@ -440,5 +565,27 @@ public class OverviewDashboardPage extends AbstractTrystEditorPage {
         }
 
         loadActivityStream();
+    }
+
+    /**
+     * Renders one environment component state with the shared GREEN / ORANGE / RED /
+     * GRAY color convention.
+     */
+    private void setEnvironmentLabel(Label label,
+                                     eu.kalafatic.tryst.domain.env.ExecutionEnvironmentMonitor.ComponentState state) {
+        if (state == null) {
+            label.setText("UNKNOWN");
+            label.setForeground(label.getDisplay().getSystemColor(SWT.COLOR_DARK_GRAY));
+            return;
+        }
+        String detail = state.detail().isBlank() ? "" : " — " + state.detail();
+        label.setText(state.health().name() + detail);
+        label.setToolTipText(state.detail());
+        label.setForeground(switch (state.health()) {
+            case OPERATIONAL -> label.getDisplay().getSystemColor(SWT.COLOR_DARK_GREEN);
+            case DEGRADED, STARTING -> label.getDisplay().getSystemColor(SWT.COLOR_DARK_YELLOW);
+            case UNAVAILABLE -> label.getDisplay().getSystemColor(SWT.COLOR_DARK_RED);
+            default -> label.getDisplay().getSystemColor(SWT.COLOR_DARK_GRAY);
+        });
     }
 }
