@@ -13,8 +13,6 @@ import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.PaintEvent;
 import org.eclipse.swt.events.PaintListener;
 import org.eclipse.swt.graphics.Color;
-import org.eclipse.swt.graphics.Font;
-import org.eclipse.swt.graphics.FontData;
 import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Composite;
@@ -30,7 +28,7 @@ import org.osgi.framework.Version;
 /**
  * TRYST splash handler following the established Eclipse/EVO splash design principles:
  * <ul>
- *   <li>Version rendered dynamically from the product/plugin manifest in the upper-left corner
+ *   <li>Version rendered dynamically from the product/plugin manifest in the upper-right corner
  *       via a paint listener (no hardcoded version, transparent background).</li>
  *   <li>Real startup progress connected to {@link ApplicationLifecycleCoordinator} milestones;
  *       every update is driven by an actual lifecycle transition, never by an artificial timer.</li>
@@ -47,8 +45,7 @@ public class TrystSplashHandler extends BasicSplashHandler implements Applicatio
 
     private ApplicationLifecycleCoordinator coordinator;
     private IProgressMonitor monitor;
-    private Font versionFont;
-    private Color foregroundColor;
+    private Color versionColor;
     private int lastPercent = 0;
     private boolean finished = false;
 
@@ -69,9 +66,9 @@ public class TrystSplashHandler extends BasicSplashHandler implements Applicatio
 
     private void configureRectsAndForeground() {
         IProduct product = Platform.getProduct();
-        Rectangle progressRect = new Rectangle(40, 240, 420, 15);
-        Rectangle messageRect = new Rectangle(40, 220, 420, 20);
-        String foregroundColorString = "94A3B8";
+        Rectangle progressRect = new Rectangle(212, 348, 350, 2);
+        Rectangle messageRect = new Rectangle(212, 335, 350, 5);
+        String foregroundColorString = "FF0000";
         if (product != null) {
             String pr = product.getProperty(IProductConstants.STARTUP_PROGRESS_RECT);
             if (pr != null) {
@@ -93,11 +90,10 @@ public class TrystSplashHandler extends BasicSplashHandler implements Applicatio
         try {
             fgInt = Integer.parseInt(foregroundColorString, 16);
         } catch (Exception ex) {
-            fgInt = 0x94A3B8;
+            fgInt = 0xFF0000;
         }
         RGB rgb = new RGB((fgInt >> 16) & 0xFF, (fgInt >> 8) & 0xFF, fgInt & 0xFF);
         setForeground(rgb);
-        foregroundColor = new Color(getSplash().getDisplay(), rgb);
     }
 
     /**
@@ -152,8 +148,10 @@ public class TrystSplashHandler extends BasicSplashHandler implements Applicatio
     }
 
     /**
-     * Draws "v X.Y.Z" in the upper-left corner of the splash content using a paint listener,
-     * which guarantees a transparent background over the splash artwork (EVO pattern).
+     * Draws "v X.Y.Z" in the upper-right corner of the splash content using a paint listener,
+     * which guarantees a transparent background over the splash artwork. Geometry and colour
+     * follow the EVO reference: right edge inset of 80px, top inset of 10px, light-blue
+     * foreground (112,176,255) and the default font.
      */
     private void renderVersionLabel() {
         try {
@@ -163,26 +161,22 @@ public class TrystSplashHandler extends BasicSplashHandler implements Applicatio
             }
             final String version = resolveApplicationVersion();
 
-            final FontData[] fontData = splash.getFont().getFontData();
-            for (FontData fd : fontData) {
-                fd.setHeight(8);
-                fd.setStyle(SWT.BOLD);
-            }
-            versionFont = new Font(splash.getDisplay(), fontData);
-            final Font paintFont = versionFont;
+            final int x = splash.getBounds().width - 80;
+            final int y = 10;
+            versionColor = new Color(splash.getDisplay(), new RGB(112, 176, 255));
+            final Color paintColor = versionColor;
 
             Composite content = getContent();
             if (content != null && !content.isDisposed()) {
                 content.addPaintListener(new PaintListener() {
                     @Override
                     public void paintControl(PaintEvent e) {
-                        Color fg = foregroundColor;
+                        Color fg = paintColor;
                         if (fg == null || fg.isDisposed()) {
                             fg = e.display.getSystemColor(SWT.COLOR_WIDGET_FOREGROUND);
                         }
                         e.gc.setForeground(fg);
-                        e.gc.setFont(paintFont);
-                        e.gc.drawText("v " + version, 14, 12, true);
+                        e.gc.drawText("v " + version, x, y, true);
                     }
                 });
                 content.redraw();
@@ -359,13 +353,9 @@ public class TrystSplashHandler extends BasicSplashHandler implements Applicatio
             coordinator.removeLifecycleListener(this);
             coordinator = null;
         }
-        if (versionFont != null && !versionFont.isDisposed()) {
-            versionFont.dispose();
-            versionFont = null;
-        }
-        if (foregroundColor != null && !foregroundColor.isDisposed()) {
-            foregroundColor.dispose();
-            foregroundColor = null;
+        if (versionColor != null && !versionColor.isDisposed()) {
+            versionColor.dispose();
+            versionColor = null;
         }
         super.dispose();
     }

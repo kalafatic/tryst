@@ -103,6 +103,21 @@ public class AiModelRegistryService implements ModelRegistry {
         return List.copyOf(models.values());
     }
 
+    /**
+     * The cached model list for a single provider (the provider-model cache view used
+     * by the AI settings model combo). Returns an empty list when the provider is
+     * unknown or has no discovered models yet.
+     */
+    public List<PublishedModel> getModelsForProvider(String providerId) {
+        if (providerId == null || providerId.isBlank()) {
+            return List.of();
+        }
+        return models.values().stream()
+                .filter(m -> providerId.equals(m.providerId()))
+                .sorted(Comparator.comparing(PublishedModel::displayName))
+                .toList();
+    }
+
     public List<AiProviderInfo> getAllProviders() {
         return List.copyOf(providers.values());
     }

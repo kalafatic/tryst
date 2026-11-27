@@ -91,6 +91,9 @@ public class AiIntegrationPage extends AbstractTrystEditorPage {
     private List<AiModelRegistryService.PublishedModel> publishedModels = List.of();
     private List<ExecutionConfigurationService.EnvironmentSession> sessions = List.of();
 
+    /** Guards the one-time kick-off of the shared provider-model cache initialization. */
+    private volatile boolean cacheInitStarted = false;
+
     public AiIntegrationPage(TrystWorkbenchEditor editor) {
         super(ID, "AI Environment", editor);
     }
@@ -214,31 +217,25 @@ public class AiIntegrationPage extends AbstractTrystEditorPage {
         syncConfigurationMirrors(providerId, model);
         showInfo("Execution Configuration", "Global execution environment defaults saved.");
 
-        // Provider-switch contract: refresh the new provider's models; an incompatible
-        // model from the previous provider is cleared and must be chosen explicitly.
-        AiProviderRegistry registry = TrystUiServices.getAiProviderRegistry();
-        if (registry != null && !providerId.isBlank() && !providerId.equals(previousProviderId)) {
-            final String newProvider = providerId;
-            final String selectedModel = model;
-            registry.discoverModels(newProvider).whenComplete((v, t) -> {
-                Display.getDefault().asyncExec(() -> {
-                    AiExecutionResolver resolver = TrystUiServices.getAiExecutionResolver();
-                    boolean known = resolver != null
-                            && resolver.isModelKnownForProvider(newProvider, selectedModel);
-                    if (!selectedModel.isBlank() && !known) {
-                        ExecutionConfiguration current = service.getGlobal()
-                                .orElseGet(() -> ExecutionConfiguration.empty(ExecutionConfiguration.SOURCE_GLOBAL));
-                        service.saveGlobal(new ExecutionConfiguration(current.harnessId(), newProvider,
-                                "", current.agentProfileId(), current.executionParameters(),
-                                current.toolPermissions(), current.resourceLimits(),
-                                current.harnessSettings(), ExecutionConfiguration.SOURCE_GLOBAL));
-                        showWarning("Execution Configuration",
-                                "The selected model '" + selectedModel + "' is not available from provider '"
-                                        + newProvider + "'.\nThe model selection was cleared — choose a model explicitly.");
-                    }
-                    refresh();
-                });
-            });
+        // Provider-switch contract: the model combo is repopulated from the cached
+        // model list for the newly selected provider. No discovery is started here; an
+        // incompatible model from the previous provider is cleared and must be chosen
+        // explicitly.
+        if (!providerId.isBlank() && !providerId.equals(previousProviderId)) {
+            AiExecutionResolver resolver = TrystUiServices.getAiExecutionResolver();
+            boolean known = resolver != null
+                    && resolver.isModelKnownForProvider(providerId, model);
+            if (!model.isBlank() && !known) {
+                ExecutionConfiguration current = service.getGlobal()
+                        .orElseGet(() -> ExecutionConfiguration.empty(ExecutionConfiguration.SOURCE_GLOBAL));
+                service.saveGlobal(new ExecutionConfiguration(current.harnessId(), providerId,
+                        "", current.agentProfileId(), current.executionParameters(),
+                        current.toolPermissions(), current.resourceLimits(),
+                        current.harnessSettings(), ExecutionConfiguration.SOURCE_GLOBAL));
+                showWarning("Execution Configuration",
+                        "The selected model '" + model + "' is not available from provider '"
+                                + providerId + "'.\nThe model selection was cleared — choose a model explicitly.");
+            }
         }
         refresh();
     }
@@ -1359,12 +1356,32 @@ public class AiIntegrationPage extends AbstractTrystEditorPage {
         refresh();
     }
 
+    /**
+     * Kicks off the shared provider-model cache initialization exactly once. Discovery
+     * runs off the UI thread through the provider registry; when it completes the page
+     * is re-rendered from the cache. Normal refreshes and provider switches never
+     * re-trigger discovery.
+     */
+    private void ensureModelCacheInitialized() {
+        if (cacheInitStarted) {
+            return;
+        }
+        cacheInitStarted = true;
+        AiProviderRegistry registry = TrystUiServices.getAiProviderRegistry();
+        if (registry != null) {
+            registry.ensureInitialized().whenComplete((v, t) -> {
+                Display.getDefault().asyncExec(this::refresh);
+            });
+        }
+    }
+
     @Override
     public void refresh() {
         super.refresh();
         if (lblProvider == null || lblProvider.isDisposed()) {
             return;
         }
+        ensureModelCacheInitialized();
         ApplicationConfiguration cfg = TrystUiServices.getConfiguration();
         if (cfg != null && lblEndpoint != null && !lblEndpoint.isDisposed()) {
             lblEndpoint.setText(cfg.ollamaEndpoint());
@@ -1605,12 +1622,12 @@ public class AiIntegrationPage extends AbstractTrystEditorPage {
                 d -> d.getName() + " (" + d.getApplicationType() + ")");
         populateCombo(cmbProvider, providers, "(none — provider default)", providerId,
                 AiProviderDescriptor::id, d -> d.name() + " (" + d.type() + ")");
-        populateExecModelCombo(modelId);
+        populateExecModelCombo(providerId, modelId);
         populateCombo(cmbAgent, agents, "(none — agent default)", agentId,
                 AgentConfiguration::getId, AgentConfiguration::getName);
     }
 
-    private void populateExecModelCombo(String selectedModelId) {
+    private void populateExecModelCombo(String providerId, String selectedModelId) {
         if (cmbExecModel == null || cmbExecModel.isDisposed()) {
             return;
         }
@@ -1618,7 +1635,14 @@ public class AiIntegrationPage extends AbstractTrystEditorPage {
         cmbExecModel.removeAll();
         cmbExecModel.add("(none — model default)");
         List<String> modelIds = new ArrayList<>();
-        for (AiModelRegistryService.PublishedModel model : publishedModels) {
+        // The model combo is populated exclusively from the cached model list of the
+        // selected provider — never from a fresh discovery, and never from another
+        // provider's models.
+        AiModelRegistryService catalog = TrystUiServices.getAiModelRegistryService();
+        List<AiModelRegistryService.PublishedModel> providerModels = catalog == null
+                ? List.of()
+                : catalog.getModelsForProvider(providerId);
+        for (AiModelRegistryService.PublishedModel model : providerModels) {
             if (model.available() && model.published()
                     && !modelIds.contains(model.modelIdentifier())) {
                 modelIds.add(model.modelIdentifier());

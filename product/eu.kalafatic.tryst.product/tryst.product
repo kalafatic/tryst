@@ -56,7 +56,7 @@
    </configurations>
 
    <preferencesInfo>
-      <targetPlatform>JavaSE-21</targetPlatform>
+      <targetPlatform>JavaSE-25</targetPlatform>
    </preferencesInfo>
 
    <cssInfo>

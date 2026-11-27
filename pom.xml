@@ -13,9 +13,9 @@
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <maven.compiler.release>21</maven.compiler.release>
-        <tycho.version>4.0.8</tycho.version>
-        <eclipse-repo.url>https://download.eclipse.org/releases/2024-03</eclipse-repo.url>
+        <maven.compiler.release>25</maven.compiler.release>
+        <tycho.version>5.0.4</tycho.version>
+        <eclipse-repo.url>https://download.eclipse.org/releases/2025-12</eclipse-repo.url>
         <argLine>--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.xml/com.sun.org.apache.xerces.internal.parsers=ALL-UNNAMED --add-opens=java.xml/com.sun.org.apache.xerces.internal.impl=ALL-UNNAMED</argLine>
         <tycho.buildArgLine>-Djdk.xml.maxGeneralEntitySizeLimit=2000000 -Djdk.xml.maxEntityCountLimit=2000000</tycho.buildArgLine>
     </properties>
@@ -61,7 +61,7 @@
                             <version>${project.version}</version>
                         </artifact>
                     </target>
-                    <executionEnvironment>JavaSE-21</executionEnvironment>
+                    <executionEnvironment>JavaSE-25</executionEnvironment>
                     <environments>
                         <environment>
                             <os>linux</os>
@@ -76,8 +76,8 @@
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.11.0</version>
                 <configuration>
-                    <source>21</source>
-                    <target>21</target>
+                    <source>25</source>
+                    <target>25</target>
                     <encoding>UTF-8</encoding>
                     <compilerArgs>
                         <arg>--add-opens=java.base/java.lang=ALL-UNNAMED</arg>

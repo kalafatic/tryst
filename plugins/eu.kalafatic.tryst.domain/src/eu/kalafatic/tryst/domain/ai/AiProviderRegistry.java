@@ -78,6 +78,20 @@ public interface AiProviderRegistry {
     CompletableFuture<Void> discoverModels(String id);
 
     /**
+     * Idempotently discovers models for every registered provider exactly once. The
+     * first caller triggers discovery for all providers; subsequent callers reuse the
+     * same shared future, so UI refreshes, page recreations and provider switches never
+     * re-trigger discovery. Model lists are then available through the model catalog.
+     */
+    CompletableFuture<Void> ensureInitialized();
+
+    /**
+     * Explicitly re-discovers models for every registered provider. This is the only
+     * normal operation that reloads provider models.
+     */
+    CompletableFuture<Void> refreshAll();
+
+    /**
      * Masks a secret value for display: never expose real credentials in UI or logs.
      */
     static String maskSecret(String value) {

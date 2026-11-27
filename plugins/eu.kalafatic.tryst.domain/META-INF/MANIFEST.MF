@@ -3,7 +3,7 @@ Bundle-ManifestVersion: 2
 Bundle-Name: TRYST Domain
 Bundle-SymbolicName: eu.kalafatic.tryst.domain
 Bundle-Version: 2.6.11.qualifier
-Bundle-RequiredExecutionEnvironment: JavaSE-21
+Bundle-RequiredExecutionEnvironment: JavaSE-25
 Require-Bundle: eu.kalafatic.tryst.core;bundle-version="2.6.11"
 Export-Package: eu.kalafatic.tryst.domain.ai,
  eu.kalafatic.tryst.domain.build,

@@ -239,6 +239,16 @@ public class ExecutionEnvironmentMonitorTest {
         public CompletableFuture<Void> discoverModels(String id) {
             return CompletableFuture.completedFuture(null);
         }
+
+        @Override
+        public CompletableFuture<Void> ensureInitialized() {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletableFuture<Void> refreshAll() {
+            return CompletableFuture.completedFuture(null);
+        }
     }
 
     private EventBus eventBus;

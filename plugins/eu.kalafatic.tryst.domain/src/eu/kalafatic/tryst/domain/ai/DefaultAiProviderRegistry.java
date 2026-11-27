@@ -4,6 +4,7 @@ import eu.kalafatic.tryst.core.log.TrystLog;
 import eu.kalafatic.tryst.domain.repository.AiProviderRepository;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -25,6 +26,7 @@ public class DefaultAiProviderRegistry implements AiProviderRegistry {
     private final AiProviderRepository repository;
     private final AiModelRegistryService modelCatalog;
     private final Map<String, AIProvider> adapters = new ConcurrentHashMap<>();
+    private volatile CompletableFuture<Void> initFuture;
 
     public DefaultAiProviderRegistry(AiProviderRepository repository,
             AiModelRegistryService modelCatalog) {
@@ -194,5 +196,47 @@ public class DefaultAiProviderRegistry implements AiProviderRegistry {
             return CompletableFuture.completedFuture(null);
         }
         return modelCatalog.discoverModelsFromProvider(id, adapter);
+    }
+
+    @Override
+    public CompletableFuture<Void> ensureInitialized() {
+        CompletableFuture<Void> f = initFuture;
+        if (f != null) {
+            return f;
+        }
+        synchronized (this) {
+            if (initFuture == null) {
+                initFuture = discoverAll();
+            }
+            return initFuture;
+        }
+    }
+
+    @Override
+    public CompletableFuture<Void> refreshAll() {
+        synchronized (this) {
+            CompletableFuture<Void> f = discoverAll();
+            initFuture = f;
+            return f;
+        }
+    }
+
+    private CompletableFuture<Void> discoverAll() {
+        List<AiProviderDescriptor> providers = listProviders();
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
+        for (AiProviderDescriptor descriptor : providers) {
+            futures.add(discoverModels(descriptor.id()).handle((v, t) -> {
+                if (t != null) {
+                    TrystLog.warn(DefaultAiProviderRegistry.class,
+                            "Model discovery failed for provider " + descriptor.id()
+                                    + ": " + t.getMessage());
+                }
+                return null;
+            }));
+        }
+        if (futures.isEmpty()) {
+            return CompletableFuture.completedFuture(null);
+        }
+        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
     }
 }
